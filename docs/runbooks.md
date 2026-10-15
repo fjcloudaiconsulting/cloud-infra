@@ -380,6 +380,35 @@ Rotate: create a new token, redo step 3, merge, `kubectl -n ziftbook-<env> rollo
 deploy/worker`, then delete the old token. Until the Secret exists, uploads answer 503 and nothing else
 breaks.
 
+## Ziftbook Turnstile (public bookings)
+
+The Ziftbook API refuses every public booking (403) while it has no Turnstile secret, and logs ERROR `turnstile
+secret unset: public bookings refused` at start (ZIF-116, fail closed). One widget per environment, made by hand like
+TBD's:
+
+1. Cloudflare dashboard > Turnstile > Add widget: name `ziftbook-staging`, hostname `dev.ziftbook.com` (prod:
+   `ziftbook-prod`, `app.ziftbook.com`), mode Managed, no pre-clearance. Note its site key and secret key.
+2. Write both into Secret `ziftbook-turnstile` (keys `site-key`, `secret`) from silent prompts, in bash from the
+   repo root. It prints `2`; anything else, or nothing, means the file was not written:
+
+   ```sh
+   env=staging   # then prod
+   F=clusters/hetzner/ziftbook-$env/ziftbook-turnstile.secret.yaml
+   printf 'Site key: '; read -rs K; echo; printf 'Secret key: '; read -rs S; echo
+   kubectl create secret generic ziftbook-turnstile -n ziftbook-$env \
+     --from-file=site-key=<(printf %s "$K") --from-file=secret=<(printf %s "$S") \
+     --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+     && mv "$F.tmp" "$F" && grep -cE '^ +(site-key|secret): ENC' "$F"
+   rm -f "$F.tmp"; unset K S
+   ```
+
+3. After the merge, `kubectl -n ziftbook-<env> rollout restart deploy/backend deploy/frontend` if the pods started
+   before Flux applied the Secret (env is read at start). Check: the backend's `api started` line says
+   `"turnstile": "on"` and the ERROR line is gone; then book once on the public page.
+
+Rotate: Turnstile > the widget > Rotate secret key, then steps 2 and 3.
+
 ## TBD smoke account
 
 TBD's post-deploy smoke test (`scripts/smoke-test.sh` in the tbd repo) logs in as a dedicated production user: active,
