@@ -407,7 +407,8 @@ TBD's:
    before Flux applied the Secret (env is read at start). Check: the backend's `api started` line says
    `"turnstile": "on"` and the ERROR line is gone; then book once on the public page.
 
-Rotate: Turnstile > the widget > Rotate secret key, then steps 2 and 3.
+Rotate: Turnstile > the widget > Rotate secret key, then steps 2 and 3; the restart is required, since the pods
+keep the old secret until they restart.
 
 ## TBD smoke account
 
