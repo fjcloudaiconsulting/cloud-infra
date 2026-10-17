@@ -19,7 +19,7 @@
           "datasourceUid": "grafanacloud-prom",
           "model": {
             "refId": "A",
-            "expr": "sum by (deployment_environment_name) (http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} - (http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} offset 10m or http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} * 0))",
+            "expr": "sum by (deployment_environment_name) (http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} - (last_over_time(http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"}[1d] offset 10m) or http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} * 0))",
             "instant": true,
             "range": false
           }
@@ -82,7 +82,7 @@
           "datasourceUid": "grafanacloud-prom",
           "model": {
             "refId": "A",
-            "expr": "sum by (job_kind) (ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} - (ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} offset 1h or ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} * 0))",
+            "expr": "sum by (job_kind) (ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} - (last_over_time(ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"}[1d] offset 1h) or ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} * 0))",
             "instant": true,
             "range": false
           }
@@ -182,7 +182,7 @@
         "component": "ziftbook"
       },
       "annotations": {
-        "summary": "Ziftbook production: the oldest due {{ $labels.job_kind }} job has waited over 10 minutes for 5 minutes, or the worker reports no queue metrics at all (worker down or not exporting). Mail is late; see the Ziftbook app alerts runbook.",
+        "summary": "{{ if $labels.job_kind }}Ziftbook production: the oldest due {{ $labels.job_kind }} job has waited over 10 minutes for 5 minutes, so its mail is late.{{ else }}Ziftbook production: the worker reports no queue metrics (worker down, or its metrics export broken).{{ end }} See the Ziftbook app alerts runbook.",
         "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#ziftbook-app-alerts"
       },
       "notification_settings": {

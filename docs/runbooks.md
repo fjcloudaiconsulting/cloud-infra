@@ -713,8 +713,9 @@ clear it: `sm -X DELETE "$S/api/v1/token/delete"; unset T`.
 Rule group `ziftbook-app` (folder Platform, ZIF-89) watches Ziftbook production through the metrics the app already
 exports over OTLP. Grafana Cloud promotes `service.name` and `deployment.environment.name` to labels, so the queries
 select `deployment_environment_name="production"`; staging raises nothing. A pod's counters start a new series
-(`service.instance.id` is per process), so the two counter rules take "now minus the value a window ago, or 0 if the
-series is newer" instead of `increase()`, which never counts a series' first jump. A dead or stuck worker is first
+(`service.instance.id` is per process), so the two counter rules take "now minus the last value seen up to a day before the
+window, or 0 if the series is newer" instead of `increase()`, which never counts a series' first jump; looking back a
+day, not one sample, keeps an export gap from counting a pod's lifetime total as new. A dead or stuck worker is first
 the [Healthchecks.io check](#ziftbook-worker-heartbeat-healthchecksio) (ZIF-21, about 6 min); `ZiftbookJobQueueStuck`
 also fires about 2 min later, because its no-data case is what catches a worker that runs but exports no metrics.
 
