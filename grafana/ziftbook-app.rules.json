@@ -13,7 +13,7 @@
         {
           "refId": "A",
           "relativeTimeRange": {
-            "from": 3600,
+            "from": 900,
             "to": 0
           },
           "datasourceUid": "grafanacloud-prom",
@@ -76,7 +76,7 @@
         {
           "refId": "A",
           "relativeTimeRange": {
-            "from": 7200,
+            "from": 4500,
             "to": 0
           },
           "datasourceUid": "grafanacloud-prom",

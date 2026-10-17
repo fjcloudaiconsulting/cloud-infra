@@ -714,8 +714,9 @@ Rule group `ziftbook-app` (folder Platform, ZIF-89) watches Ziftbook production 
 exports over OTLP. Grafana Cloud promotes `service.name` and `deployment.environment.name` to labels, so the queries
 select `deployment_environment_name="production"`; staging raises nothing. A pod's counters start a new series
 (`service.instance.id` is per process), so the two counter rules take "now minus the value a window ago, or 0 if the
-series is newer" instead of `increase()`, which never counts a series' first jump. A dead or stuck worker is the
-[Healthchecks.io check](#ziftbook-worker-heartbeat-healthchecksio) (ZIF-21), not a Grafana rule.
+series is newer" instead of `increase()`, which never counts a series' first jump. A dead or stuck worker is first
+the [Healthchecks.io check](#ziftbook-worker-heartbeat-healthchecksio) (ZIF-21, about 6 min); `ZiftbookJobQueueStuck`
+also fires about 2 min later, because its no-data case is what catches a worker that runs but exports no metrics.
 
 | Alert | Fires when | Severity, repeat |
 |---|---|---|
@@ -727,8 +728,9 @@ When one fires:
 
 ```sh
 export KUBECONFIG=~/.kube/hetzner
-kubectl -n ziftbook-prod logs deploy/backend -c backend --since=30m | jq -c 'select(.level == "ERROR" or .status >= 500)'
-kubectl -n ziftbook-prod logs deploy/worker --since=2h | jq -c 'select(.msg == "job gave up" or .level == "ERROR")'
+# -l reads every replica (deploy/backend reads one pod) and needs --tail=-1; fromjson? skips a line that is not JSON, such as a crash traceback.
+kubectl -n ziftbook-prod logs -l app=backend -c backend --tail=-1 --since=30m | jq -cR 'fromjson? | select(.level == "ERROR" or .status >= 500)'
+kubectl -n ziftbook-prod logs -l app=worker -c worker --tail=-1 --since=2h | jq -cR 'fromjson? | select(.msg == "job gave up" or .level == "ERROR")'
 ```
 
 Each line carries `request_id` (also in the `X-Request-ID` response header) and `trace_id`; a job line carries
@@ -737,8 +739,9 @@ Each line carries `request_id` (also in the `X-Request-ID` response header) and 
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/ziftbook-app grafana/ziftbook-app.rules.json`. Check in
-Explore that `count by (__name__) ({__name__=~"http_server_request_duration_seconds_count|ziftbook_job_runs_total|ziftbook_job_queue_oldest_age_seconds", deployment_environment_name="production"})`
-returns the names: a misnamed metric leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
+Explore that `count by (__name__, service_name) ({__name__=~"http_server_request_duration_seconds_count|ziftbook_job_runs_total|ziftbook_job_queue_oldest_age_seconds", deployment_environment_name="production"})`
+returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-prod has the same HTTP metric): a
+misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
 
