@@ -1,0 +1,69 @@
+{
+  "title": "node-disk",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "node-disk-high",
+      "title": "NodeDiskHigh",
+      "folderUID": "platform",
+      "ruleGroup": "node-disk",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "max by (instance, device) (container_fs_usage_bytes{job=\"cadvisor\", id=\"/\"} / container_fs_limit_bytes{job=\"cadvisor\", id=\"/\"})",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.8
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "30m",
+      "noDataState": "KeepLast",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "node"
+      },
+      "annotations": {
+        "summary": "Disk {{ $labels.device }} on {{ $labels.instance }} is {{ humanizePercentage $values.A.Value }} full, over 80% for 30 minutes. On db-1, /dev/sdb holds the MySQL and Postgres data. See the Node disk runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#node-disk"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
+    }
+  ]
+}
