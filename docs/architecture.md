@@ -209,7 +209,7 @@ HTTP metrics.
 |---|---|---|
 | Traces | The app's own `tracing.py` (the Ziftbook pattern): the HTTP SERVER span in a middleware, SQL spans from SQLAlchemy engine events, job, worker and migration spans | `opentelemetry-sdk` and the OTLP HTTP exporter, no contrib instrumentation packages |
 | Metrics | FastAPI native: `http.server.request.duration` and `http.server.active_requests` | the app registers a global `MeterProvider` before `FastAPI()` is built |
-| Logs | JSON lines on stdout with `request_id`, `trace_id`, `span_id`; no OTLP log export from the app | stdlib `logging` (the Ziftbook `logs.py` pattern) |
+| Logs | JSON lines on stdout with `request_id`, `trace_id`, `span_id`; no OTLP log export from the app. Alloy reads Ziftbook's lines through the kube API and sends the JSON ones to Grafana Cloud Loki (ZIF-89, 7-day retention); TBD's are not sent (INFRA-110) | stdlib `logging` (the Ziftbook `logs.py` pattern) |
 
 Every app builds FastAPI with:
 

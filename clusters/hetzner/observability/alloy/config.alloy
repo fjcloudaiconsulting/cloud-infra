@@ -1,8 +1,9 @@
 // Metrics and traces to Grafana Cloud (INFRA-85, INFRA-106, design in docs/architecture.md, Telemetry). Everything
 // leaves through one OTLP/HTTP exporter, so the stack's write-only token (metrics:write, traces:write) is the only
 // credential.
-// Traces (INFRA-106) leave through the same exporter, so the token needs traces:write too. Not collected yet: logs (no
-// stdout tailing: tbd-prod logs carry query strings until INFRA-110, and the data namespace never).
+// Traces (INFRA-106) leave through the same exporter, so the token needs traces:write too. Logs (ZIF-89): Ziftbook's
+// JSON app lines only, from ziftbook-staging and ziftbook-prod, so the token needs logs:write. No other namespace's
+// logs are read: tbd-prod logs carry query strings until INFRA-110, and the data namespace never.
 
 // ---- Export --------------------------------------------------------------------------------------------------------
 
@@ -22,6 +23,7 @@ otelcol.processor.batch "default" {
 	output {
 		metrics = [otelcol.exporter.otlphttp.grafana_cloud.input]
 		traces  = [otelcol.exporter.otlphttp.grafana_cloud.input]
+		logs    = [otelcol.exporter.otlphttp.grafana_cloud.input]
 	}
 }
 
@@ -32,7 +34,7 @@ otelcol.receiver.otlp "apps" {
 		endpoint = "0.0.0.0:4318"
 	}
 
-	// Metrics and traces. Logs sent here are refused until they are wired (see the top of this file).
+	// Metrics and traces. Logs sent here are refused: app logs come only from the Ziftbook pod logs below.
 	output {
 		metrics = [otelcol.processor.transform.scrub.input]
 		traces  = [otelcol.processor.transform.scrub.input]
@@ -207,4 +209,120 @@ prometheus.relabel "cadvisor" {
 	}
 
 	forward_to = [otelcol.receiver.prometheus.scraped.receiver]
+}
+
+// ---- Ziftbook pod logs (ZIF-89): read through the kube API, no host mount ----------------------------------------
+// RBAC (alloy.yaml) allows pods and pods/log in ziftbook-staging and ziftbook-prod only. Each Alloy pod watches only
+// its own node's pods, so every container is tailed once.
+
+discovery.kubernetes "ziftbook_pods" {
+	role = "pod"
+
+	namespaces {
+		names = ["ziftbook-staging", "ziftbook-prod"]
+	}
+
+	selectors {
+		role  = "pod"
+		field = "spec.nodeName=" + sys.env("NODE_NAME")
+	}
+}
+
+// service_name: ziftbook-api, -worker and -migrations, as the backend image names its traces; ziftbook-frontend.
+discovery.relabel "ziftbook_pods" {
+	targets = discovery.kubernetes.ziftbook_pods.targets
+
+	rule {
+		source_labels = ["__meta_kubernetes_namespace"]
+		target_label  = "namespace"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_container_name"]
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_name"]
+		target_label  = "pod"
+	}
+
+	rule {
+		source_labels = ["container"]
+		target_label  = "service_name"
+		replacement   = "ziftbook-$1"
+	}
+
+	rule {
+		source_labels = ["container"]
+		regex         = "backend"
+		target_label  = "service_name"
+		replacement   = "ziftbook-api"
+	}
+
+	rule {
+		source_labels = ["container"]
+		regex         = "migrate"
+		target_label  = "service_name"
+		replacement   = "ziftbook-migrations"
+	}
+}
+
+loki.source.kubernetes "ziftbook_pods" {
+	targets    = discovery.relabel.ziftbook_pods.output
+	forward_to = [loki.process.app_json.receiver]
+}
+
+// Only lines that parse as a JSON object carrying ts, level, logger and msg leave the node; tracebacks, alembic and
+// Next.js output and anything else are dropped (the privacy notice covers the app's own JSON records only).
+loki.process "app_json" {
+	// Positions live in the emptyDir, so a new Alloy pod (every config change) re-reads each container's current log
+	// file. Older lines were sent by the previous pod; 1h still covers an Alloy outage before it would lose lines.
+	stage.drop {
+		older_than          = "1h"
+		drop_counter_reason = "replay"
+	}
+
+	// A missing key extracts as nil, which a per-key drop stage would keep, hence one computed bool.
+	stage.json {
+		drop_malformed = true
+		expressions    = {keep = "ts != `null` && level != `null` && logger != `null` && msg != `null`"}
+	}
+
+	stage.drop {
+		source              = "keep"
+		value               = "false"
+		drop_counter_reason = "not_app_json"
+	}
+
+	forward_to = [otelcol.receiver.loki.app_json.receiver]
+}
+
+otelcol.receiver.loki "app_json" {
+	output {
+		logs = [otelcol.processor.transform.loki_labels.input]
+	}
+}
+
+// otelcol.receiver.loki puts every Loki label in log attributes on an empty resource, one resource per entry. Move
+// them to the resource attributes Grafana Cloud turns into stream labels (service_name, service_namespace,
+// k8s_namespace_name, k8s_container_name; service_namespace makes Tempo's trace-to-logs link match). The pod stays a
+// log attribute (structured metadata), so the two backend replicas share one stream; everything else is dropped.
+// shortcut: per-entry resource values rely on loki.process forwarding one entry at a time; re-test on an Alloy bump.
+otelcol.processor.transform "loki_labels" {
+	log_statements {
+		context    = "log"
+		statements = [
+			`set(resource.attributes["service.name"], attributes["service_name"])`,
+			`set(resource.attributes["service.namespace"], "ziftbook")`,
+			`set(resource.attributes["k8s.namespace.name"], attributes["namespace"])`,
+			`set(resource.attributes["k8s.container.name"], attributes["container"])`,
+			`set(attributes["k8s.pod.name"], attributes["pod"])`,
+			`keep_keys(attributes, ["k8s.pod.name"])`,
+		]
+	}
+
+	output {
+		logs = [otelcol.processor.batch.default.input]
+	}
 }
