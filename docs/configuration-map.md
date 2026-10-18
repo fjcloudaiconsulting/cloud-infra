@@ -204,7 +204,7 @@ name is pinned in an AWS trust policy: never rename it.
 | `tbd-backups` | `terraform/tbd-backups` | OIDC, two roles (plan, provisioner); variable `aws_account_id` |
 | `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): Hetzner project `fj-platform` token `tfc-hetzner` (Read & Write), held only here. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22) and `deploy_ssh_public_key` (`ssh-ed25519 ...`, not sensitive). Both have no default, so a plan without them fails. The Hetzner project and a second token `claude-readonly` (Read; owner's local hcloud context `fj-platform-ro`) are also hand-made |
 
-The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.5; check the workspaces' Terraform version matches after a bump.
+The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
 
 Never set `TFC_AWS_RUN_ROLE_ARN` on `tbd-backups`: it would give unapproved PR plans the apply role. The IAM documents are
 in [`aws/bootstrap/`](../aws/bootstrap/); root creates the roles once and a workspace never manages its
