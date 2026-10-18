@@ -197,8 +197,8 @@ backend logs the ERROR `setup token unset: first-run setup refused` while it has
 single-use; staging is already set up.
 
 1. Write the Secret on a branch, generated, never typed, with the public key only, in bash from the repo root. Nothing
-   is printed except `1`; it refuses to overwrite an existing file. Open the PR and merge it (the backend rolls on
-   the merge only if the manifest changes too; otherwise `kubectl -n ziftbook-prod rollout restart deploy/backend`):
+   is printed except `1`; it refuses to overwrite an existing file. Open the PR and merge it. The backend reads the
+   token at start: if the Secret arrives without a manifest change, `kubectl -n ziftbook-prod rollout restart deploy/backend`:
 
    ```sh
    F=clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml
@@ -210,7 +210,8 @@ single-use; staging is already set up.
    rm -f "$F.tmp"; unset T
    ```
 
-2. After the rollout, put the token on the clipboard without showing it, then open https://app.ziftbook.com/setup,
+2. After the rollout, check `kubectl -n ziftbook-prod logs -l app=backend -c backend --tail=-1 | grep -c 'setup token unset'`
+   prints `0` on the new pods. Then put the token on the clipboard without showing it, open https://app.ziftbook.com/setup,
    paste it and create the admin account (email, name, password; TOTP enrolment follows, it uses `ziftbook-totp`):
 
    ```sh
