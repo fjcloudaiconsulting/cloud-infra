@@ -38,7 +38,7 @@ jobs:
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         if: steps.changes.outputs.terraform == 'true'
         with:
-          terraform_version: v1.16.5
+          terraform_version: v1.16.6
       - name: fmt
         if: steps.changes.outputs.terraform == 'true'
         run: terraform fmt -check -recursive -diff
