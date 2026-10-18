@@ -274,7 +274,9 @@ loki.source.kubernetes "ziftbook_pods" {
 }
 
 // Only lines that parse as a JSON object carrying ts, level, logger and msg leave the node; tracebacks, alembic and
-// Next.js output and anything else are dropped (the privacy notice covers the app's own JSON records only).
+// Next.js output and anything else are dropped (the privacy notice covers the app's own JSON records only). The body
+// itself ships as is (the INFRA-84 scrub covers metrics and traces only): what a record holds is the app's logs.py
+// to keep clean.
 loki.process "app_json" {
 	// Positions live in the emptyDir, so a new Alloy pod (every config change) re-reads each container's current log
 	// file. Older lines were sent by the previous pod; 1h still covers an Alloy outage before it would lose lines.

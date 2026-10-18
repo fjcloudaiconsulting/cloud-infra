@@ -860,12 +860,14 @@ Nothing arrives? In order:
 
 ```sh
 export KUBECONFIG=~/.kube/hetzner
-kubectl -n observability logs ds/alloy | grep -iE 'forbidden|/v1/logs|error' | tail   # 401/403 on /v1/logs: the token lacks logs:write
+kubectl -n observability logs -l app=alloy --prefix --tail=-1 --since=1h | grep -iE 'forbidden|/v1/logs|error' | tail   # 401/403 on /v1/logs: the token lacks logs:write
 kubectl auth can-i get pods/log -n ziftbook-prod --as=system:serviceaccount:observability:alloy   # yes; -n data must say no
 ```
 
-Then the debug UI (`kubectl -n observability port-forward ds/alloy 12345`): `loki.process.app_json` counts dropped
-lines by reason, `not_app_json` (not the app's JSON) and `replay` (over an hour old).
+Then the drop counters (`kubectl -n observability port-forward ds/alloy 12345`, then
+`curl -s localhost:12345/metrics | grep loki_process_dropped_lines_total`): reason `not_app_json` is a JSON object
+missing one of the four keys, `replay` a line over an hour old. A line that is not a JSON object is dropped without a
+count.
 
 ### Node disk
 
