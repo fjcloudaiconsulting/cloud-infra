@@ -78,6 +78,12 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/ziftbook/**"],
       "allowedVersions": "!/^v0\\.26\\.0$/"
+    },
+    {
+      "description": "k3s-ansible is pinned to the commit of tag 1.2.2 on purpose (ansible/requirements.yml); Renovate cannot look a commit up as a tag and warns on every run. Bump it by hand with the k3s upgrade (INFRA-179).",
+      "matchManagers": ["ansible-galaxy"],
+      "matchPackageNames": ["https://github.com/k3s-io/k3s-ansible.git"],
+      "enabled": false
     }
   ]
 }
