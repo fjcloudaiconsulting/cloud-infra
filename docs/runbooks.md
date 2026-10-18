@@ -565,12 +565,12 @@ sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s:
   `exception.message`, `exception.stacktrace` and the old `http.url`, `http.target`, `http.client_ip`, `net.sock.peer.addr`
   from data point, span, span event, scope and resource attributes (by key only: span names and messages are the app's to keep clean).
 
-Traces (Ziftbook staging, INFRA-106; TBD staging, INFRA-105) are forwarded too; logs are not collected yet. Config: [`clusters/hetzner/observability/alloy/config.alloy`](../clusters/hetzner/observability/alloy/config.alloy);
+Traces (Ziftbook staging, INFRA-106; TBD staging, INFRA-105) are forwarded too. Logs: only Ziftbook's (staging and prod, ZIF-89), read through the kube API (RBAC: pods and pods/log in those two namespaces only) and kept only when a line is a JSON object with `ts`, `level`, `logger` and `msg`; see [Find a request's logs](#find-a-requests-logs). Config: [`clusters/hetzner/observability/alloy/config.alloy`](../clusters/hetzner/observability/alloy/config.alloy);
 a change there rolls the pod (the ConfigMap name carries a hash).
 
 **Credentials** are Secret `observability/grafana-cloud` (keys `otlp-endpoint`, `instance-id`, `token`), file
 `clusters/hetzner/observability/grafana-cloud.secret.yaml`. The token belongs to a Grafana Cloud access policy with the
-`metrics:write` and `traces:write` scopes (`traces:write` since INFRA-106; editing a policy's scopes applies to its existing tokens, so the Secret does not change). To write or rotate it, create a new token on that policy (Grafana Cloud > Administration >
+`metrics:write`, `traces:write` and `logs:write` scopes (`traces:write` since INFRA-106, `logs:write` since ZIF-89; editing a policy's scopes applies to its existing tokens, so the Secret does not change). To write or rotate it, create a new token on that policy (Grafana Cloud > Administration >
 Cloud access policies > the policy > Add token), regenerate the whole file (only the public key is needed), merge,
 restart, then delete the old token. The plaintext only passes through a pipe, never a file:
 
@@ -697,7 +697,7 @@ Upsize (a larger server type in `terraform/hetzner`) when any of these holds:
 ### Request log retention
 
 The privacy policy says request logs are kept "up to 7 days" (INFRA-130). They exist only as container stdout under
-`/var/log/pods` on the node (Traefik access logging is off; Alloy ships metrics and traces, not logs). kubelet rotates
+`/var/log/pods` on the node (Traefik access logging is off), and Ziftbook's JSON lines in Grafana Cloud Loki (ZIF-89). kubelet rotates
 by size only (10Mi x 5 files, defaults), so a quiet container would keep lines for weeks. DaemonSet `observability/log-retention`
 (`clusters/hetzner/observability/log-retention/`) runs hourly on every node: for every file under `/var/log/pods` it reads the first
 line's timestamp, the oldest, and empties a live `*.log` or deletes a kubelet-rotated `*.log.<ts>[.gz]` once that line is
@@ -711,8 +711,8 @@ labels its heartbeat `instance=<node>`).
 
 Check, read-only: `kubectl -n observability get ds log-retention`, `kubectl -n observability logs
 ds/log-retention` (one line per file emptied or deleted), and for any pod `kubectl logs --timestamps <pod> -c <c> | head -1`
-must be under 7 days old. Not covered: Cloudflare's own edge logs, and Mailgun's. If Alloy ever
-tails pod logs to Grafana Cloud (INFRA-110), its retention there needs the same bound.
+must be under 7 days old. Not covered: Cloudflare's own edge logs, and Mailgun's. The Ziftbook lines in Grafana Cloud
+are kept 14 days, the Grafana Cloud Free plan's fixed retention ([configuration-map.md](configuration-map.md)).
 
 ### Memory alerts
 
@@ -823,7 +823,7 @@ kubectl -n ziftbook-prod logs -l app=worker -c worker --tail=-1 --since=2h | jq 
 
 Each line carries `request_id` (also in the `X-Request-ID` response header) and `trace_id`; a job line carries
 `job_id` and `job_kind`. Errors are logged as the class and frames only. A given-up job keeps its `last_error` in the
-`jobs` table; resending it is an app decision, not an infra one.
+`jobs` table; resending it is an app decision, not an infra one. Older lines, or a pod that is gone: [Find a request's logs](#find-a-requests-logs).
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/ziftbook-app grafana/ziftbook-app.rules.json`. Check in
@@ -832,6 +832,42 @@ returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-p
 misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
+
+### Find a request's logs
+
+Ziftbook's log lines (staging and prod) are in Grafana Cloud Loki for 14 days (ZIF-89). Grafana > Explore > the stack's
+Loki data source, with the `request_id` from the `X-Request-ID` response header, or a `trace_id`:
+
+```logql
+{service_namespace="ziftbook", k8s_namespace_name="ziftbook-prod"} | json | request_id="<X-Request-ID>"
+{service_namespace="ziftbook", k8s_namespace_name="ziftbook-prod"} | json | trace_id="<trace id>"
+{service_name="ziftbook-worker", k8s_namespace_name="ziftbook-prod"} | json | job_id="<job id>"
+{service_name="ziftbook-api", k8s_namespace_name="ziftbook-prod"} | json | level="ERROR"
+```
+
+Stream labels: `service_name` (`ziftbook-api`, `ziftbook-worker`, `ziftbook-migrations`, `ziftbook-frontend`),
+`service_namespace="ziftbook"`, `k8s_namespace_name` and `k8s_container_name`. The pod is structured metadata, not a
+label: `| k8s_pod_name="backend-..."` tells the two prod backend replicas apart. From a trace in Tempo, "Logs for this
+span" matches on `service_name` and `service_namespace`.
+
+Only a line that is a JSON object with `ts`, `level`, `logger` and `msg` is sent (the privacy notices cover the app's
+own records only). A crash traceback, raw alembic or Next.js output, or anything else stays on the node: read it with
+`kubectl logs` (as in [Ziftbook app alerts](#ziftbook-app-alerts)) while the pod lives. A new Alloy pod, on every
+change to `config.alloy`, re-reads each container's current log file and sends its last hour again; the copies are
+identical lines.
+
+Nothing arrives? In order:
+
+```sh
+export KUBECONFIG=~/.kube/hetzner
+kubectl -n observability logs -l app=alloy --prefix --tail=-1 --since=1h | grep -iE 'forbidden|/v1/logs|error' | tail   # 401/403 on /v1/logs: the token lacks logs:write
+kubectl auth can-i get pods/log -n ziftbook-prod --as=system:serviceaccount:observability:alloy   # yes; -n data must say no
+```
+
+Then the drop counters (`kubectl -n observability port-forward ds/alloy 12345`, then
+`curl -s localhost:12345/metrics | grep loki_process_dropped_lines_total`): reason `not_app_json` is a JSON object
+missing one of the four keys, `replay` a line over an hour old. A line that is not a JSON object is dropped without a
+count.
 
 ### Node disk
 
