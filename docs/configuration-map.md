@@ -221,6 +221,13 @@ own role.
   Lock), KMS key, the uploader users and keys, OIDC provider `token.actions.githubusercontent.com`, role
   `github-actions-backup-probe`. Details: `terraform/tbd-backups/README.md`.
 - Lightsail decommissioned 2026-10-14 (INFRA-176): the node, its firewall, alarms, budget, SNS topics, health check and the `aws-platform` workspace are gone. The CloudTrail trail `platform-management` was destroyed too (owner ruling 2026-10-14): the account keeps no trail, only the 90-day CloudTrail Event history. The log bucket `fjc-platform-cloudtrail-884686184019` is kept, unmanaged and no longer written to; its lifecycle rule expires the old logs.
+- Cost alerts, made by hand (ZIF-37, 2026-10-18; Terraform would need budgets and ce permissions on the `tfc-backups-*` roles,
+  a root re-mint): budget `aws-monthly-usage`, $3 a month on unblended cost before credits and refunds, mails the owner when
+  the actual or the forecast passes $3. Expected spend is about $1 a month, nearly all the KMS key ($1); the backup bucket adds
+  cents. October 2026 already passed $3 (Lightsail ran until 10-14), so it mails once for October; November is the first
+  real month. Cost Anomaly Detection: monitor
+  `Default-Services-Monitor` (per service), subscription `Default-Services-Subscription` mails the owner daily for any anomaly
+  of $1 or more (was $100 and 40%). Symptom of a drift: no mail when the month passes $3; check Billing > Budgets.
 
 ## Cloudflare
 
