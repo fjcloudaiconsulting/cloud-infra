@@ -68,6 +68,12 @@
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
       "matchFileNames": ["clusters/**/tbd-prod/**"],
       "groupName": "tbd images"
+    },
+    {
+      "description": "Ziftbook v0.26.0 backend crashes at start (ModuleNotFoundError: mypy_boto3_s3, release smoke run 39116096441): never propose it. v0.26.1 is the fix; drop this rule once both environments run a later release.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/ziftbook/**"],
+      "allowedVersions": "!/^v0\\.26\\.0$/"
     }
   ]
 }
