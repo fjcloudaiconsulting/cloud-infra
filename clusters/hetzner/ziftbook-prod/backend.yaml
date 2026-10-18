@@ -102,6 +102,14 @@ spec:
                   name: ziftbook-totp
                   key: key
                   optional: true
+            # First-run setup (ZIF-70): with no user in the database every page redirects to /setup, which takes this
+            # token (32+ characters) once. Works only while there are no users; delete the Secret after setup.
+            - name: ZIF_SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-setup
+                  key: token
+                  optional: true
             # The migrate role's credentials stay in the init container.
             - name: ZIF_DATABASE_URL
               valueFrom:

@@ -188,6 +188,39 @@ Rotate only if the key leaks: a new key makes every enrolled second factor unrea
 credentials; the live Secret in the namespace is a second copy. Only the backend reads it: the worker and the admin
 CLI (`python -m app.admin enrol`) do not.
 
+## Ziftbook first-run setup (production)
+
+A Ziftbook database with no user redirects every page to `/setup` and refuses sign-up (409 `setup_required`), and the
+backend logs the ERROR `setup token unset: first-run setup refused` while it has no token (ZIF-70, since v0.25.0).
+`/setup` creates the first platform admin once, against `ZIF_SETUP_TOKEN` (backend only, Secret `ziftbook-setup`, key
+`token`, at least 32 characters; shorter counts as unset). It works only while there is no user, so the token is
+single-use; staging is already set up.
+
+1. Write the Secret on a branch, generated, never typed, with the public key only, in bash from the repo root. Nothing
+   is printed except `1`; it refuses to overwrite an existing file. Open the PR and merge it. The backend reads the
+   token at start: if the Secret arrives without a manifest change, `kubectl -n ziftbook-prod rollout restart deploy/backend`:
+
+   ```sh
+   F=clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml
+   T=$(openssl rand -base64 32) && [ ${#T} -eq 44 ] && test ! -e "$F" \
+     && kubectl create secret generic ziftbook-setup -n ziftbook-prod \
+          --from-file=token=<(printf %s "$T") --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+     && mv "$F.tmp" "$F" && grep -cE '^ +token: ENC' "$F"
+   rm -f "$F.tmp"; unset T
+   ```
+
+2. After the rollout, check `kubectl -n ziftbook-prod logs -l app=backend -c backend --tail=-1 | grep -c 'setup token unset'`
+   prints `0` on the new pods. Then put the token on the clipboard without showing it, open https://app.ziftbook.com/setup,
+   paste it and create the admin account (email, name, password; TOTP enrolment follows, it uses `ziftbook-totp`):
+
+   ```sh
+   kubectl -n ziftbook-prod get secret ziftbook-setup -o jsonpath='{.data.token}' | base64 -d | pbcopy
+   ```
+
+3. Delete `clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml` in a PR. Flux prunes the Secret; the backend
+   keeps the old value in its environment until the next restart, which is harmless once a user exists.
+
 ## MySQL database per app environment
 
 Each app environment gets its own database and user in the shared MySQL (`data/mysql-0`), with grants on that
