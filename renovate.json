@@ -40,6 +40,7 @@
       "matchFileNames": ["clusters/**/ziftbook-staging/**"],
       "additionalBranchPrefix": "ziftbook-staging-",
       "groupName": "ziftbook images",
+      "prPriority": 5,
       "automerge": true,
       "automergeType": "branch"
     },
@@ -50,6 +51,7 @@
       "matchFileNames": ["clusters/**/ziftbook-prod/**"],
       "additionalBranchPrefix": "ziftbook-prod-",
       "groupName": "ziftbook prod images",
+      "prPriority": 5,
       "automerge": false
     },
     {
@@ -59,6 +61,7 @@
       "matchFileNames": ["clusters/**/tbd-staging/**"],
       "additionalBranchPrefix": "tbd-staging-",
       "groupName": "tbd staging images",
+      "prPriority": 5,
       "automerge": true,
       "automergeType": "branch"
     },
@@ -67,7 +70,8 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
       "matchFileNames": ["clusters/**/tbd-prod/**"],
-      "groupName": "tbd images"
+      "groupName": "tbd images",
+      "prPriority": 5
     },
     {
       "description": "Ziftbook v0.26.0 backend crashes at start (ModuleNotFoundError: mypy_boto3_s3, release smoke run 39116096441): never propose it. v0.26.1 is the fix; drop this rule once both environments run a later release.",
