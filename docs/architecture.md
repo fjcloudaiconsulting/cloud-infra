@@ -301,7 +301,7 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 |---|---|---|
 | Stale backup | freshness probe | GitHub issue `[backup-stale]` |
 
-Node memory and log-retention alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
+Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
 
 ## Cost
 

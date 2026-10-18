@@ -732,6 +732,54 @@ alert, edit one check's target in the UI to a 404 path for about 10 minutes (bot
 restore it: re-run `check/update` with the original payload (the UI edit is not in git). Finally revoke the token and
 clear it: `sm -X DELETE "$S/api/v1/token/delete"; unset T`.
 
+### Ziftbook app alerts
+
+Rule group `ziftbook-app` (folder Platform, ZIF-89) watches Ziftbook production through the metrics the app already
+exports over OTLP. Grafana Cloud promotes `service.name` and `deployment.environment.name` to labels, so the queries
+select `deployment_environment_name="production"`; staging raises nothing. A pod's counters start a new series
+(`service.instance.id` is per process), so the two counter rules take "now minus the last value seen up to a day before the
+window, or 0 if the series is newer" instead of `increase()`, which never counts a series' first jump; looking back a
+day, not one sample, keeps an export gap from counting a pod's lifetime total as new. A dead or stuck worker is first
+the [Healthchecks.io check](#ziftbook-worker-heartbeat-healthchecksio) (ZIF-21, about 6 min); `ZiftbookJobQueueStuck`
+also fires about 2 min later, because its no-data case is what catches a worker that runs but exports no metrics.
+
+| Alert | Fires when | Severity, repeat |
+|---|---|---|
+| `ZiftbookApiErrors` | 5 or more API responses with a 5xx in 10 min (`http_server_request_duration_seconds_count`, FastAPI's native metric; `/api/healthz` is not counted). An absolute count, sized for pre-launch traffic: switch to a ratio once production serves about one request a second | critical, every 4 h |
+| `ZiftbookJobsGaveUp` | any job given up after its 5th attempt in the last hour, per kind (`ziftbook_job_runs_total{job_outcome="gave_up"}`). Never retried by the worker | warning, daily |
+| `ZiftbookJobQueueStuck` | the oldest due job of a kind waited over 10 min for 5 min (`ziftbook_job_queue_oldest_age_seconds`; the worker polls every 30 s), or no queue metric at all: the worker reports every kind every minute, 0 when empty | critical, every 4 h |
+
+When one fires:
+
+```sh
+export KUBECONFIG=~/.kube/hetzner
+# -l reads every replica (deploy/backend reads one pod) and needs --tail=-1; fromjson? skips a line that is not JSON, such as a crash traceback.
+kubectl -n ziftbook-prod logs -l app=backend -c backend --tail=-1 --since=30m | jq -cR 'fromjson? | select(.level == "ERROR" or .status >= 500)'
+kubectl -n ziftbook-prod logs -l app=worker -c worker --tail=-1 --since=2h | jq -cR 'fromjson? | select(.msg == "job gave up" or .level == "ERROR")'
+```
+
+Each line carries `request_id` (also in the `X-Request-ID` response header) and `trace_id`; a job line carries
+`job_id` and `job_kind`. Errors are logged as the class and frames only. A given-up job keeps its `last_error` in the
+`jobs` table; resending it is an app decision, not an infra one.
+
+Apply as under [Memory alerts](#memory-alerts):
+`api PUT /api/v1/provisioning/folder/platform/rule-groups/ziftbook-app grafana/ziftbook-app.rules.json`. Check in
+Explore that `count by (__name__, service_name) ({__name__=~"http_server_request_duration_seconds_count|ziftbook_job_runs_total|ziftbook_job_queue_oldest_age_seconds", deployment_environment_name="production"})`
+returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-prod has the same HTTP metric): a
+misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
+`ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
+API traffic.
+
+### Node disk
+
+Rule `NodeDiskHigh` (group `node-disk`, folder Platform, ZIF-89) mails the owner when a node disk is over 80% full for
+30 min, daily, from cAdvisor's `container_fs_usage_bytes / container_fs_limit_bytes` for the node (`id="/"`). It
+covers every node's root disk and, on db-1, `/dev/sdb`, the Hetzner volume that holds the MySQL and Postgres data
+(41.9 GB, 0.3 GB used on 2026-10-17). A silent scrape is `NodeMetricsAbsent`'s job. Apply:
+`api PUT /api/v1/provisioning/folder/platform/rule-groups/node-disk grafana/node-disk.rules.json`. When it fires
+for `/dev/sdb`: grow the volume in `terraform/hetzner`, then the filesystem on db-1; for a root disk, look for old
+images (`k3s crictl rmi --prune`) and logs first.
+
 ## Hetzner cluster bootstrap
 
 One time, for the new cluster (INFRA-171, epic INFRA-164): `clusters/hetzner/` is its Flux path (final, never moved),

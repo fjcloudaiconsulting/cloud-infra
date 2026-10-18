@@ -1,0 +1,195 @@
+{
+  "title": "ziftbook-app",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "ziftbook-api-errors",
+      "title": "ZiftbookApiErrors",
+      "folderUID": "platform",
+      "ruleGroup": "ziftbook-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (deployment_environment_name) (http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} - (last_over_time(http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"}[1d] offset 10m) or http_server_request_duration_seconds_count{service_name=\"ziftbook-api\", deployment_environment_name=\"production\", http_response_status_code=~\"5..\"} * 0))",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    4
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "critical",
+        "component": "ziftbook"
+      },
+      "annotations": {
+        "summary": "The Ziftbook production API answered {{ printf \"%.0f\" $values.A.Value }} requests with a 5xx in the last 10 minutes (5 or more fires). See the Ziftbook app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#ziftbook-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "4h"
+      }
+    },
+    {
+      "uid": "ziftbook-jobs-gave-up",
+      "title": "ZiftbookJobsGaveUp",
+      "folderUID": "platform",
+      "ruleGroup": "ziftbook-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 4500,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (job_kind) (ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} - (last_over_time(ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"}[1d] offset 1h) or ziftbook_job_runs_total{deployment_environment_name=\"production\", job_outcome=\"gave_up\"} * 0))",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "ziftbook"
+      },
+      "annotations": {
+        "summary": "Ziftbook production gave up on {{ printf \"%.0f\" $values.A.Value }} {{ $labels.job_kind }} job(s) in the last hour, after 5 attempts. They are never retried; see the Ziftbook app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#ziftbook-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
+    },
+    {
+      "uid": "ziftbook-job-queue-stuck",
+      "title": "ZiftbookJobQueueStuck",
+      "folderUID": "platform",
+      "ruleGroup": "ziftbook-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "max by (job_kind) (max_over_time(ziftbook_job_queue_oldest_age_seconds{deployment_environment_name=\"production\"}[3m]))",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    600
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "5m",
+      "noDataState": "Alerting",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "critical",
+        "component": "ziftbook"
+      },
+      "annotations": {
+        "summary": "{{ if $labels.job_kind }}Ziftbook production: the oldest due {{ $labels.job_kind }} job has waited over 10 minutes for 5 minutes, so its mail is late.{{ else }}Ziftbook production: the worker reports no queue metrics (worker down, or its metrics export broken).{{ end }} See the Ziftbook app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#ziftbook-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "4h"
+      }
+    }
+  ]
+}
