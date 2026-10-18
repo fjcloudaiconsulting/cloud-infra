@@ -712,7 +712,7 @@ labels its heartbeat `instance=<node>`).
 Check, read-only: `kubectl -n observability get ds log-retention`, `kubectl -n observability logs
 ds/log-retention` (one line per file emptied or deleted), and for any pod `kubectl logs --timestamps <pod> -c <c> | head -1`
 must be under 7 days old. Not covered: Cloudflare's own edge logs, and Mailgun's. The Ziftbook lines in Grafana Cloud
-are bounded by the stack's Logs retention, 7 days, set by hand ([configuration-map.md](configuration-map.md)).
+are kept 14 days, the Grafana Cloud Free plan's fixed retention ([configuration-map.md](configuration-map.md)).
 
 ### Memory alerts
 
@@ -835,7 +835,7 @@ API traffic.
 
 ### Find a request's logs
 
-Ziftbook's log lines (staging and prod) are in Grafana Cloud Loki for 7 days (ZIF-89). Grafana > Explore > the stack's
+Ziftbook's log lines (staging and prod) are in Grafana Cloud Loki for 14 days (ZIF-89). Grafana > Explore > the stack's
 Loki data source, with the `request_id` from the `X-Request-ID` response header, or a `trace_id`:
 
 ```logql
