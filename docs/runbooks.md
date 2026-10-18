@@ -383,7 +383,7 @@ breaks.
 ## Ziftbook Turnstile (public bookings)
 
 The Ziftbook API refuses every public booking (403) while it has no Turnstile secret, and logs ERROR `turnstile
-secret unset: public bookings refused` at start (ZIF-116, fail closed). One widget per environment, made by hand like
+secret unset: public bookings refused` at start (ZIF-116, fail closed). One widget per environment, outside Terraform like
 TBD's:
 
 1. Cloudflare dashboard > Turnstile > Add widget: name `ziftbook-staging`, hostname `dev.ziftbook.com` (prod:
