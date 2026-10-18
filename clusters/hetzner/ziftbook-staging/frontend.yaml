@@ -47,6 +47,13 @@ spec:
               value: http://backend:8000
             - name: ZIF_CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # Public, but kept beside the widget's secret so one owner step writes both (ZIF-116). Read per request.
+            - name: ZIF_TURNSTILE_SITE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-turnstile
+                  key: site-key
+                  optional: true
             - name: OTEL_TRACES_EXPORTER
               value: none
             - name: OTEL_LOGS_EXPORTER

@@ -115,6 +115,14 @@ spec:
             # if the node re-registers. Node-local traffic (source 10.42.0.1) is owner-only (NetBird).
             - name: ZIF_TRUSTED_PROXIES
               value: 10.42.0.0/16
+            # Turnstile widget `ziftbook-staging` (hostname dev.ziftbook.com, made by hand, ZIF-116). Without the secret the API
+            # refuses every public booking and logs an ERROR at start (fail closed), so optional only spares the pod.
+            - name: ZIF_TURNSTILE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-turnstile
+                  key: secret
+                  optional: true
           readinessProbe:
             httpGet:
               path: /api/healthz
