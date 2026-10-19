@@ -619,7 +619,9 @@ is drained or down. That is accepted (INFRA-177): break-glass is SSH to any othe
 (`ssh root@<public IPv4> k3s kubectl ...`, port 22 open to `ssh_allowed_cidrs` in `terraform/hetzner`), the same path
 as [Hetzner cluster bootstrap](#hetzner-cluster-bootstrap). Run drains over SSH for that reason.
 
-**Planned drain** (reboots, INFRA-192), one app node at a time, from a different server:
+**Planned drain**, one app node at a time, from a different server. Kernel reboots use `ansible/reboot.yml`, which does
+this for every node that needs it, db-1 last, and waits between nodes (ansible/README.md "Rolling reboot"; monthly, or
+when a node shows `/var/run/reboot-required`). By hand:
 
 ```bash
 ssh root@$N1 k3s kubectl drain node-2 --ignore-daemonsets --delete-emptydir-data --timeout=5m
