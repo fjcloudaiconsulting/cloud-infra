@@ -105,13 +105,6 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "system-upgrade-controller (INFRA-179): a new tag means re-vendoring crd.yaml and system-upgrade-controller.yaml by hand, so only the digest pin in system-upgrade/kustomization.yaml may move.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["rancher/system-upgrade-controller"],
-      "matchUpdateTypes": ["major", "minor", "patch"],
-      "enabled": false
-    },
-    {
       "description": "The Plans leave rancher/k3s-upgrade untagged on purpose (the controller appends the version): a tag or digest pin would break that.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["rancher/k3s-upgrade"],

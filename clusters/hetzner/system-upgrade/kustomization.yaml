@@ -16,8 +16,7 @@ patches:
         path: /data/SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE
         value: rancher/kubectl:v1.36.2
 # The controller runs cluster-wide with a privileged ServiceAccount: pin the image by digest (multi-arch index of
-# v0.20.2) without touching the vendored file. A tag bump must re-vendor crd.yaml by hand, so Renovate may only move
-# the digest (renovate.json).
+# v0.20.2) without touching the vendored file. Bumped by hand with a re-vendor of crd.yaml (runbook "Upgrade k3s").
 images:
   - name: rancher/system-upgrade-controller
     newTag: v0.20.2
