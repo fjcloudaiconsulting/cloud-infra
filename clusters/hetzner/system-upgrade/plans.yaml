@@ -16,8 +16,11 @@ spec:
   jobActiveDeadlineSecs: 1800
   nodeSelector:
     matchExpressions:
-      - {key: role, operator: In, values: [app]}
-      - {key: node-role.kubernetes.io/control-plane, operator: Exists}
+      - key: role
+        operator: In
+        values: [app]
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
   # Prod keeps one of two replicas through each app node (INFRA-177 PDBs). timeout is a STRING: an integer is read as
   # nanoseconds in v0.20.2 and every drain would time out at once.
   drain:
@@ -35,7 +38,8 @@ spec:
         /opt/k3s kubectl wait node --all --for=condition=Ready --timeout=10m
         # Fail (the job retries) while any other node is cordoned. This node is skipped: a retry pod finds it cordoned
         # by the previous attempt. The check stays because it also catches the db gate's stale-status race.
-        cordoned=$(/opt/k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}' | grep -vxF "$SYSTEM_UPGRADE_NODE_NAME" || true)
+        nodes=$(/opt/k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}')
+        cordoned=$(printf '%s\n' "$nodes" | grep -vxF "$SYSTEM_UPGRADE_NODE_NAME" || true)
         if [ -n "$cordoned" ]; then
           echo "another node is cordoned: $cordoned" >&2
           exit 1
@@ -58,10 +62,16 @@ spec:
   jobActiveDeadlineSecs: 0
   nodeSelector:
     matchExpressions:
-      - {key: role, operator: In, values: [db]}
-      - {key: node-role.kubernetes.io/control-plane, operator: Exists}
+      - key: role
+        operator: In
+        values: [db]
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
   tolerations:
-    - {key: role, operator: Equal, value: db, effect: NoSchedule}
+    - key: role
+      operator: Equal
+      value: db
+      effect: NoSchedule
   # Cordon only: the local-path PVs are pinned to db-1, so a drain would be a full database outage. k3s runs with
   # KillMode=process, so the containers survive the k3s restart.
   cordon: true
@@ -73,14 +83,15 @@ spec:
         set -eu
         # Gate: db-1 goes last. Wait until Plan k3s-app has finished this version on every app node. latestVersion
         # guards against a status not yet rewritten after a merge; the node label is set by the controller after the
-        # job completes and postCompleteDelay.
+        # job completes and postCompleteDelay. Each label line is prefixed with x so an unlabeled node is not an empty line
+        # that $(...) would strip.
         while :; do
           hash=$(/opt/k3s kubectl -n system-upgrade get plan k3s-app -o jsonpath='{.status.latestHash}')
           ver=$(/opt/k3s kubectl -n system-upgrade get plan k3s-app -o jsonpath='{.status.latestVersion}')
           applying=$(/opt/k3s kubectl -n system-upgrade get plan k3s-app -o jsonpath='{.status.applying}')
-          labels=$(/opt/k3s kubectl get nodes -l role=app -o jsonpath='{range .items[*]}{.metadata.labels.plan\.upgrade\.cattle\.io/k3s-app}{"\n"}{end}')
+          labels=$(/opt/k3s kubectl get nodes -l role=app -o jsonpath='{range .items[*]}x{.metadata.labels.plan\.upgrade\.cattle\.io/k3s-app}{"\n"}{end}')
           if [ -n "$hash" ] && [ "$ver" = "$SYSTEM_UPGRADE_PLAN_LATEST_VERSION" ] && [ -z "$applying" ] &&
-            [ -n "$labels" ] && [ "$(printf '%s\n' "$labels" | grep -vxcF "$hash")" = 0 ]; then
+            [ -n "$labels" ] && [ "$(printf '%s\n' "$labels" | grep -vxcF "x$hash")" = 0 ]; then
             break
           fi
           echo "waiting for Plan k3s-app: version=$ver applying=$applying" >&2
@@ -91,7 +102,8 @@ spec:
         /opt/k3s kubectl wait node --all --for=condition=Ready --timeout=10m
         # This node is skipped: a retry pod finds it cordoned by the previous attempt. The check stays because it
         # also catches the stale-status race above.
-        cordoned=$(/opt/k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}' | grep -vxF "$SYSTEM_UPGRADE_NODE_NAME" || true)
+        nodes=$(/opt/k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}')
+        cordoned=$(printf '%s\n' "$nodes" | grep -vxF "$SYSTEM_UPGRADE_NODE_NAME" || true)
         if [ -n "$cordoned" ]; then
           echo "another node is cordoned: $cordoned" >&2
           exit 1
