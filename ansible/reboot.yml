@@ -58,6 +58,33 @@
         that: groups['server'] | map('regex_replace', '$', '=True') | difference(reboot_nodes_before.stdout_lines) | length == 0
         fail_msg: "Not rebooting {{ inventory_hostname }}: not every server is Ready ({{ reboot_nodes_before.stdout_lines | join(', ') }})."
 
+    # A server left cordoned by an earlier, interrupted run would leave the next drain nowhere to put its pods.
+    - name: Read the servers' cordon state
+      ansible.builtin.command: >-
+        k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}'
+      register: reboot_cordoned
+      changed_when: false
+      check_mode: false
+
+    - name: No server is cordoned
+      ansible.builtin.assert:
+        that: reboot_cordoned.stdout | trim == ''
+        fail_msg: "Not rebooting {{ inventory_hostname }}: {{ reboot_cordoned.stdout_lines | join(', ') }} still cordoned; kubectl uncordon it first."
+
+    # A workload that is already broken would only show at the wait after the reboot, with this node already down.
+    - name: Every Deployment and StatefulSet is fully Ready before the drain
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        k3s kubectl get deploy,sts -A
+        -o jsonpath='{range .items[*]}{.kind}/{.metadata.namespace}/{.metadata.name}={.status.readyReplicas}/{.spec.replicas}{"\n"}{end}'
+        | awk -F'=' '{ split($2, r, "/"); if ((r[1] + 0) != (r[2] + 0)) print $1 }'
+      args:
+        executable: /bin/bash
+      register: reboot_not_ready_before
+      changed_when: false
+      check_mode: false
+      failed_when: reboot_not_ready_before.rc != 0 or reboot_not_ready_before.stdout != ''
+
     # Evictions respect the PDBs, so prod keeps one replica of each app on the other app node. On db-1 the database
     # pods stop cleanly here and wait, Pending, until the node is back (their volumes are pinned to it).
     - name: Drain the node

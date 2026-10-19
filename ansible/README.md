@@ -118,7 +118,8 @@ kernel; a node behind the others is the hint).
    post-deploy smoke for `tbd-prod` and `ziftbook-prod` (Actions > Post-deploy Smoke > Run workflow).
 
 A run that stops halfway leaves that node cordoned: fix the cause, `kubectl uncordon <node>`, then rerun (finished
-nodes are skipped, they no longer need a reboot).
+nodes are skipped, they no longer need a reboot). It also stops if a node asks for a reboot again right after booting (the daily
+upgrade timer installed a newer kernel): rerun it later.
 
 ## Rebuilding one node
 
