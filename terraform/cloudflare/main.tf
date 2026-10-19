@@ -286,7 +286,7 @@ resource "cloudflare_dns_record" "ziftbook_mail" {
 }
 
 output "tbd_name_servers" {
-  description = "Set these at the registrar (Route 53 Domains, old AWS account) to switch DNS to Cloudflare."
+  description = "The zone's name servers (the domain is at Cloudflare Registrar since 2026-10-06)."
   value       = cloudflare_zone.tbd.name_servers
 }
 
