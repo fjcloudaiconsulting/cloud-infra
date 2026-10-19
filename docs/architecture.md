@@ -65,12 +65,13 @@ flowchart LR
 
 Every app host goes through the Hetzner cluster's Cloudflare Tunnel: `dev.thebetterdecision.com` (staging, since INFRA-173) and
 `app.thebetterdecision.com` (TBD production, since INFRA-175, proxied CNAMEs to the tunnel), `dev.ziftbook.com`
-(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime check's target is `app.../health/dependencies`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
+(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime checks target TBD's `app.../health/dependencies` and Ziftbook's `app.../api/healthz`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
 thebetterdecision.com apex is the Worker `tbd-landing`; their code and deploys live in the app repos, and their custom
 domains are attached by hand ([configuration-map.md](configuration-map.md#worker-and-snippet-access-infra-98)).
 `www.thebetterdecision.com` is a proxied record that a redirect rule in `terraform/cloudflare` sends to the apex (301).
 
-Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123): more than 20 requests in 10 s
+Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
+unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s
 from one IP (per Cloudflare data center) to those paths gets a 429 from Cloudflare for 10 s, which caps the volume one
 address can send to them. The zones are on the Free plan, which allows one such rule per zone and matches on the path only,
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.

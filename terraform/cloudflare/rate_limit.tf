@@ -1,6 +1,7 @@
-# Edge rate limit on the apps' sign-in and token endpoints (INFRA-123). It caps what one address can send to them, so
-# a burst gets a 429 from Cloudflare instead of reaching the app. Each app keeps its own per-account and per-address
-# limits behind this.
+# Edge rate limit on the apps' sign-in and token endpoints (INFRA-123) and on Ziftbook's database health probe
+# (INFRA-140: unauthenticated, one query per request; its database timeout is app-side). It caps what one address can
+# send to them, so a burst gets a 429 from Cloudflare instead of reaching the app. Each app keeps its own per-account
+# and per-address limits behind this.
 #
 # Both zones are on the Free plan, which allows (read 2026-10-04): one rate-limiting rule per zone, the URI path as
 # the only request field (no host, no method), counting per client IP and Cloudflare data center (ip.src and
@@ -52,6 +53,7 @@ locals {
       "/api/invites/lookup",
       "/api/invites/accept",
       "/api/public/booking-link/session",
+      "/api/health/dependencies",
     ]
   }
 }
@@ -66,7 +68,7 @@ resource "cloudflare_ruleset" "auth_rate_limit" {
 
   rules = [{
     ref         = "auth_burst"
-    description = "Auth endpoints: 20 requests per 10 s per IP, then 429 (INFRA-123)"
+    description = "Auth endpoints + Ziftbook DB health probe: 20 requests per 10 s per IP, then 429 (INFRA-123, INFRA-140)"
     expression  = "(http.request.uri.path in {${join(" ", [for p in each.value : jsonencode(p)])}}) or (http.request.uri.path contains \"%2F\") or (http.request.uri.path contains \"%2f\")"
     action      = "block"
     enabled     = true
