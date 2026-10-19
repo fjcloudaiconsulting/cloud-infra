@@ -65,7 +65,7 @@ flowchart LR
 
 Every app host goes through the Hetzner cluster's Cloudflare Tunnel: `dev.thebetterdecision.com` (staging, since INFRA-173) and
 `app.thebetterdecision.com` (TBD production, since INFRA-175, proxied CNAMEs to the tunnel), `dev.ziftbook.com`
-(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime check's target is `app.../health/dependencies`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
+(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime checks target TBD's `app.../health/dependencies` and Ziftbook's `app.../api/healthz`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
 thebetterdecision.com apex is the Worker `tbd-landing`; their code and deploys live in the app repos, and their custom
 domains are attached by hand ([configuration-map.md](configuration-map.md#worker-and-snippet-access-infra-98)).
 `www.thebetterdecision.com` is a proxied record that a redirect rule in `terraform/cloudflare` sends to the apex (301).

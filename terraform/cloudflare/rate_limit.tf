@@ -68,7 +68,7 @@ resource "cloudflare_ruleset" "auth_rate_limit" {
 
   rules = [{
     ref         = "auth_burst"
-    description = "Auth endpoints: 20 requests per 10 s per IP, then 429 (INFRA-123)"
+    description = "Auth endpoints + Ziftbook DB health probe: 20 requests per 10 s per IP, then 429 (INFRA-123, INFRA-140)"
     expression  = "(http.request.uri.path in {${join(" ", [for p in each.value : jsonencode(p)])}}) or (http.request.uri.path contains \"%2F\") or (http.request.uri.path contains \"%2f\")"
     action      = "block"
     enabled     = true
