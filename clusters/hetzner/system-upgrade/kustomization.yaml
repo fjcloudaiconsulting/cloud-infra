@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - crd.yaml
+  - system-upgrade-controller.yaml
+  - plans.yaml
+# Upstream's kubectl image is v1.30.3, outside the +-1 minor skew of a v1.36 server, and the app Plan's drain does real
+# work with it (INFRA-179). Patched here, not in system-upgrade-controller.yaml, so a re-download of the release asset
+# diffs cleanly. Bump it by hand with every k3s minor: no Renovate manager sees this line.
+patches:
+  - target:
+      kind: ConfigMap
+      name: default-controller-env
+    patch: |
+      - op: replace
+        path: /data/SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE
+        value: rancher/kubectl:v1.36.2

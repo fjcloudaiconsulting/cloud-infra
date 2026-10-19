@@ -17,7 +17,7 @@ The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-
 - Cloudflare proxies all app traffic to the Cloudflare Tunnel (`cloudflared`, the cluster's only ingress).
 - Images live on GHCR, built by the app repos. Flux (source + kustomize controllers only) applies
   `clusters/hetzner/`. Secrets are SOPS + age.
-- Namespaces (`clusters/hetzner/`): `tbd-staging`, `ziftbook-staging` (INFRA-173), `ziftbook-prod` (INFRA-181) and `tbd-prod` (INFRA-175), `data` (MySQL, Postgres, backups), `cloudflared` (the tunnel connectors), `observability` (Grafana Alloy, metrics to Grafana Cloud), and `netbird` (owner kubectl access over NetBird); `kube-system/` holds only the CoreDNS replica count and PDB (INFRA-177).
+- Namespaces (`clusters/hetzner/`): `tbd-staging`, `ziftbook-staging` (INFRA-173), `ziftbook-prod` (INFRA-181) and `tbd-prod` (INFRA-175), `data` (MySQL, Postgres, backups), `cloudflared` (the tunnel connectors), `observability` (Grafana Alloy, metrics to Grafana Cloud), `netbird` (owner kubectl access over NetBird), and `system-upgrade` (system-upgrade-controller and the two k3s Plans, INFRA-179); `kube-system/` holds only the CoreDNS replica count and PDB (INFRA-177).
 
 ## Layout and commands
 

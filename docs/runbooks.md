@@ -888,6 +888,54 @@ for `/dev/sdb`: grow the volume (below); for a root disk, look for old images (`
    `resize2fs "$(findmnt -no SOURCE /var/lib/rancher/k3s/storage)"`.
 3. Check: `df -h /var/lib/rancher/k3s/storage` shows the new size.
 
+## Upgrade k3s
+
+k3s is upgraded by Rancher's system-upgrade-controller (`clusters/hetzner/system-upgrade/`, INFRA-179), not by hand. The k3s
+pin lives twice: `version` in both Plans (`plans.yaml`, the source of truth for the running cluster) and `k3s_version` in
+`ansible/group_vars/all.yml` (what a rebuilt node installs). Renovate bumps both in one PR, a patch only after the release is
+7 days old. Merging that PR is the upgrade: Flux applies the Plans and the controller rolls the servers one at a time, node-1
+and node-2 (Plan `k3s-app`: cordon, drain, upgrade, uncordon), then db-1 (Plan `k3s-db`: cordon only, no drain, because its
+local-path volumes would take the databases down). db-1's prepare waits until every app node carries the new version's label,
+so it is always last. Each prepare also waits for every node Ready and fails (the job retries) while another node is cordoned.
+The controller's job backoff limit is 99 and finished jobs live 900 s (`SYSTEM_UPGRADE_JOB_BACKOFF_LIMIT`,
+`SYSTEM_UPGRADE_JOB_TTL_SECONDS_AFTER_FINISH`), so a blocked prepare retries, at growing intervals up to 6 min, for hours.
+
+**Before merging**
+1. Every node Ready and nothing cordoned: `kubectl get nodes -L role`. No `ansible/reboot.yml` run in progress.
+2. etcd snapshot on node-1: `ssh root@<node-1 public IPv4> k3s etcd-snapshot save --name pre-<version>` (no rollback by revert,
+   see below; the snapshot is the way back).
+3. Tell the tbd and ziftbook sessions: prod keeps one of two replicas through each app node (INFRA-177), staging has a short outage.
+
+**Watch** (about 15 to 20 minutes in total: per app node a 60 s guard, the drain, the upgrade and a 2 min delay; db-1 after both):
+
+    kubectl -n system-upgrade get plans,jobs,pods
+    kubectl get nodes -L role -w
+    kubectl -n system-upgrade logs -f job/<job>          # the prepare container, then upgrade
+
+At the running version (a rehearsal) each upgrade job logs "Binary already been replaced" and k3s is not restarted, which still
+proves the order: cordon, drain on app nodes only, uncordon, db-1 last. Check `/readyz/etcd` on each
+server and the prod hosts after the roll, then run the [post-deploy smoke](#post-deploy-smoke).
+
+**Pause.** One node: `kubectl label node <node> plan.upgrade.cattle.io/<plan>=disabled` (remove it with a trailing `-`). Pausing
+an app node also holds db-1, whose gate waits for every app node. Everything: `flux suspend kustomization flux-system` and
+`kubectl -n system-upgrade scale deploy/system-upgrade-controller --replicas=0`; undo both to resume.
+
+**A node left cordoned** (job failed or was paused mid-way): the next prepare refuses to run while any other node is cordoned.
+Find why the job failed (`kubectl -n system-upgrade logs job/<job>`), fix it, and `kubectl uncordon <node>` once it is Ready.
+
+**Plan edits re-run the roll.** Any change to a Plan spec (prepare script, drain flags) changes its hash, so the whole roll runs
+again at the same version: both app nodes drained, db-1 cordoned. Merge such edits like a k3s bump.
+
+**No rollback by revert.** k3s-upgrade refuses a downgrade ("Current ... is higher"): fix forward with a newer release, or
+restore the etcd snapshot.
+
+**NetBird.** Its PVC is on node-2, so if node-2's upgrade fails kubectl over NetBird stays down. Break-glass:
+`ssh root@<public IPv4> k3s kubectl ...` ([Hetzner nodes](#hetzner-nodes-ansible-rebuild-break-glass)).
+
+**Minors** (Renovate waits for a tick on the Dependency Dashboard): read the release notes, one minor at a time, and change in the
+same PR the k3s-ansible pin (`ansible/requirements.yml`) and the kubectl image in `system-upgrade/kustomization.yaml` (it must
+stay within one minor of the server; no Renovate manager sees it). A rebuilt node installs `k3s_version` and is upgraded on join.
+
 ## Hetzner nodes: Ansible, rebuild, break-glass
 
 Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
