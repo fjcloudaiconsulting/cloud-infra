@@ -122,8 +122,12 @@ GH_STUB = """#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 if [[ "$1 $2" == "issue list" ]]; then
   # ISSUES: author<TAB>number<TAB>title lines; honour --author like gh, emit number<TAB>title like the --jq.
+  # Like real gh: no --search means no results (author filter needs it); --jq without @tsv/.title prints numbers only.
+  [[ -z "${LIST_FAIL:-}" ]] || exit 1
+  [[ "$*" == *--search* && "$*" == *in:title* ]] || exit 0
+  if [[ "$*" == *@tsv* && "$*" == *.title* ]]; then fmt='$2 "\\t" $3'; else fmt='$2'; fi
   if [[ "$*" == *"--author app/github-actions"* ]]; then want=app/github-actions; else want=; fi
-  printf '%s' "$ISSUES" | awk -F'\\t' -v w="$want" '!w || $1 == w { print $2 "\\t" $3 }'
+  printf '%s' "$ISSUES" | awk -F'\\t' -v w="$want" '!w || $1 == w { print '"$fmt"' }'
 fi
 """
 
@@ -153,11 +157,13 @@ class NotifyOwnIssueOnly(unittest.TestCase):
     def test_outsider_issue_with_our_title_is_never_touched(self):
         # Public repo: an outsider's same-title issue must not take our comments; we open our own.
         r, log = notify(f"mallory\t9\t{TITLE}\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("issue create", log)
         self.assertNotIn("issue comment 9", log)
 
     def test_bot_issue_with_a_longer_title_is_not_matched(self):
         r, log = notify(f"{BOT}\t9\t{TITLE} (copy)\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("issue create", log)
         self.assertNotIn("issue comment 9", log)
 
