@@ -1,0 +1,146 @@
+---
+# Rolling reboot for pending kernel updates (INFRA-192). unattended-upgrades installs them but never reboots
+# (node_base); this play reboots only the servers with /var/run/reboot-required, one at a time, behind the same quorum
+# guard as site.yml. db-1 last (inventory order): its reboot is a short outage of MySQL and Postgres, so run it in a
+# window. Runbook: README.md "Rolling reboot". Run from this directory.
+
+- name: Reboot the servers that need it
+  hosts: server
+  serial: 1
+  max_fail_percentage: 0
+  gather_facts: false
+  vars:
+    # -e reboot_force=true reboots a server even without reboot-required (a drill, or a stuck kernel module).
+    reboot_force: false
+  tasks:
+    - name: Look for a pending reboot
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Leave a server that needs no reboot
+      when: not (reboot_required.stat.exists or reboot_force | bool)
+      ansible.builtin.meta: end_host
+
+    # Rebooting an etcd member while another server is down or out of the run drops etcd to 1 of 3.
+    - name: Every server is in this run and reachable
+      ansible.builtin.assert:
+        that: groups['server'] | difference(ansible_play_hosts_all) | length == 0
+        fail_msg: >-
+          Not rebooting {{ inventory_hostname }}: {{ groups['server'] | difference(ansible_play_hosts_all) | join(', ') }}
+          was left out by --limit. Reboot with every server in the run, so the quorum check sees them all.
+
+    - name: Read etcd health on every server
+      ansible.builtin.command: k3s kubectl get --raw /readyz/etcd
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['server'] }}"
+      register: reboot_etcd_before
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Etcd is healthy on every server
+      ansible.builtin.assert:
+        that: reboot_etcd_before.results | rejectattr('stdout', 'equalto', 'ok') | list | length == 0
+        fail_msg: >-
+          Not rebooting {{ inventory_hostname }}: /readyz/etcd is not ok on
+          {{ reboot_etcd_before.results | rejectattr('stdout', 'equalto', 'ok') | map(attribute='item') | join(', ') }}.
+
+    - name: Read the server nodes' Ready status
+      ansible.builtin.command: >-
+        k3s kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}'
+      register: reboot_nodes_before
+      changed_when: false
+      check_mode: false
+
+    - name: Every server node is Ready
+      ansible.builtin.assert:
+        that: groups['server'] | map('regex_replace', '$', '=True') | difference(reboot_nodes_before.stdout_lines) | length == 0
+        fail_msg: "Not rebooting {{ inventory_hostname }}: not every server is Ready ({{ reboot_nodes_before.stdout_lines | join(', ') }})."
+
+    # A server left cordoned by an earlier, interrupted run would leave the next drain nowhere to put its pods.
+    - name: Read the servers' cordon state
+      ansible.builtin.command: >-
+        k3s kubectl get nodes -o jsonpath='{range .items[?(@.spec.unschedulable==true)]}{.metadata.name}{"\n"}{end}'
+      register: reboot_cordoned
+      changed_when: false
+      check_mode: false
+
+    - name: No server is cordoned
+      ansible.builtin.assert:
+        that: reboot_cordoned.stdout | trim == ''
+        fail_msg: "Not rebooting {{ inventory_hostname }}: {{ reboot_cordoned.stdout_lines | join(', ') }} still cordoned; kubectl uncordon it first."
+
+    # A workload that is already broken would only show at the wait after the reboot, with this node already down.
+    - name: Every Deployment and StatefulSet is fully Ready before the drain
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        k3s kubectl get deploy,sts -A
+        -o jsonpath='{range .items[*]}{.kind}/{.metadata.namespace}/{.metadata.name}={.status.readyReplicas}/{.spec.replicas}{"\n"}{end}'
+        | awk -F'=' '{ split($2, r, "/"); if ((r[1] + 0) != (r[2] + 0)) print $1 }'
+      args:
+        executable: /bin/bash
+      register: reboot_not_ready_before
+      changed_when: false
+      check_mode: false
+      failed_when: reboot_not_ready_before.rc != 0 or reboot_not_ready_before.stdout != ''
+
+    # Evictions respect the PDBs, so prod keeps one replica of each app on the other app node. On db-1 the database
+    # pods stop cleanly here and wait, Pending, until the node is back (their volumes are pinned to it).
+    - name: Drain the node
+      ansible.builtin.command: >-
+        k3s kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --timeout=300s
+      changed_when: true
+
+    - name: Reboot
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        msg: Rolling reboot for a pending kernel update (INFRA-192)
+
+    - name: Wait for the node to be Ready
+      when: not ansible_check_mode
+      ansible.builtin.command: k3s kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=30s
+      register: reboot_ready
+      until: reboot_ready.rc == 0
+      retries: 20
+      delay: 15
+      changed_when: false
+
+    - name: Wait for etcd health on every server
+      when: not ansible_check_mode
+      ansible.builtin.command: k3s kubectl get --raw /readyz/etcd
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['server'] }}"
+      register: reboot_etcd_after
+      until: reboot_etcd_after.stdout == 'ok'
+      retries: 20
+      delay: 15
+      changed_when: false
+
+    - name: Uncordon the node
+      ansible.builtin.command: k3s kubectl uncordon {{ inventory_hostname }}
+      changed_when: true
+
+    # The evicted replicas come back onto this node only now. Draining the next node before they are Ready would stall
+    # on the PDBs (runbooks.md "Drain or lose an app node"), and after db-1 the apps wait for their databases.
+    - name: Wait until every Deployment and StatefulSet is fully Ready
+      when: not ansible_check_mode
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        k3s kubectl get deploy,sts -A
+        -o jsonpath='{range .items[*]}{.kind}/{.metadata.namespace}/{.metadata.name}={.status.readyReplicas}/{.spec.replicas}{"\n"}{end}'
+        | awk -F'=' '{ split($2, r, "/"); if ((r[1] + 0) != (r[2] + 0)) print $1 }'
+      args:
+        executable: /bin/bash
+      register: reboot_not_ready
+      until: reboot_not_ready.rc == 0 and reboot_not_ready.stdout == ''
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: No reboot is pending any more
+      when: not ansible_check_mode
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_after
+      failed_when: reboot_required_after.stat.exists

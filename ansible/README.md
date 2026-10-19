@@ -99,6 +99,28 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
    quorum guard. k3s versions move through system-upgrade-controller (INFRA-179), not this playbook.
 5. Paste the `PLAY RECAP` into the PR with the SHA.
 
+## Rolling reboot
+
+unattended-upgrades installs kernel updates but never reboots (`node_base`), so a node runs the old kernel until it is
+rebooted. `reboot.yml` (INFRA-192) reboots only the servers with `/var/run/reboot-required`, one at a time, in
+inventory order (db-1 last): quorum and Ready checks first (as in `site.yml`), drain, reboot, wait for Ready and
+`/readyz/etcd` on every server, uncordon. Prod keeps serving from the other app node during node-1 or node-2 (PDBs
+and two replicas, INFRA-177). db-1 holds MySQL and Postgres, so its reboot is a few minutes of full outage for both
+apps: run it in a quiet hour, not across the nightly dumps (02:00 UTC).
+
+Cadence: monthly, or as soon as a node has `/var/run/reboot-required` (`kubectl get nodes -o wide` shows the running
+kernel; a node behind the others is the hint).
+
+1. `ansible-playbook reboot.yml --check` lists which servers need it (the reboot itself is skipped in check mode).
+2. `ansible-playbook reboot.yml` with every server in the run (`--limit` is refused: the quorum check needs them all).
+   `-e reboot_force=true` reboots every server, for a drill.
+3. After it: `kubectl get nodes -o wide` (same kernel everywhere, all Ready, none SchedulingDisabled), then the
+   post-deploy smoke for `tbd-prod` and `ziftbook-prod` (Actions > Post-deploy Smoke > Run workflow).
+
+A run that stops halfway leaves that node cordoned: fix the cause, `kubectl uncordon <node>`, then rerun (finished
+nodes are skipped, they no longer need a reboot). It also stops if a node asks for a reboot again right after booting (the daily
+upgrade timer installed a newer kernel): rerun it later.
+
 ## Rebuilding one node
 
 Rebuild means Terraform replaces the server (`terraform apply -replace='hcloud_server.node["<name>"]'` via a TFC run);
