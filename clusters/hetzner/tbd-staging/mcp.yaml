@@ -51,7 +51,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.299.1
+          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.300.0
           ports:
             - containerPort: 8001
           env:
