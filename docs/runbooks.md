@@ -878,8 +878,29 @@ Rule `NodeDiskHigh` (group `node-disk`, folder Platform, ZIF-89) mails the owner
 covers every node's root disk and, on db-1, `/dev/sdb`, the Hetzner volume that holds the MySQL and Postgres data
 (41.9 GB, 0.3 GB used on 2026-10-17). A silent scrape is `NodeMetricsAbsent`'s job. Apply:
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/node-disk grafana/node-disk.rules.json`. When it fires
-for `/dev/sdb`: grow the volume in `terraform/hetzner`, then the filesystem on db-1; for a root disk, look for old
-images (`k3s crictl rmi --prune`) and logs first.
+for `/dev/sdb`: grow the volume, below; for a root disk, look for old images (`k3s crictl rmi --prune`) and logs first.
+
+**Grow the DB volume** (one-way: a Hetzner volume never shrinks, and it is billed by size). The databases keep running.
+
+1. PR raising `size` (GB) of `hcloud_volume.db` in `terraform/hetzner/main.tf`; merge, approve the `hetzner` run in
+   TFC. The plan must show `hcloud_volume.db` updated in place, never replaced (`prevent_destroy` refuses that anyway).
+2. On db-1 over SSH, grow the ext4 filesystem online:
+   `resize2fs "$(findmnt -no SOURCE /var/lib/rancher/k3s/storage)"`.
+3. Check: `df -h /var/lib/rancher/k3s/storage` shows the new size.
+
+## Hetzner nodes: Ansible, rebuild, break-glass
+
+Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
+[`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
+updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
+(db-1)", which also shows what the mount guard does. A tunnel hostname is [Add a public hostname for an
+app](#add-a-public-hostname-for-an-app).
+
+**Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
+address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
+applying first). With SSH gone too, use the Hetzner Cloud Console, project `fj-platform` > Servers > the server: Power
+(power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
+Rescue > Reset root password, or the rescue system (Rescue > Enable rescue, then power cycle) to mount the root disk.
 
 ## Hetzner cluster bootstrap
 
