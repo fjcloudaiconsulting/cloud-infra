@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -112,6 +113,53 @@ class Verdicts(unittest.TestCase):
         older = night(6, stamp="20260827-020000", dump_size=12, grants=False)
         r = probe(json.dumps({"Contents": older + night(2, stamp="20260827-084115")}))
         self.assertEqual(r.returncode, 0, r.stdout)
+
+
+NOTIFY = ROOT / ".github/scripts/notify-backup-stale.sh"
+TITLE = "[backup-stale] off-host database backup is not fresh"
+BOT = "app/github-actions"
+GH_STUB = """#!/usr/bin/env bash
+echo "$*" >> "$GH_LOG"
+if [[ "$1 $2" == "issue list" ]]; then
+  # ISSUES: author<TAB>number<TAB>title lines; honour --author like gh, emit number<TAB>title like the --jq.
+  if [[ "$*" == *"--author app/github-actions"* ]]; then want=app/github-actions; else want=; fi
+  printf '%s' "$ISSUES" | awk -F'\\t' -v w="$want" '!w || $1 == w { print $2 "\\t" $3 }'
+fi
+"""
+
+
+def notify(issues):
+    with tempfile.TemporaryDirectory() as d:
+        d = pathlib.Path(d)
+        (d / "bin").mkdir()
+        gh = d / "bin/gh"
+        gh.write_text(GH_STUB)
+        gh.chmod(0o755)
+        r = subprocess.run(
+            ["bash", str(NOTIFY)], capture_output=True, text=True, cwd=d,
+            env={**os.environ, "PATH": f"{d/'bin'}:{os.environ['PATH']}", "GH_LOG": str(d / "log"), "GH_REPO": "o/r",
+                 "RUN_ID": "1", "VERDICT": "stale", "DETAIL": "x", "ISSUES": issues},
+        )
+        return r, (d / "log").read_text()
+
+
+class NotifyOwnIssueOnly(unittest.TestCase):
+    def test_bot_issue_is_commented_not_duplicated(self):
+        r, log = notify(f"{BOT}\t7\t{TITLE}\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("issue comment 7", log)
+        self.assertNotIn("issue create", log)
+
+    def test_outsider_issue_with_our_title_is_never_touched(self):
+        # Public repo: an outsider's same-title issue must not take our comments; we open our own.
+        r, log = notify(f"mallory\t9\t{TITLE}\n")
+        self.assertIn("issue create", log)
+        self.assertNotIn("issue comment 9", log)
+
+    def test_bot_issue_with_a_longer_title_is_not_matched(self):
+        r, log = notify(f"{BOT}\t9\t{TITLE} (copy)\n")
+        self.assertIn("issue create", log)
+        self.assertNotIn("issue comment 9", log)
 
 
 PG = "ziftbook-postgres/2026/08/27"
