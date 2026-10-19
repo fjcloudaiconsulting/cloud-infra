@@ -4,7 +4,20 @@
   "kubernetes": {
     "managerFilePatterns": ["/^clusters/.+\\.ya?ml$/"]
   },
-  "ignorePaths": ["clusters/*/flux-system/**"],
+  "ignorePaths": [
+    "clusters/*/flux-system/**",
+    "clusters/hetzner/system-upgrade/crd.yaml",
+    "clusters/hetzner/system-upgrade/system-upgrade-controller.yaml"
+  ],
+  "customManagers": [
+    {
+      "description": "k3s release pins (INFRA-179): both Plans and the Ansible bootstrap version move together.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^clusters/hetzner/system-upgrade/plans\\.yaml$/", "/^ansible/group_vars/all\\.yml$/"],
+      "matchStrings": ["# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\s*(?:version|k3s_version): (?<currentValue>\\S+)"],
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\+k3s(?<build>\\d+)$"
+    }
+  ],
   "hostRules": [
     {
       "matchHost": "ghcr.io",
@@ -78,6 +91,24 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/ziftbook/**"],
       "allowedVersions": "!/^v0\\.26\\.0$/"
+    },
+    {
+      "description": "k3s (INFRA-179): one grouped PR per release. separateMinorPatch, because v1.37.1 exists: without it Renovate offers only the minor and a v1.36.x patch never gets a branch. Minors need a dashboard tick (bump the k3s-ansible pin and the kubectl image patch in system-upgrade/kustomization.yaml with them).",
+      "matchPackageNames": ["k3s-io/k3s"],
+      "groupName": "k3s",
+      "separateMinorPatch": true,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "matchPackageNames": ["k3s-io/k3s"],
+      "matchUpdateTypes": ["major", "minor"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The Plans leave rancher/k3s-upgrade untagged on purpose (the controller appends the version): a tag or digest pin would break that.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["rancher/k3s-upgrade"],
+      "enabled": false
     },
     {
       "description": "k3s-ansible is pinned to the commit of tag 1.2.2 on purpose (ansible/requirements.yml); Renovate cannot look a commit up as a tag and warns on every run. Bump it by hand with the k3s upgrade (INFRA-179).",
