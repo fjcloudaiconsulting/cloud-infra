@@ -43,9 +43,11 @@ at all, which is not evidence of health.
 BODY_EOF
 )"
 
-existing="$(gh issue list --repo "$GH_REPO" --state open --search "$TITLE_PREFIX in:title" \
-             --json number,title --jq ".[] | select(.title | startswith(\"$TITLE_PREFIX\")) | .number" \
-             2>/dev/null | head -1 || true)"
+# Our own issue only: the repo is public, so match the exact title AND the Actions bot as author. The author filter
+# works only through search.
+existing="$(gh issue list --repo "$GH_REPO" --state open --author app/github-actions --search "\"$TITLE\" in:title" \
+             --json number,title --jq '.[] | [.number, .title] | @tsv' 2>/dev/null \
+             | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }' || true)"
 
 if [[ -n "$existing" ]]; then
   gh issue comment "$existing" --repo "$GH_REPO" --body "$BODY"

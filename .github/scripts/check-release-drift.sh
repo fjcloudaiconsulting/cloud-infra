@@ -48,8 +48,11 @@ while IFS=$'\t' read -r repo cur; do
   fi
 done <<<"$list"
 
-existing="$(gh issue list --state open --search "[release-drift] in:title" --json number,title \
-            --jq 'first(.[]|select(.title|startswith("[release-drift]"))|.number)//empty')"
+# Our own issue only: the repo is public, so match the exact title AND the Actions bot as author. The author filter
+# works only through search.
+issues="$(gh issue list --state open --author app/github-actions --search "\"$title\" in:title" \
+          --json number,title --jq '.[] | [.number, .title] | @tsv')" || { echo "issue lookup failed" >&2; exit 1; }
+existing="$(awk -F'\t' -v t="$title" '$2 == t { print $1; exit }' <<<"$issues")"
 if [[ -z "$drift" ]]; then
   echo "no drift"
   if [[ -n "$existing" ]]; then gh issue close "$existing" --comment "Drift cleared ($RUN_URL)."; fi

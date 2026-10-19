@@ -16,7 +16,14 @@ STUB = """#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 case "$1 $2" in
   "api repos/fjcloudaiconsulting/ziftbook/releases/latest") printf '%s\\t%s\\n' "$REL_TAG" "$REL_PUB" ;;
-  "issue list") echo "${EXISTING:-}" ;;
+  "issue list")
+    # ISSUES: author<TAB>number<TAB>title lines; honour --author like gh, emit number<TAB>title like the probe's --jq.
+    # Like real gh: no --search means no results (author filter needs it); --jq without @tsv/.title prints numbers only.
+    [[ -z "${LIST_FAIL:-}" ]] || exit 1
+    [[ "$*" == *--search* && "$*" == *in:title* ]] || exit 0
+    if [[ "$*" == *@tsv* && "$*" == *.title* ]]; then fmt='$2 "\\t" $3'; else fmt='$2'; fi
+    if [[ "$*" == *"--author app/github-actions"* ]]; then want=app/github-actions; else want=; fi
+    printf '%s' "${ISSUES:-}" | awk -F'\t' -v w="$want" '!w || $1 == w { print '"$fmt"' }' ;;
 esac
 """
 
@@ -26,7 +33,11 @@ def iso(age_days):
     return datetime.datetime.fromtimestamp(NOW - age_days * DAY, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run(tags, *, latest="v0.21.0", age=3, grace=2, existing="", files=None, watch="ziftbook"):
+TITLE = "[release-drift] app release not in clusters/"
+BOT = "app/github-actions"
+
+
+def run(tags, *, latest="v0.21.0", age=3, grace=2, existing="", files=None, watch="ziftbook", issues=None, list_fail=""):
     """tags: image tags written to clusters/ (one image each); files overrides the raw file list."""
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
@@ -39,11 +50,13 @@ def run(tags, *, latest="v0.21.0", age=3, grace=2, existing="", files=None, watc
         gh = d / "bin/gh"
         gh.write_text(STUB)
         gh.chmod(0o755)
+        if issues is None:
+            issues = f"{BOT}\t{existing}\t{TITLE}\n" if existing else ""
         r = subprocess.run(
             ["bash", str(SCRIPT)], capture_output=True, text=True, cwd=d,
             env={**os.environ, "PATH": f"{d/'bin'}:{os.environ['PATH']}", "GH_LOG": str(d / "log"),
                  "GH_REPO": "o/r", "RUN_URL": "u", "GRACE_DAYS": str(grace), "NOW_EPOCH": str(NOW),
-                 "REL_TAG": latest, "REL_PUB": iso(age), "EXISTING": existing, "WATCH_REPOS": watch},
+                 "REL_TAG": latest, "REL_PUB": iso(age), "ISSUES": issues, "LIST_FAIL": list_fail, "WATCH_REPOS": watch},
         )
         log = (d / "log").read_text() if (d / "log").exists() else ""
         return r, log
@@ -87,11 +100,38 @@ class Drift(unittest.TestCase):
         self.assertNotIn("issue create", run(["v0.22.0"])[1])
 
 
+class OwnIssueOnly(unittest.TestCase):
+    def test_outsider_issue_with_our_title_is_never_touched(self):
+        # Public repo: an outsider's same-title issue must not be edited (drift) or closed (clear); we open our own.
+        outsider = f"mallory\t9\t{TITLE}\n"
+        r, log = run(["v0.20.2"], issues=outsider)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("issue create", log)
+        self.assertNotIn("issue edit 9", log)
+        r, log = run(["v0.21.0"], issues=outsider)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("issue close 9", log)
+
+    def test_bot_issue_with_a_longer_title_is_not_matched(self):
+        # Exact title, not prefix: a bot issue sharing only the prefix is not ours.
+        other = f"{BOT}\t9\t{TITLE} (copy)\n"
+        r, log = run(["v0.20.2"], issues=other)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("issue create", log)
+        self.assertNotIn("issue edit 9", log)
+        self.assertNotIn("issue close 9", run(["v0.21.0"], issues=other)[1])
+
+
 class FailsClosed(unittest.TestCase):
     def assert_closed(self, r, log):
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertNotIn("issue close", log)
         self.assertNotIn("issue create", log)
+        self.assertNotIn("issue edit", log)
+
+    def test_issue_lookup_failure_fails(self):
+        self.assert_closed(*run(["v0.20.2"], issues=f"{BOT}\t7\t{TITLE}\n", list_fail="1"))
+        self.assert_closed(*run(["v0.21.0"], issues=f"{BOT}\t7\t{TITLE}\n", list_fail="1"))
 
     def test_prerelease_pin_fails(self):
         self.assert_closed(*run(["v0.21.0-rc1"], existing="7"))
