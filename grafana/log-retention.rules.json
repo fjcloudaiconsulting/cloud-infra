@@ -19,7 +19,7 @@
           "datasourceUid": "grafanacloud-prom",
           "model": {
             "refId": "A",
-            "expr": "time() - max by (instance) (max_over_time(log_retention_last_success_timestamp_seconds[7d]))",
+            "expr": "time() - max by (instance) (max_over_time(log_retention_last_success_timestamp_seconds{instance!=\"\"}[7d]))",
             "instant": true,
             "range": false
           }
