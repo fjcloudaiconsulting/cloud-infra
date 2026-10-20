@@ -802,8 +802,8 @@ unset GT
 ```
 
 Check: the checks show Up in Synthetics, and `probe_success{job="tbd-prod-health"}` returns 1 in Explore. To test the
-alert, point one check at a 404 path, wait for the `ProdEndpointDown` mail (about 10 minutes: 6 min average, then 2
-min pending), then restore it from git:
+alert, point one check at a 404 path, wait for the `ProdEndpointDown` mail (within 10 minutes: the 404 URL is a new
+series, so it fires after the 2 min pending), then restore it from git:
 
 ```bash
 jq '.probes=[14,19] | .id=94561 | .tenantId=18203 | .target="https://app.ziftbook.com/api/healthz-alert-test"' \
