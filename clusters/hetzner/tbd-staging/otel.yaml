@@ -1,8 +1,8 @@
-# Telemetry standard (docs/architecture.md, Telemetry; INFRA-105) for the backend, read with envFrom. The app names
-# itself tbd-api and adds service.version from its image. Alloy forwards metrics and traces, every trace (staging
+# Telemetry standard (docs/architecture.md, Telemetry; INFRA-105) for the backend and the MCP server, read with envFrom.
+# They name themselves tbd-api and tbd-mcp (the MCP server from TBD-649 on) and add service.version from the image. Alloy forwards metrics and traces, every trace (staging
 # traffic is tiny; the standard SDK knobs OTEL_TRACES_SAMPLER/_ARG lower it); logs never leave over OTLP (stdout JSON
-# only). The frontend, migrations and MCP server do not read this.
-# Read at container start: after an edit, restart the backend deployment.
+# only). The frontend and migrations do not read this.
+# Read at container start: after an edit, restart the backend and mcp deployments.
 apiVersion: v1
 kind: ConfigMap
 metadata:
