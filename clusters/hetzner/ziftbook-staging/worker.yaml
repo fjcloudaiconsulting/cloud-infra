@@ -83,6 +83,13 @@ spec:
                   name: ziftbook-mailgun
                   key: api-key
                   optional: true
+            # Stripe sandbox key for payment jobs (ZIF-158); optional like the backend's.
+            - name: ZIF_STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-stripe
+                  key: secret-key
+                  optional: true
             # Dead-man's switch (ZIF-21): the worker GETs this Healthchecks.io ping URL after each good loop (about 30 s), and
             # the check alerts when pings stop. Its own Secret like ziftbook-mailgun; optional, so the worker runs without it.
             - name: ZIF_HEALTHCHECK_URL

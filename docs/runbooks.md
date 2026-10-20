@@ -443,6 +443,39 @@ TBD's:
 Rotate: Turnstile > the widget > Rotate secret key, then steps 2 and 3; the restart is required, since the pods
 keep the old secret until they restart.
 
+## Ziftbook Stripe (payments)
+
+Ziftbook takes payments through Stripe Connect (ZIF-158). The keys are optional in `backend.yaml` (all three) and
+`worker.yaml` (the secret key only): without them payments are off and the app runs normally. Staging uses Stripe
+sandbox keys; production gets live keys at go-live, in its own namespace.
+
+1. Stripe dashboard, in the sandbox: Developers > API keys gives the secret key (`sk_test_...`) and the publishable key
+   (`pk_test_...`). Developers > Webhooks > Add endpoint: URL `https://dev.ziftbook.com/api/stripe/webhook` (prod:
+   `https://app.ziftbook.com/api/stripe/webhook`), events as the Ziftbook ZIF-158 setup lists them; then reveal its
+   signing secret (`whsec_...`).
+2. Write the three into Secret `ziftbook-stripe` (keys `secret-key`, `webhook-secret`, `publishable-key`) from silent
+   prompts, in bash from the repo root. It prints `3`; anything else, or nothing, means the file was not written:
+
+   ```sh
+   env=staging   # prod only after its manifests get these refs (go-live), with the live keys
+   F=clusters/hetzner/ziftbook-$env/ziftbook-stripe.secret.yaml
+   printf 'Secret key: '; read -rs K; echo; printf 'Webhook signing secret: '; read -rs W; echo
+   printf 'Publishable key: '; read -rs P; echo
+   kubectl create secret generic ziftbook-stripe -n ziftbook-$env \
+     --from-file=secret-key=<(printf %s "$K") --from-file=webhook-secret=<(printf %s "$W") \
+     --from-file=publishable-key=<(printf %s "$P") --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+     && mv "$F.tmp" "$F" && grep -cE '^ +(secret-key|webhook-secret|publishable-key): ENC' "$F"
+   rm -f "$F.tmp"; unset K W P
+   ```
+
+3. Commit the file on a branch, open a PR, merge. After Flux applies it, `kubectl -n ziftbook-<env> rollout restart
+   deploy/backend deploy/worker` (env is read at start). Check: Stripe > the webhook endpoint > Send test event
+   answers 2xx.
+
+Edge: Stripe's POSTs must reach the app unchallenged, so keep bot and WAF rules off this path. The body limit that
+applies is the app's (256 KiB on this route). Rotate: Stripe > roll the key (or the endpoint's signing secret), then steps 2 and 3.
+
 ## TBD smoke account
 
 TBD's post-deploy smoke test (`scripts/smoke-test.sh` in the tbd repo) logs in as a dedicated production user: active,
