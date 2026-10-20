@@ -709,7 +709,9 @@ its last 0 to 6 days of history. After a clean pass it posts the gauge `log_rete
 to Alloy; Grafana rule `LogRetentionStale` (group `log-retention`, applied like the memory rules below, `api PUT
 /api/v1/provisioning/folder/platform/rule-groups/log-retention grafana/log-retention.rules.json`) mails the owner when it is
 over 3 hours old or absent (it fires until the first run after the first apply). Per node since INFRA-171 (the DaemonSet
-labels its heartbeat `instance=<node>`).
+labels its heartbeat `instance=<node>`); the rule ignores series without an `instance` label (the old single-node
+heartbeat). A node removed for good keeps its series in the 7-day window, so it alerts until then: silence
+`instance=<node>` for 7 days.
 
 Check, read-only: `kubectl -n observability get ds log-retention`, `kubectl -n observability logs
 ds/log-retention` (one line per file emptied or deleted), and for any pod `kubectl logs --timestamps <pod> -c <c> | head -1`
