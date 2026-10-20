@@ -789,13 +789,32 @@ done
 ```
 
 `check/add` is not idempotent: a second run fails on the duplicate job and target. To change a check, list it
-(`GET /api/v1/check/list`), then `POST /api/v1/check/update` with the same body plus its `id` and `tenantId`. Then
-apply the rule with the Grafana API as under [Memory alerts](#memory-alerts):
-`api PUT /api/v1/provisioning/folder/platform/rule-groups/synthetic-uptime grafana/synthetic-uptime.rules.json`.
+(`GET /api/v1/check/list`), then `POST /api/v1/check/update` with the same body plus its `id` and `tenantId`
+(applied 2026-10-20: `tbd-prod-health` is 94560, `ziftbook-prod-health` 94561, tenant 18203, probes 14 Frankfurt and 19
+Paris). Then apply the rule with a Grafana service account token (role Editor, expiry 1 day, as under
+[Memory alerts](#memory-alerts)), in its own variable so `$T` stays the SM token:
+
+```bash
+read -rs GT; G=https://<stack>.grafana.net
+printf 'Authorization: Bearer %s\n' "$GT" | curl -sS --fail-with-body -H @- -H 'Content-Type: application/json' \
+  -X PUT "$G/api/v1/provisioning/folder/platform/rule-groups/synthetic-uptime" --data-binary @grafana/synthetic-uptime.rules.json && echo
+unset GT
+```
+
 Check: the checks show Up in Synthetics, and `probe_success{job="tbd-prod-health"}` returns 1 in Explore. To test the
-alert, edit one check's target in the UI to a 404 path for about 10 minutes (both probes fail), expect the mail, then
-restore it: re-run `check/update` with the original payload (the UI edit is not in git). Finally revoke the token and
-clear it: `sm -X DELETE "$S/api/v1/token/delete"; unset T`.
+alert, point one check at a 404 path, wait for the `ProdEndpointDown` mail (within 10 minutes: the 404 URL is a new
+series, so it fires after the 2 min pending), then restore it from git:
+
+```bash
+jq '.probes=[14,19] | .id=94561 | .tenantId=18203 | .target="https://app.ziftbook.com/api/healthz-alert-test"' \
+  grafana/synthetic-ziftbook-prod-health.check.json | sm -X POST "$S/api/v1/check/update" --data-binary @- && echo
+# after the mail:
+jq '.probes=[14,19] | .id=94561 | .tenantId=18203' grafana/synthetic-ziftbook-prod-health.check.json \
+  | sm -X POST "$S/api/v1/check/update" --data-binary @- && echo
+```
+
+The test alert's series (the 404 URL) then stops and resolves by itself. Finally revoke the token and clear it:
+`sm -X DELETE "$S/api/v1/token/delete"; unset T S`, and delete the service account.
 
 ### Ziftbook app alerts
 
