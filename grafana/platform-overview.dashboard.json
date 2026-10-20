@@ -1,0 +1,744 @@
+{
+  "folderUid": "platform",
+  "overwrite": true,
+  "message": "INFRA-199",
+  "dashboard": {
+    "uid": "platform-overview",
+    "title": "Platform overview",
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "refresh": "5m",
+    "schemaVersion": 39,
+    "tags": [
+      "platform"
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "env",
+          "label": "Environment",
+          "type": "custom",
+          "query": "production,staging",
+          "current": {
+            "text": "production",
+            "value": "production"
+          },
+          "options": [
+            {
+              "text": "production",
+              "value": "production",
+              "selected": true
+            },
+            {
+              "text": "staging",
+              "value": "staging",
+              "selected": false
+            }
+          ]
+        }
+      ]
+    },
+    "links": [
+      {
+        "title": "Node memory",
+        "type": "link",
+        "url": "/d/node-memory"
+      }
+    ],
+    "panels": [
+      {
+        "id": 1,
+        "type": "row",
+        "title": "Uptime (synthetic checks, Frankfurt and Paris)",
+        "collapsed": false,
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Prod uptime, dashboard range",
+        "description": "Share of successful probes over the selected range. ProdEndpointDown alerts when both probes fail.",
+        "gridPos": {
+          "x": 0,
+          "y": 1,
+          "w": 8,
+          "h": 6
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum by (job) (sum_over_time(probe_success[$__range])) / sum by (job) (count_over_time(probe_success[$__range]))",
+            "legendFormat": "{{job}}",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "orange",
+                  "value": 0.99
+                },
+                {
+                  "color": "green",
+                  "value": 0.999
+                }
+              ]
+            }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 3,
+        "type": "timeseries",
+        "title": "Probe success",
+        "description": "1 = every probe location reached the health endpoint.",
+        "gridPos": {
+          "x": 8,
+          "y": 1,
+          "w": 16,
+          "h": 6
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "avg by (job) (probe_success)",
+            "legendFormat": "{{job}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 4,
+        "type": "row",
+        "title": "Apps ($env)",
+        "collapsed": false,
+        "gridPos": {
+          "x": 0,
+          "y": 7,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "id": 5,
+        "type": "timeseries",
+        "title": "Requests per second",
+        "description": "Backend API requests, all routes and status codes.",
+        "gridPos": {
+          "x": 0,
+          "y": 8,
+          "w": 8,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"$env\"}[$__rate_interval]))",
+            "legendFormat": "{{service_name}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps"
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 6,
+        "type": "timeseries",
+        "title": "5xx share",
+        "description": "Share of API responses with a 5xx status. Approximate: a status code's first 5xx starts a new series that rate() cannot count, so a single 5xx may not show (ZiftbookApiErrors counts it).",
+        "gridPos": {
+          "x": 8,
+          "y": 8,
+          "w": 8,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"$env\", http_response_status_code=~\"5..\"}[$__rate_interval])) / sum by (service_name) (rate(http_server_request_duration_seconds_count{deployment_environment_name=\"$env\"}[$__rate_interval]))",
+            "legendFormat": "{{service_name}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "red",
+                  "value": 0.05
+                }
+              ]
+            },
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "line"
+              }
+            }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 7,
+        "type": "timeseries",
+        "title": "p95 latency",
+        "description": "95th percentile of API request duration.",
+        "gridPos": {
+          "x": 16,
+          "y": 8,
+          "w": 8,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_request_duration_seconds_bucket{deployment_environment_name=\"$env\"}[$__rate_interval])))",
+            "legendFormat": "{{service_name}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 8,
+        "type": "row",
+        "title": "Nodes",
+        "collapsed": false,
+        "gridPos": {
+          "x": 0,
+          "y": 16,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "id": 9,
+        "type": "timeseries",
+        "title": "CPU busy",
+        "description": "Share of CPU time not idle, all cores.",
+        "gridPos": {
+          "x": 0,
+          "y": 17,
+          "w": 6,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "1 - avg by (instance) (rate(node_cpu_seconds_total{job=\"node\", mode=\"idle\"}[$__rate_interval]))",
+            "legendFormat": "{{instance}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 10,
+        "type": "timeseries",
+        "title": "Memory available (kubelet view)",
+        "description": "The NodeMemoryLow/Critical alerts' measure. Detail: dashboard Node memory.",
+        "gridPos": {
+          "x": 6,
+          "y": 17,
+          "w": 6,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "(max by (instance) (machine_memory_bytes{job=\"cadvisor\"}) - max by (instance) (container_memory_working_set_bytes{job=\"cadvisor\", id=\"/\"})) / max by (instance) (machine_memory_bytes{job=\"cadvisor\"})",
+            "legendFormat": "{{instance}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "orange",
+                  "value": 0.1
+                },
+                {
+                  "color": "green",
+                  "value": 0.2
+                }
+              ]
+            },
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "line"
+              }
+            }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 11,
+        "type": "timeseries",
+        "title": "Disk used",
+        "description": "Root disk per node and the DB volume on db-1 (the node-disk alerts' measure).",
+        "gridPos": {
+          "x": 12,
+          "y": 17,
+          "w": 6,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max by (instance, device) (container_fs_usage_bytes{job=\"cadvisor\", id=\"/\"} / container_fs_limit_bytes{job=\"cadvisor\", id=\"/\"}) and on (instance, device) max by (instance, device) (container_fs_limit_bytes{job=\"cadvisor\", id=\"/\"}) > 1e9",
+            "legendFormat": "{{instance}} {{device}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "orange",
+                  "value": 0.8
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
+              ]
+            },
+            "custom": {
+              "thresholdsStyle": {
+                "mode": "line"
+              }
+            }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 12,
+        "type": "timeseries",
+        "title": "Pressure stall (time waiting)",
+        "description": "Share of time some task waited on CPU, memory or IO (Linux PSI), worst node. Sustained memory or io above a few percent means a node is short of it; Explore by instance to find which.",
+        "gridPos": {
+          "x": 18,
+          "y": 17,
+          "w": 6,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(rate(node_pressure_cpu_waiting_seconds_total{job=\"node\"}[$__rate_interval]))",
+            "legendFormat": "cpu"
+          },
+          {
+            "refId": "B",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(rate(node_pressure_memory_waiting_seconds_total{job=\"node\"}[$__rate_interval]))",
+            "legendFormat": "memory"
+          },
+          {
+            "refId": "C",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(rate(node_pressure_io_waiting_seconds_total{job=\"node\"}[$__rate_interval]))",
+            "legendFormat": "io"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 13,
+        "type": "row",
+        "title": "Pods",
+        "collapsed": false,
+        "gridPos": {
+          "x": 0,
+          "y": 25,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "id": 14,
+        "type": "bargauge",
+        "title": "Memory used of limit",
+        "description": "Working set against the container's memory limit; at 100% the container is OOM-killed. Containers without a limit are not shown.",
+        "gridPos": {
+          "x": 0,
+          "y": 26,
+          "w": 12,
+          "h": 10
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sort_desc(topk(12, max by (namespace, pod, container) (container_memory_working_set_bytes{job=\"cadvisor\", container!=\"\"}) / max by (namespace, pod, container) (container_spec_memory_limit_bytes{job=\"cadvisor\", container!=\"\"} > 0)))",
+            "legendFormat": "{{pod}} ({{namespace}})",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "orange",
+                  "value": 0.8
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "orientation": "horizontal",
+          "displayMode": "basic",
+          "showUnfilled": true,
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          }
+        }
+      },
+      {
+        "id": 15,
+        "type": "timeseries",
+        "title": "CPU throttled",
+        "description": "Share of CFS periods throttled by the CPU limit; only pods above 1% are shown.",
+        "gridPos": {
+          "x": 12,
+          "y": 26,
+          "w": 12,
+          "h": 5
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum by (namespace, pod) (rate(container_cpu_cfs_throttled_periods_total{job=\"cadvisor\"}[$__rate_interval])) / sum by (namespace, pod) (rate(container_cpu_cfs_periods_total{job=\"cadvisor\"}[$__rate_interval])) > 0.01",
+            "legendFormat": "{{namespace}}/{{pod}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 16,
+        "type": "table",
+        "title": "OOM kills, dashboard range",
+        "description": "Containers the kernel OOM-killed, when the restarted container's series was scraped in time. The node-level count behind NodeOOMKill (node_vmstat_oom_kill) is authoritative.",
+        "gridPos": {
+          "x": 12,
+          "y": 31,
+          "w": 12,
+          "h": 5
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum by (namespace, pod) (increase(container_oom_events_total{job=\"cadvisor\"}[$__range])) > 0",
+            "legendFormat": "{{namespace}}/{{pod}}",
+            "instant": true,
+            "format": "table"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none"
+          },
+          "overrides": []
+        },
+        "options": {
+          "showHeader": true
+        }
+      },
+      {
+        "id": 17,
+        "type": "row",
+        "title": "Background jobs",
+        "collapsed": false,
+        "gridPos": {
+          "x": 0,
+          "y": 36,
+          "w": 24,
+          "h": 1
+        },
+        "panels": []
+      },
+      {
+        "id": 18,
+        "type": "stat",
+        "title": "Log retention: time since last success",
+        "description": "Runs hourly on each node; LogRetentionStale alerts above 3 h.",
+        "gridPos": {
+          "x": 0,
+          "y": 37,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "time() - max by (instance) (max_over_time(log_retention_last_success_timestamp_seconds{instance!=\"\"}[7d]))",
+            "legendFormat": "{{instance}}",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "min": 0,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "red",
+                  "value": 10800
+                }
+              ]
+            }
+          },
+          "overrides": []
+        }
+      },
+      {
+        "id": 19,
+        "type": "timeseries",
+        "title": "Ziftbook job queue: oldest waiting job",
+        "description": "Age of the oldest queued job per kind; ZiftbookJobQueueStuck alerts on production.",
+        "gridPos": {
+          "x": 12,
+          "y": 37,
+          "w": 12,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "targets": [
+          {
+            "refId": "A",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max by (job_kind) (ziftbook_job_queue_oldest_age_seconds{deployment_environment_name=\"$env\"})",
+            "legendFormat": "{{job_kind}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "min": 0
+          },
+          "overrides": []
+        }
+      }
+    ]
+  }
+}

@@ -582,7 +582,7 @@ the bootstrap token (Account API Tokens: Edit), the only token made by hand and 
 ## Metrics to Grafana Cloud (Alloy)
 
 One Grafana Alloy DaemonSet in `observability` (INFRA-85, design in [architecture.md](architecture.md), Telemetry)
-sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s:
+sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s (one screen for all of it: dashboard **Platform overview**, `/d/platform-overview`, INFRA-199):
 
 - **Node:** CPU, memory, load, pressure, disk I/O, OOM kills (`job="node"`), from the host's `/proc` and `/sys` (recursive
   read-only mounts; the host's `/` is not mounted).
@@ -784,6 +784,7 @@ api() { printf 'Authorization: Bearer %s\n' "$T" | curl -sS --fail-with-body -H 
 api PUT /api/v1/provisioning/folder/platform/rule-groups/node-memory grafana/node-memory.rules.json
 api PUT /api/v1/provisioning/contact-points/owner-email grafana/contact-point.json
 api POST /api/dashboards/db grafana/node-memory.dashboard.json
+api POST /api/dashboards/db grafana/platform-overview.dashboard.json
 unset T
 ```
 
