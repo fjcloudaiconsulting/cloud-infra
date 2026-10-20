@@ -866,6 +866,7 @@ also fires about 2 min later, because its no-data case is what catches a worker 
 |---|---|---|
 | `ZiftbookApiErrors` | 5 or more API responses with a 5xx in 10 min (`http_server_request_duration_seconds_count`, FastAPI's native metric; `/api/healthz` is not counted). An absolute count, sized for pre-launch traffic: switch to a ratio once production serves about one request a second | critical, every 4 h |
 | `ZiftbookJobsGaveUp` | any job given up after its 5th attempt in the last hour, per kind (`ziftbook_job_runs_total{job_outcome="gave_up"}`). Never retried by the worker | warning, daily |
+| `ZiftbookRefundFailed` | a refund did not reach the client in the last hour, per `payment_kind` (`ziftbook_payment_outcomes_total{payment_outcome="refund_failed"}`): Stripe refused the refund (a disputed charge, a closed account) or an issued refund failed later. Counted once; the booking is flagged for the business | warning, daily |
 | `ZiftbookJobQueueStuck` | the oldest due job of a kind waited over 10 min for 5 min (`ziftbook_job_queue_oldest_age_seconds`; the worker polls every 30 s), or no queue metric at all: the worker reports every kind every minute, 0 when empty | critical, every 4 h |
 
 When one fires:
@@ -875,11 +876,12 @@ export KUBECONFIG=~/.kube/hetzner
 # -l reads every replica (deploy/backend reads one pod) and needs --tail=-1; fromjson? skips a line that is not JSON, such as a crash traceback.
 kubectl -n ziftbook-prod logs -l app=backend -c backend --tail=-1 --since=30m | jq -cR 'fromjson? | select(.level == "ERROR" or .status >= 500)'
 kubectl -n ziftbook-prod logs -l app=worker -c worker --tail=-1 --since=2h | jq -cR 'fromjson? | select(.msg == "job gave up" or .level == "ERROR")'
+kubectl -n ziftbook-prod logs -l 'app in (backend,worker)' --all-containers --tail=-1 --since=2h | jq -cR 'fromjson? | select(.msg == "refund refused" or .msg == "refund failed")'
 ```
 
 Each line carries `request_id` (also in the `X-Request-ID` response header) and `trace_id`; a job line carries
 `job_id` and `job_kind`. Errors are logged as the class and frames only. A given-up job keeps its `last_error` in the
-`jobs` table; resending it is an app decision, not an infra one. Older lines, or a pod that is gone: [Find a request's logs](#find-a-requests-logs).
+`jobs` table; resending it is an app decision, not an infra one. A `refund refused` line carries `intent` and `stripe_request_id`, a `refund failed` line `intent` and `refund`: the business re-sends the refund from its Stripe Express dashboard, and the booking's flag clears itself when Stripe reports the money refunded. Older lines, or a pod that is gone: [Find a request's logs](#find-a-requests-logs).
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/ziftbook-app grafana/ziftbook-app.rules.json`. Check in
