@@ -54,6 +54,9 @@ spec:
           image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.301.0
           ports:
             - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: otel # otel.yaml; the server exports as tbd-mcp from TBD-649 on
           env:
             - name: APP_ENV
               value: "production"
