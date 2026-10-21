@@ -11,7 +11,7 @@ Limits: it reads the checked-out tree, so one PR that bumps staging and prod tog
 catches it), and ordering is not proof staging ran that exact tag; live health is the post-deploy smoke's job.
 Not covered (review-visible): prod manifests outside a <app>-prod dir, refs of other registries or YAML-escaped,
 Helm `tag:` fields; a ref inside a comment counts as a real ref.
-Fails closed: prod without a staging dir or image, a tag that is not plain vX.Y.Z, no prod dir at all.
+Fails closed: prod without a staging dir or image, a tag that is not plain vX.Y.Z (an @sha256:<64 hex> pin is stripped first), no prod dir at all.
 
 Usage: check-prod-tags.py [clusters-dir]   (default: clusters)
 """
@@ -21,6 +21,7 @@ import re
 import sys
 
 REF = re.compile(r"ghcr\.io/fjcloudaiconsulting/([^:@\s\"']+)(?::([^\s\"']+))?")
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")  # optional pin after the tag (INFRA-107)
 SEMVER = re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -31,6 +32,7 @@ def refs(d, errs):
         if f.suffix.lower() not in (".yaml", ".yml") or not f.is_file():
             continue
         for image, tag in REF.findall(f.read_text()):
+            tag = DIGEST.sub("", tag)
             if SEMVER.match(tag):
                 out.setdefault(image, []).append((tag, f))
             else:

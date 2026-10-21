@@ -40,11 +40,18 @@
       "enabled": false
     },
     {
-      "description": "App images (contract section 8): production references vX.Y.Z only. Track release tags, ignore sha- tags, no digest pin. Merging the bump PR is the deploy.",
+      "description": "App images (contract section 8): production references are `:vX.Y.Z@sha256:<digest>`. Track release tags, ignore sha- tags, pin the digest (CI verifies its attestation). Merging the bump PR is still the deploy.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
       "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
-      "pinDigests": false
+      "pinDigests": true
+    },
+    {
+      "description": "Digests are pinned only as part of a version bump: existing refs predate attestations and would fail the provenance check (INFRA-107), so they get pinned with their next release.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
+      "matchUpdateTypes": ["pin", "pinDigest"],
+      "enabled": false
     },
     {
       "description": "Staging follows releases (INFRA-36): bumps of manifests under a ziftbook-staging/ directory, majors included, merge without a PR once CI passes on the branch. Own branch prefix so a staging bump never shares a branch (and its automerge) with a production bump, which stays a PR. One group, so backend, frontend and migrations move together (a Renovate run while promote is retagging can still propose a partial set; the next run completes it).",

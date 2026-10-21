@@ -124,6 +124,14 @@ class ProdTags(unittest.TestCase):
             layout[rel] = {**layout.get(rel, {}), name: img("tbd", "backend", "v0.9.0")}
             self.assertEqual(run(layout).returncode, 1, rel + name)
 
+    def test_digest_pin_is_stripped_before_comparing(self):
+        # v0.2.0@sha256:<64 hex> compares as v0.2.0 on either side (INFRA-107).
+        pin = "@sha256:" + "a" * 64
+        self.assertEqual(run(tbd([("backend", "v0.2.0" + pin)], [("backend", "v0.2.0" + pin)])).returncode, 0)
+        self.assertEqual(run(tbd([("backend", "v0.2.0" + pin)], [("backend", "v0.2.0")])).returncode, 0)
+        r = run(tbd([("backend", "v0.3.0" + pin)], [("backend", "v0.2.0" + pin)]))
+        self.assertEqual(r.returncode, 1, r.stderr)
+
     def test_untagged_digest_and_prerelease_prod_refs_fail(self):
         # Kills a missing-tag skip and a SEMVER without `$` (v0.2.0-rc.1, v0.2.0@sha256 read as v0.2.0).
         for ref in ("ghcr.io/fjcloudaiconsulting/tbd/backend\n", "ghcr.io/fjcloudaiconsulting/tbd/backend:v0.2.0-rc.1\n",

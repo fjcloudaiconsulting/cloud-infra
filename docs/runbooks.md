@@ -56,6 +56,7 @@ CI runs on it and Renovate fast-forwards it into `main`; Flux applies it. Produc
    (`git log origin/main -3 -- clusters/*/tbd-staging`). Tick "run again" on the Dependency Dashboard to force it.
 2. Check staging runs the tag: `curl -s https://dev.thebetterdecision.com/health` reports the new version.
 3. Merge the `tbd images` PR for `tbd-prod` once `Kubernetes checks` is green: its step `prod tags not ahead of staging` (INFRA-89) fails while the PR's tags are newer than `tbd-staging` on its tree. Update its branch if it is behind. The bound is the lowest `tbd-staging` tag, MCP image included (INFRA-147): if mcp did not move with the release, fix the tbd promote first.
+   The step `image provenance` (INFRA-107) checks every image ref the PR adds: it must be `:vX.Y.Z@sha256:<digest>` and the digest must have a build attestation from the shared `build-image` workflow, made on `main` at the commit of tag `vX.Y.Z`. Red means the ref is unpinned, has no matching attestation, or the registry or API lookup failed (a registry authorization error is the package access grant in `docs/configuration-map.md`). Do not merge past it. Versions built before attestation existed (tbd v0.302.0 and older, ziftbook v0.26.1 and older) fail it by design.
 4. A release broken on staging is fixed forward: do not merge the prod PR, release the fix; a newer tag replaces the PR.
 
 ## Post-deploy smoke

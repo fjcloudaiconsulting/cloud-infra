@@ -82,6 +82,10 @@ jobs:
   kubernetes:
     name: Kubernetes checks
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
     env:
       KUBECONFORM_VERSION: v0.8.0
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
@@ -91,12 +95,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: every Secret is SOPS-encrypted
         # clusters/ Secrets and ansible/ *.sops.yaml vars files.
         run: python3 .github/scripts/check-sops-secrets.py clusters ansible
       - name: prod tags not ahead of staging
         # INFRA-89: every <app>-prod image tag must be <= the same app's <app>-staging tags.
         run: python3 .github/scripts/check-prod-tags.py clusters
+      - name: image provenance
+        # INFRA-107: every app image ref this change adds must be pinned by digest and attested by build-image on main.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # PR: its base; Renovate branch push: main; push to main: the commit before the push.
+          BASE: ${{ github.event.pull_request.base.sha || (github.ref_name != 'main' && 'origin/main') || github.event.before }}
+        run: |
+          # gh resolves oci:// through the docker credential store.
+          docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+          bash .github/scripts/check-image-provenance.sh
       - name: kubeconform
         run: |
           set -euo pipefail
