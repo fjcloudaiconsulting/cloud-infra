@@ -47,6 +47,9 @@ spec:
               value: http://backend:8000
             - name: ZIF_CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # Dev-only version line in the UI (ziftbook #312); prod leaves it unset.
+            - name: ZIF_SHOW_VERSION
+              value: "true"
             # Public, but kept beside the widget's secret so one owner step writes both (ZIF-116). Read per request.
             - name: ZIF_TURNSTILE_SITE_KEY
               valueFrom:
