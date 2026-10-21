@@ -25,11 +25,11 @@ pat="$(printf '%s' "$WATCH" | tr -s ' ' '|')"
 refs="$(grep -E "ghcr\.io/fjcloudaiconsulting/($pat)/" <<<"$all" || true)"
 echo "ignoring unwatched repos: $(grep -vE "ghcr\.io/fjcloudaiconsulting/($pat)/" <<<"$all" | sed -E 's#ghcr\.io/fjcloudaiconsulting/([^/]+)/.*#\1#' | sort -u | tr '\n' ' ')"
 [[ -n "$refs" ]] || { echo "no watched app image refs in $DIR" >&2; exit 1; }
-bad="$(printf '%s\n' "$refs" | grep -vE ':v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+bad="$(printf '%s\n' "$refs" | grep -vE ':v[0-9]+\.[0-9]+\.[0-9]+(@sha256:[0-9a-f]{64})?$' || true)"
 [[ -z "$bad" ]] || { printf 'image tag is not a plain vX.Y.Z:\n%s\n' "$bad" >&2; exit 1; }
 
 # repo<TAB>lowest deployed tag; built into a variable so a failure aborts the run.
-list="$(printf '%s\n' "$refs" | sed -E 's#ghcr\.io/fjcloudaiconsulting/([^/]+)/[^:]+:#\1\t#' \
+list="$(printf '%s\n' "$refs" | sed -E 's#ghcr\.io/fjcloudaiconsulting/([^/]+)/[^:]+:#\1\t#; s#@sha256:.*$##' \
         | sort -t$'\t' -k1,1 -k2,2V | awk -F'\t' '!s[$1]++')"
 [[ -n "$list" ]] || { echo "empty repo list" >&2; exit 1; }
 for r in $WATCH; do
