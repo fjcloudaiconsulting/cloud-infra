@@ -9,7 +9,8 @@ SCRIPT = pathlib.Path(__file__).resolve().parent.parent / ".github/scripts/check
 SAN = "https://github.com/fjcloudaiconsulting/.github/.github/workflows/build-image.yml@refs/tags/v1"
 D1, D2 = "a" * 64, "b" * 64
 TAG_COMMIT = "1" * 40  # what `gh api .../commits/vX` returns
-# The stub plays the attestation: made on ATT_REF at ATT_COMMIT. Like gh it fails when a flag disagrees.
+# The stub plays the attestation: made on ATT_REF at ATT_COMMIT. Like gh it fails when a given flag disagrees,
+# and, like gh, an omitted flag is not checked.
 STUB = """#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 if [[ "$1" == api ]]; then echo "$TAG_COMMIT"; exit 0; fi
@@ -22,7 +23,7 @@ while (($#)); do
   esac
   shift
 done
-[[ "${ref:-}" == "$ATT_REF" && "${dig:-}" == "$ATT_COMMIT" ]] || { echo "no matching attestation" >&2; exit 1; }
+[[ -z "${ref:-}" || "$ref" == "$ATT_REF" ]] && [[ -z "${dig:-}" || "$dig" == "$ATT_COMMIT" ]] || { echo "no matching attestation" >&2; exit 1; }
 """
 
 
