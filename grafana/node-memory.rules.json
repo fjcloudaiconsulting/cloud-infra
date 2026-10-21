@@ -310,7 +310,7 @@
       ],
       "for": "10m",
       "noDataState": "Alerting",
-      "execErrState": "Alerting",
+      "execErrState": "KeepLast",
       "labels": {
         "severity": "warning",
         "component": "node"
