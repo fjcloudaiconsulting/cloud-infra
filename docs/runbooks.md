@@ -759,6 +759,10 @@ kubelet's number, `machine_memory_bytes - container_memory_working_set_bytes{id=
 `availableMi` in the check above (both 1779Mi on 2026-10-05). It read about 165Mi above node_exporter's `MemAvailable`
 on 2026-10-05, because the working set leaves out inactive page cache.
 
+Every rule in `grafana/` keeps its last state when its query errors (`execErrState: KeepLast`): a Grafana Cloud
+outage between its ruler and its Prometheus (2026-10-20, 20:51 to 21:21 UTC, `dial tcp ... i/o timeout`) is not ours
+and would otherwise fire every rule at once. While the query errors, no rule changes state (a firing one keeps firing, nothing new fires); check https://status.grafana.com.
+
 | Alert | Fires when | Severity, repeat |
 |---|---|---|
 | `NodeMemoryLow` | available under 20% of the node (766Mi today) for 30 min | warning, daily |

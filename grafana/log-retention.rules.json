@@ -50,7 +50,7 @@
       ],
       "for": "0s",
       "noDataState": "Alerting",
-      "execErrState": "Alerting",
+      "execErrState": "KeepLast",
       "labels": {
         "severity": "critical",
         "component": "node"
