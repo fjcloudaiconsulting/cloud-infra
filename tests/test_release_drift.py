@@ -139,7 +139,9 @@ class FailsClosed(unittest.TestCase):
     def test_full_digest_pin_is_stripped_and_compared(self):
         # v0.20.2@sha256:<64 hex> is drift against v0.21.0, and clear at v0.21.0 (INFRA-107).
         pin = "@sha256:" + "a" * 64
-        self.assertIn("issue create", run(["v0.20.2" + pin])[1])
+        log = run(["v0.20.2" + pin])[1]
+        self.assertIn("issue create", log)
+        self.assertIn("clusters/ has `v0.20.2`", log)
         self.assertIn("issue close 7", run(["v0.21.0" + pin], existing="7")[1])
 
     def test_digest_pin_fails(self):

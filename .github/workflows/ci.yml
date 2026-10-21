@@ -106,8 +106,8 @@ jobs:
         # INFRA-107: every app image ref this change adds must be pinned by digest and attested by build-image on main.
         env:
           GH_TOKEN: ${{ github.token }}
-          # PR: its base; Renovate branch push: main; push to main: the previous commit.
-          BASE: ${{ github.event.pull_request.base.sha || (github.ref_name != 'main' && 'origin/main') || 'HEAD^' }}
+          # PR: its base; Renovate branch push: main; push to main: the commit before the push.
+          BASE: ${{ github.event.pull_request.base.sha || (github.ref_name != 'main' && 'origin/main') || github.event.before }}
         run: |
           # gh resolves oci:// through the docker credential store.
           docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"

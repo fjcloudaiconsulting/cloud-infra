@@ -47,6 +47,13 @@
       "pinDigests": true
     },
     {
+      "description": "Digests are pinned only as part of a version bump: existing refs predate attestations and would fail the provenance check (INFRA-107), so they get pinned with their next release.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
+      "matchUpdateTypes": ["pin", "pinDigest"],
+      "enabled": false
+    },
+    {
       "description": "Staging follows releases (INFRA-36): bumps of manifests under a ziftbook-staging/ directory, majors included, merge without a PR once CI passes on the branch. Own branch prefix so a staging bump never shares a branch (and its automerge) with a production bump, which stays a PR. One group, so backend, frontend and migrations move together (a Renovate run while promote is retagging can still propose a partial set; the next run completes it).",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
