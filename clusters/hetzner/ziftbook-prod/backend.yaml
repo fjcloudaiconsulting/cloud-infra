@@ -94,6 +94,9 @@ spec:
             - configMapRef:
                 name: otel # otel.yaml
           env:
+            # Stripe's onboarding return/refresh URLs and the Apple Pay domain (payments.py); same value as the worker's.
+            - name: ZIF_APP_URL
+              value: https://app.ziftbook.com
             # Encrypts the admins' TOTP secrets (ZIF-71). Losing it makes every enrolled second factor unreadable, so it is
             # never rotated casually; the SOPS file in git is its backup. optional: unset only disables admin TOTP (503).
             - name: ZIF_TOTP_KEY

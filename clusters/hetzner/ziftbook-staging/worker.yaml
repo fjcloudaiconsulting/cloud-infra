@@ -68,7 +68,7 @@ spec:
                 secretKeyRef:
                   name: ziftbook
                   key: database-url
-            - name: ZIF_APP_URL # only used in email links
+            - name: ZIF_APP_URL # email links; the backend reads it too
               value: https://dev.ziftbook.com
             # Mailgun HTTP API like TBD: EU region, the shared dev sending domain m.fjconsulting.dev (own sending key per environment). ZIF-151 consumes these names;
             # until it ships no mail is delivered (v0.20.2 still tries SMTP and the job retries). Only the worker sends mail. optional: the worker keeps

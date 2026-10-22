@@ -78,7 +78,7 @@ spec:
                 secretKeyRef:
                   name: ziftbook
                   key: database-url
-            - name: ZIF_APP_URL # only used in email links
+            - name: ZIF_APP_URL # email links; the backend reads it too
               value: https://app.ziftbook.com
             # Mailgun HTTP API like TBD: EU region, production sending domain m.ziftbook.com (own sending key; domain and key are made by hand, runbooks.md "Mail"). Only the worker sends mail. optional: the worker keeps
             # running before the owner adds the key.
