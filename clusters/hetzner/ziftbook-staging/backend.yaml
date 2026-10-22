@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.28.0@sha256:acf00d1159bfa419a4daed3bbea674d0571f96d62a060d07939cd3a5db000444
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.29.0@sha256:a51890f1ea5cdfa8e5d621f74adaefa3a62d5b154da5f5fa69508ba179919b99
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -67,7 +67,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.28.0@sha256:287fec7542dfb77d82924771e38e96c7a5f89e6a172ef95699d899ee2a81d0c6
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.29.0@sha256:e1a110faa61fdc0bf7eef0130a72bab66cd8e3604711ad6f0888e36e4eb1381d
           ports:
             - containerPort: 8000
           envFrom:
