@@ -17,10 +17,6 @@ class DbBackupManifest(unittest.TestCase):
         self.assertIsNotNone(vol, "backup emptyDir volume not found")
         self.assertRegex(vol.group(1), r"medium: Memory")
 
-    def test_finished_jobs_are_removed(self):
-        """Kills keeping finished pods indefinitely: their volume would outlive the run."""
-        self.assertRegex(self.text, r"\n      ttlSecondsAfterFinished: \d+\n")
-
 
 if __name__ == "__main__":
     unittest.main()

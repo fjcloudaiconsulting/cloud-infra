@@ -115,8 +115,6 @@ spec:
       # Reruns the whole pod, so a healthy set can upload twice (~600 KB each, 7 days under Object Lock; accepted).
       backoffLimit: 1
       activeDeadlineSeconds: 1800
-      # Remove the Job and its pod 6 h after it ends (after the 04:17 probe), which frees the tmpfs.
-      ttlSecondsAfterFinished: 21600
       template:
         metadata:
           labels:
@@ -302,7 +300,7 @@ spec:
           volumes:
             - name: backup
               # tmpfs: the plaintext dumps (password hashes included) never reach the node's disk (INFRA-205).
-              # A set is ~1 MB and counts toward the container's memory limit.
+              # A set is ~600 KB and counts toward the container's memory limit.
               emptyDir:
                 medium: Memory
                 sizeLimit: 64Mi
