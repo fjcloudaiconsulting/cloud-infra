@@ -6,7 +6,7 @@
 # Images track vX.Y.Z only. Production bumps arrive as PRs and never automerge (renovate.json: the staging
 # automerge rule matches ziftbook-staging paths only). Bump backend, migrations, scheduler and frontend together.
 # On the Hetzner cluster since INFRA-175. Sessions and rate limits are in MySQL since tbd 0.296.0 (INFRA-122), so no
-# Valkey: Secret tbd (tbd.secret.yaml) keeps its unused redis-url key until the next rotation, as on tbd-staging.
+# Valkey.
 # The scheduler loop is disabled here: it runs in scheduler.yaml (exactly one pod).
 # PFV_RUNTIME is deliberately unset. CLIENT_IP_HEADER=cf-connecting-ip: Cloudflare overwrites that
 # header, and the origin is reachable only through the Cloudflare Tunnel (no public port, no Traefik; same-node host traffic bypasses NetworkPolicy, see data/networkpolicy.yaml), so
