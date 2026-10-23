@@ -33,8 +33,9 @@
       "minimumReleaseAge": "7 days"
     },
     {
-      "description": "Same gate for the Terraform CLI pin in ci.yml, which the github-actions manager reads, so the group never moves CI ahead of required_version.",
-      "matchPackageNames": ["hashicorp/terraform"],
+      "description": "Same gate for the Terraform CLI pin in ci.yml (setup-terraform `terraform_version`, depName `terraform` in the github-actions manager), so the group never moves CI ahead of required_version.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["terraform"],
       "minimumReleaseAge": "7 days"
     },
     {
