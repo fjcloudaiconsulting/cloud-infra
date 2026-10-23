@@ -93,6 +93,21 @@ Drift watch: workflow `release-drift-probe.yml` (daily) opens or updates one `[r
 Org `fjcloudaiconsulting` is on the **Free** plan: no org-level rulesets (the API answers 403), and
 private repositories cannot have branch protection, so every repo that must be protected is public.
 
+### GHCR retention (INFRA-92)
+
+Workflow `ghcr-retention.yml` (weekly, Monday 05:41 UTC, plus manual dispatch) prunes the 7 private container packages `tbd/{backend,migrations,frontend,mcp}` and `ziftbook/{backend,frontend,migrations}`: untagged versions older than 7 days and sha- versions older than 30 days go, unless a kept index references them or `clusters/**` pins their digest; any version with a v*, major.minor, `latest` or other non-sha- tag is never deleted. The token is the run's `GITHUB_TOKEN` (`packages: write`), no PAT.
+
+| Setting | Where | Notes |
+|---|---|---|
+| Admin role for repo cloud-infra on each package | Package > Package settings > Manage Actions access (owner, UI, per package) | Deleting a version needs Admin; Read (INFRA-107) is not enough. The Admin grant applies to every workflow on every branch of this public repo, so anything that can push a branch here (the two org admins, and Apps with contents+workflows write such as Renovate/Mend and the Claude App) could add a workflow with `packages: write` and push, retag or delete these packages; the main-ref guard only protects this workflow. Granting Admin is the owner's decision with that risk; INFRA-209 and INFRA-229 track tightening. Grant per app when enabling it (ziftbook first) |
+| `DELETE_APPS` | `env:` in `.github/workflows/ghcr-retention.yml` (git) | Empty = every run is a dry run. `"ziftbook"` or `"ziftbook,tbd"` enables deletes for those apps, only on `main` and only on the schedule or a dispatch with mode=delete |
+| Delete cap | `max_deletes` dispatch input; `MAX_DELETES` env | Per package, counting only packages that will delete (app in `DELETE_APPS`, delete mode); dry-run packages never count. Default 150, about 2x the measured weekly churn per package (input default and scheduled fallback). Over the cap in any deleting package aborts the run with zero deletes |
+| Restore window | GitHub | A deleted version can be restored for 30 days (runbook "GHCR retention") |
+
+The step summary and logs are public and list private package version ids, digests, sha- tags and ages (low sensitivity).
+
+Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package, or (403/429 after many deletes) the GITHUB_TOKEN rate limit: rerun later, the outermost-first order keeps a partial run safe; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
+
 ### Branch protection
 
 | Repo | Mechanism | Rules |

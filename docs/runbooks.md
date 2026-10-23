@@ -950,6 +950,23 @@ for `/dev/sdb`: grow the volume (below); for a root disk, look for old images (`
    `resize2fs "$(findmnt -no SOURCE /var/lib/rancher/k3s/storage)"`.
 3. Check: `df -h /var/lib/rancher/k3s/storage` shows the new size.
 
+## GHCR retention
+
+Workflow `GHCR Retention` ([`ghcr-retention.yml`](../.github/workflows/ghcr-retention.yml), settings in [configuration-map.md](configuration-map.md)). Each run plans all selected packages first and writes a table per package (kept by reason, delete count) and the delete list (id, digest, tags, age) to the run summary; any abort means zero deletes. The cap `max_deletes` (default 150) is per package and counts only packages that will delete (app in `DELETE_APPS`, delete mode); a dry-run package never trips it, an over-cap deleting package aborts everything.
+
+Dry run (always safe, also the weekly run while `DELETE_APPS` is empty): `gh workflow run ghcr-retention.yml --repo fjcloudaiconsulting/cloud-infra -f mode=dry-run -f app=all`, then `gh run watch` and read the summary. Check that every row to delete is untagged or sha- only, and that no id is a release you still run.
+
+Enabling an app (ziftbook first, tbd later, same steps):
+
+1. Grant the repo cloud-infra the Admin role on each of the app's packages (Package settings > Manage Actions access).
+2. PR: set `DELETE_APPS: "ziftbook"` in the workflow. Merge it.
+3. Dry run for that app, read the list, then `gh workflow run ghcr-retention.yml --repo fjcloudaiconsulting/cloud-infra -f mode=delete -f app=ziftbook`.
+4. Check the next release promote and smoke stay green. Right after the first real delete, check whether `version_count` still matches the listing (the script cannot tell whether soft-deleted versions are counted); a red `does not match` run on the next dry run means it does.
+
+Restoring a version within 30 days of the delete: the run log lists each deleted id. With `gh api --method POST /orgs/fjcloudaiconsulting/packages/container/<name, / as %2F>/versions/<id>/restore`. The restored version comes back with its digest and tags (check in the package's Versions list).
+
+Promoting a release of a commit older than 30 days: `promote-release` never rebuilds, and its `sha-<commit>` version was pruned, so it fails on the provenance check. Rebuild that commit first (re-run the app's build-image workflow on it), then promote.
+
 ## Upgrade k3s
 
 k3s is upgraded by Rancher's system-upgrade-controller (`clusters/hetzner/system-upgrade/`, INFRA-179), not by hand.

@@ -1,0 +1,59 @@
+# GHCR retention (INFRA-92): prune untagged and old sha- container versions of the app images.
+# Never touches a version with a v*/other non-sha- tag, a digest pinned under clusters/, or anything a kept
+# index references. Logic and policy: .github/scripts/ghcr-retention.py. Runbook: docs/runbooks.md "GHCR retention".
+# It deletes only on main, on the weekly schedule or a manual mode=delete, for apps listed in DELETE_APPS below
+# (empty = every run is a dry run; the owner enables an app by PR). Needs the Admin role for this repo on each
+# package ("Manage Actions access"), else the first DELETE answers 403 and the run goes red.
+name: GHCR Retention
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: dry-run lists only; delete also needs the app in DELETE_APPS
+        type: choice
+        options: [dry-run, delete]
+        default: dry-run
+      app:
+        description: Which app's packages to plan
+        type: choice
+        options: [all, ziftbook, tbd]
+        default: all
+      max_deletes:
+        description: Abort (zero deletes) if any deleting package's plan exceeds this many
+        type: number
+        default: 150
+
+concurrency:
+  group: ghcr-retention
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DELETE_APPS: ""
+
+jobs:
+  retention:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Step-level guard on top of the script's own ref check: a dispatch on another ref runs that ref's file.
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: github.ref == 'refs/heads/main'
+        name: Plan and prune
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          APP: ${{ inputs.app }}
+          MAX_DELETES: ${{ inputs.max_deletes }}
+        run: python3 .github/scripts/ghcr-retention.py clusters
