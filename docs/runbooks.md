@@ -479,31 +479,9 @@ applies is the app's (256 KiB on this route). Rotate: Stripe > roll the key (or 
 
 ## TBD smoke account
 
-TBD's post-deploy smoke test (`scripts/smoke-test.sh` in the tbd repo) logs in as a dedicated production user: active,
-email verified, **no MFA** by design (TBD-371, the script cannot answer a TOTP challenge). Its username is also the only
-entry of `FOUNDER_COUNT_EXCLUDE_USERNAMES`, so it is not counted as a founder.
-
-The credentials live in these places, kept equal:
-
-- `tbd-prod/tbd-smoke` (`clusters/hetzner/tbd-prod/tbd-smoke.secret.yaml`, SOPS), keys `username` and `password`. Anyone
-  with cluster access reads them for a manual run (`KUBECONFIG=~/.kube/hetzner`):
-
-  ```bash
-  SU=$(kubectl -n tbd-prod get secret tbd-smoke -o jsonpath='{.data.username}' | base64 -d)
-  SP=$(kubectl -n tbd-prod get secret tbd-smoke -o jsonpath='{.data.password}' | base64 -d)
-  SMOKE_USERNAME=$SU SMOKE_PASSWORD=$SP SMOKE_BASE_URL=https://app.thebetterdecision.com ~/src/tbd/scripts/smoke-test.sh; unset SU SP
-  ```
-
-- cloud-infra environment `tbd-prod` secrets `SMOKE_USERNAME` / `SMOKE_PASSWORD` (write-only), used by the
-  [post-deploy smoke](#post-deploy-smoke).
-
-**Rotate** (never display the password; the hash is TBD's own `bcrypt`): generate it in memory, set the bcrypt hash on
-the user row in the production database (`UPDATE users SET password_hash=..., password_changed_at=UTC_TIMESTAMP() WHERE
-username=...`, expect 1 row), run the smoke test above with the new value, then `printf %s "$P" | gh secret set
-SMOKE_PASSWORD --env tbd-prod -R
-fjcloudaiconsulting/cloud-infra` and rewrite `tbd-smoke.secret.yaml` with
-`jq -n ... | sops encrypt --input-type json --output-type yaml --filename-override <file> /dev/stdin > <file>`. Last
-rotated 2026-10-04 (INFRA-48).
+TBD's post-deploy smoke test logs in as a dedicated production user. Its credentials live in the SOPS Secret
+`tbd-prod/tbd-smoke` and in this repo's `tbd-prod` environment secrets (used by the [post-deploy smoke](#post-deploy-smoke)),
+kept equal. Account controls, the manual run and the rotation procedure: owner private ops notes.
 
 ## Cloudflare Access on TBD staging
 

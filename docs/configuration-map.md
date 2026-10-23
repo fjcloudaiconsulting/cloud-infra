@@ -109,6 +109,10 @@ Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for th
 
 Branch and tag protection per repo: see the owner's private ops notes.
 
+cloud-infra `main` also has a ruleset with **no bypass** that requires `Terraform checks` and `Kubernetes checks`
+(strict), so not even an admin merge goes past a red check (INFRA-107, created 2026-10-23). A staging bump that Renovate
+automerges as a branch still lands, because the pushed commit already carries both green checks.
+
 ### Tag protection
 
 Git release tags `v*` are immutable by policy. Each repo below has a ruleset `tag protection` on
