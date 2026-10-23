@@ -313,9 +313,9 @@ class Aborts(unittest.TestCase):
         rc, _, _ = run(w, DELETE_APPS="ziftbook", MAX_DELETES="2")
         self.assertEqual((rc, w.deleted), (0, [1]))
 
-    def test_default_cap_is_400_per_package(self):
-        """Kills the old 300 default: 400 deletes pass with MAX_DELETES unset, 401 abort."""
-        for n, want in ((400, 0), (401, 1)):
+    def test_default_cap_is_150_per_package(self):
+        """Kills a default that can never trip (400 > the largest package): 150 pass with MAX_DELETES unset, 151 abort."""
+        for n, want in ((150, 0), (151, 1)):
             w = World(page_size=100)
             for i in range(1, n + 1):
                 w.add(ZB, i, [], 100)

@@ -9,7 +9,7 @@ Every package is planned before any DELETE: one abort anywhere means zero DELETE
 GET only to api.github.com and ghcr.io, never following a redirect. Exit 1 on any abort.
 Delete needs ALL of: GITHUB_REF == refs/heads/main; event schedule, or workflow_dispatch with MODE=delete;
 the package's app listed in DELETE_APPS (comma separated, git-tracked in the workflow).
-Env: GITHUB_TOKEN, GITHUB_REF, GITHUB_EVENT_NAME, MODE, APP (ziftbook|tbd|all), MAX_DELETES (default 400, per package, only packages that delete count),
+Env: GITHUB_TOKEN, GITHUB_REF, GITHUB_EVENT_NAME, MODE, APP (ziftbook|tbd|all), MAX_DELETES (default 150, per package, only packages that delete count),
 DELETE_APPS, GITHUB_STEP_SUMMARY. Unverified: whether version_count counts soft-deleted versions (INFRA-92 spec).
 
 Usage: ghcr-retention.py [clusters-dir]   (default: clusters)
@@ -39,7 +39,9 @@ NEXT = re.compile(r'<([^>]+)>;\s*rel="next"')
 INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
 IMAGE_TYPES = ("application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json")
 ACCEPT = ", ".join(INDEX_TYPES + IMAGE_TYPES)
-SHA_DAYS, UNTAGGED_DAYS, DEFAULT_MAX = 30, 7, 400
+# DEFAULT_MAX: about 2x the measured weekly churn per package (~9 versions/day); deleting the ~108 children of one
+# package's kept indexes on top of a normal week would trip it.
+SHA_DAYS, UNTAGGED_DAYS, DEFAULT_MAX = 30, 7, 150
 
 
 class Abort(Exception):

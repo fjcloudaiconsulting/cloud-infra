@@ -24,7 +24,7 @@ on:
       max_deletes:
         description: Abort (zero deletes) if any deleting package's plan exceeds this many
         type: number
-        default: 400
+        default: 150
 
 concurrency:
   group: ghcr-retention

@@ -101,12 +101,12 @@ Workflow `ghcr-retention.yml` (weekly, Monday 05:41 UTC, plus manual dispatch) p
 |---|---|---|
 | Admin role for repo cloud-infra on each package | Package > Package settings > Manage Actions access (owner, UI, per package) | Deleting a version needs Admin; Read (INFRA-107) is not enough. The Admin grant applies to every workflow on every branch of this public repo, so anything that can push a branch here (the two org admins, and Apps with contents+workflows write such as Renovate/Mend and the Claude App) could add a workflow with `packages: write` and push, retag or delete these packages; the main-ref guard only protects this workflow. Granting Admin is the owner's decision with that risk; INFRA-209 and INFRA-229 track tightening. Grant per app when enabling it (ziftbook first) |
 | `DELETE_APPS` | `env:` in `.github/workflows/ghcr-retention.yml` (git) | Empty = every run is a dry run. `"ziftbook"` or `"ziftbook,tbd"` enables deletes for those apps, only on `main` and only on the schedule or a dispatch with mode=delete |
-| Delete cap | `max_deletes` dispatch input; `MAX_DELETES` env | Per package, counting only packages that will delete (app in `DELETE_APPS`, delete mode); dry-run packages never count. Default 400 (input default and scheduled fallback). Over the cap in any deleting package aborts the run with zero deletes |
+| Delete cap | `max_deletes` dispatch input; `MAX_DELETES` env | Per package, counting only packages that will delete (app in `DELETE_APPS`, delete mode); dry-run packages never count. Default 150, about 2x the measured weekly churn per package (input default and scheduled fallback). Over the cap in any deleting package aborts the run with zero deletes |
 | Restore window | GitHub | A deleted version can be restored for 30 days (runbook "GHCR retention") |
 
 The step summary and logs are public and list private package version ids, digests, sha- tags and ages (low sensitivity).
 
-Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
+Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package, or (403/429 after many deletes) the GITHUB_TOKEN rate limit: rerun later, the outermost-first order keeps a partial run safe; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
 
 ### Branch protection
 
