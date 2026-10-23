@@ -13,7 +13,7 @@ app code, Dockerfiles and CI; this repo owns where and how they run. Work is tra
 The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-platform` stack were removed in INFRA-176.
 
 - Three Hetzner CAX21 (ARM64) servers in nbg1 (`terraform/hetzner`), k3s HA configured by `ansible/`. No EKS, no RDS, no ALB/NAT.
-- MySQL 8.4 (TBD), Postgres 18 (Ziftbook) run in-cluster as StatefulSets; nightly dumps go to the existing Object Lock bucket `tbd-mysql-backups-884686184019`.
+- MySQL 8.4 (TBD), Postgres 18 (Ziftbook) run in-cluster as StatefulSets; nightly dumps go to the existing Object Lock bucket in AWS.
 - Cloudflare proxies all app traffic to the Cloudflare Tunnel (`cloudflared`, the cluster's only ingress).
 - Images live on GHCR, built by the app repos. Flux (source + kustomize controllers only) applies
   `clusters/hetzner/`. Secrets are SOPS + age.
@@ -38,13 +38,12 @@ The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-
 
 ## Constraints that are easy to break
 
-- AWS account `884686184019` holds the TBD backup chain (bucket, KMS key, `k3s-backup-uploader`,
-  `tfc-backups-*` roles, OIDC providers). The TFC role trust is pinned to workspace name `tbd-backups`:
+- The TBD backup chain (bucket, KMS key, uploader, `tfc-backups-*` roles, OIDC providers) lives in AWS. The TFC role trust is pinned to workspace name `tbd-backups`:
   do not rename it. If a rename is ever unavoidable, or any trust statement must change, add the new
-  statement, apply, then remove the old one; never edit in place.
+  statement, apply, then remove the old one; never edit in place. Account specifics: `docs/specs/private-ops-notes.md` (local, git-excluded).
 - `thebetterdecision.com` is registered at Cloudflare Registrar (since 2026-10-06) and its DNS is served by Cloudflare
   (`terraform/cloudflare`); no Route 53 zone is left. The TBD apex is the Worker `tbd-landing`.
-- AWS calls go through the aws-mcp server; it runs against `884686184019`.
+- AWS calls go through the aws-mcp server; the account is in `docs/specs/private-ops-notes.md` (local).
 
 ## Docs
 

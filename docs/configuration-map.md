@@ -90,33 +90,24 @@ Drift watch: workflow `release-drift-probe.yml` (daily) opens or updates one `[r
 
 ## GitHub
 
-Org `fjcloudaiconsulting` is on the **Free** plan: no org-level rulesets (the API answers 403), and
-private repositories cannot have branch protection, so every repo that must be protected is public.
-
 ### GHCR retention (INFRA-92)
 
 Workflow `ghcr-retention.yml` (weekly, Monday 05:41 UTC, plus manual dispatch) prunes the 7 private container packages `tbd/{backend,migrations,frontend,mcp}` and `ziftbook/{backend,frontend,migrations}`: untagged versions older than 7 days and sha- versions older than 30 days go, unless a kept index references them or `clusters/**` pins their digest; any version with a v*, major.minor, `latest` or other non-sha- tag is never deleted. The token is the run's `GITHUB_TOKEN` (`packages: write`), no PAT.
 
 | Setting | Where | Notes |
 |---|---|---|
-| Admin role for repo cloud-infra on each package | Package > Package settings > Manage Actions access (owner, UI, per package) | Deleting a version needs Admin; Read (INFRA-107) is not enough. The Admin grant applies to every workflow on every branch of this public repo, so anything that can push a branch here (the two org admins, and Apps with contents+workflows write such as Renovate/Mend and the Claude App) could add a workflow with `packages: write` and push, retag or delete these packages; the main-ref guard only protects this workflow. Granting Admin is the owner's decision with that risk; INFRA-209 and INFRA-229 track tightening. Grant per app when enabling it (ziftbook first) |
+| Admin role for repo cloud-infra on each package | Package > Package settings > Manage Actions access (owner, UI, per package) | Deleting a version needs Admin; Read (INFRA-107) is not enough. Granting cloud-infra Admin on a package is an owner decision; the risk assessment is in the private ops notes. Grant per app when enabling it (ziftbook first) |
 | `DELETE_APPS` | `env:` in `.github/workflows/ghcr-retention.yml` (git) | Empty = every run is a dry run. `"ziftbook"` or `"ziftbook,tbd"` enables deletes for those apps, only on `main` and only on the schedule or a dispatch with mode=delete |
 | Delete cap | `max_deletes` dispatch input; `MAX_DELETES` env | Per package, counting only packages that will delete (app in `DELETE_APPS`, delete mode); dry-run packages never count. Default 150, about 2x the measured weekly churn per package (input default and scheduled fallback). Over the cap in any deleting package aborts the run with zero deletes |
 | Restore window | GitHub | A deleted version can be restored for 30 days (runbook "GHCR retention") |
 
-The step summary and logs are public and list private package version ids, digests, sha- tags and ages (low sensitivity).
+The step summary and logs are public.
 
 Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package, or (403/429 after many deletes) the GITHUB_TOKEN rate limit: rerun later, the outermost-first order keeps a partial run safe; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
 
 ### Branch protection
 
-| Repo | Mechanism | Rules |
-|---|---|---|
-| cloud-infra | Ruleset `main protection` (id 24298796) | PR with 1 approval (squash only), linear history, no force-push or deletion, required checks `Terraform checks` and `Kubernetes checks` (strict). Bypass: org admin, repository admin role, **Renovate app (id 2740, Always, added 2026-10-03)** |
-| .github | Ruleset `main protection` (id 24298798) | PR with 1 approval (squash only), linear history, no force-push or deletion, no required checks. Bypass: org admin, repository admin role. Tags: see [Tag protection](#tag-protection) |
-| app-template | Ruleset `main protection` (id 24384611) | Same as `.github`: PR with 1 approval, linear history, no required checks |
-| ziftbook | Classic branch protection | 1 review, strict checks `Backend Checks`, `Frontend Checks`, `pr-title / check`, admins not enforced. **Force-push and deletion of `main` are allowed** |
-| tbd | Classic branch protection | 1 review, checks `Backend Checks`, `Frontend Checks`, admins enforced |
+Branch and tag protection per repo: see the owner's private ops notes.
 
 ### Tag protection
 
@@ -127,12 +118,7 @@ fails at the tag (see the symptom table). The App bypass is only as strong as th
 environment that holds its key (`main` only, see [Per-repo settings](#per-repo-settings)) and the
 `main` branch protection. These rulesets cover git refs only, not the GHCR `vX.Y.Z` image tags.
 
-| Repo | Ruleset id | Bypass (Always) |
-|---|---|---|
-| .github | 24413637 (INFRA-76) | Org admin, `fjcloudaiconsulting-release` app (id 5166919, added 2026-10-10, INFRA-161): the `publish` workflow creates `vX.Y.Z` and moves `v1` when the owner merges the Release PR |
-| tbd | 24454860 (INFRA-94, 2026-10-04) | Org admin, `fjcloudaiconsulting-release` app (id 5166919) |
-| ziftbook | 24454865 (INFRA-94, 2026-10-04) | Org admin, `fjcloudaiconsulting-release` app (id 5166919) |
-| app-template | 24454868 (INFRA-94, 2026-10-04) | Org admin, `fjcloudaiconsulting-release` app (id 5166919). Repos made from the template get only its files: each new app repo needs this ruleset, the App installed and the `release` environment ([Per-repo settings](#per-repo-settings)) |
+Per-repo rulesets and bypass lists: see the owner's private ops notes. Each app repo needs the ruleset, the App installed and the `release` environment ([Per-repo settings](#per-repo-settings)).
 
 ### GitHub Apps
 
@@ -141,7 +127,7 @@ installation, and the grant applies to **every repository in the installation**.
 
 | App | Repos | Notes |
 |---|---|---|
-| `fjcloudaiconsulting-release` | selected: each app repo on the shared release flow (Ziftbook, app-template, tbd from INFRA-42), and `.github` (2026-10-10, INFRA-161) | Permissions: contents, issues, pull requests write; metadata read; **workflows write** (added 2026-10-03, INFRA-78). Private key held by the owner and stored only as the `release` environment secret. In `.github` the key moves `v1` by design: a release there happens only when the owner merges the Release PR (`main` protected, 1 approving review). Keep cloud-infra out of the selection (`renovate` and `claude` already hold contents and workflows write there) |
+| `fjcloudaiconsulting-release` | selected: each app repo on the shared release flow (Ziftbook, app-template, tbd from INFRA-42), and `.github` (2026-10-10, INFRA-161) | Permissions: contents, issues, pull requests write; metadata read; **workflows write** (added 2026-10-03, INFRA-78). Private key held by the owner and stored only as the `release` environment secret. In `.github` the key moves `v1` by design: a release there happens only when the owner merges the Release PR (`main` protected, 1 approving review). Keep cloud-infra out of the selection |
 | `renovate` (Mend) | selected: `.github`, cloud-infra, ziftbook, tbd (added 2026-10-04, INFRA-109) | Repos are added on GitHub, not in Mend |
 | `terraform-cloud`, `gitguardian`, `atlassian`, `claude`, `tbd-branch-protection-probe` | various | Not part of the release chain. `atlassian` links PRs to Jira |
 
@@ -159,8 +145,8 @@ installation, and the grant applies to **every repository in the installation**.
   `CLOUDFLARE_API_TOKEN`, a per-Worker token for that app's landing Worker. Scopes and rules:
   [Worker and Snippet access](#worker-and-snippet-access-infra-98).
 - **GHCR package read access for CI** (INFRA-107): every `tbd` and `ziftbook` package grants the `cloud-infra` repo Read under Package settings > Manage Actions access. The `image provenance` step of `Kubernetes checks` needs it to verify attestations; a missing grant shows as a red `Kubernetes checks` with a registry authorization error. A new image needs the grant after its first publish.
-- Dependabot vulnerability alerts (`gh api -i repos/<r>/vulnerability-alerts`: 204 on, 404 off): on in `.github`, cloud-infra and ziftbook; **off in tbd** as of 2026-10-04 (INFRA-109, owner to enable). Renovate's security-fix PRs, which skip grouping and dashboard approval, only fire where they are on. Dependabot security updates (`repos/<r>/automated-security-fixes`) are off in all four (Renovate opens the fixes).
-- Actions default workflow permission is read-only everywhere checked. "Allow GitHub Actions to create and approve pull requests" is off in cloud-infra, tbd and ziftbook (turned off 2026-10-04; release-please uses the release App token, nothing approves with `GITHUB_TOKEN`). It is still on in app-template.
+- Dependabot and per-repo GitHub settings: see the owner's private ops notes.
+- Actions default workflow permission is read-only everywhere checked. "Allow GitHub Actions to create and approve pull requests" stays off (release-please uses the release App token, nothing approves with `GITHUB_TOKEN`). Per-repo state: see the owner's private ops notes.
 - `.github` hosts the contract, the reusable workflows, the Renovate preset and the weekly conformance
   probe. Apps consume them by the moving major tag `@v1`. A merged `feat`/`fix` opens a release-please Release PR there;
   the owner merging it is the approval, and the `publish` workflow tags `vX.Y.Z` and moves `v1` (INFRA-161).
@@ -197,8 +183,8 @@ runtime value is left in GitHub. A new repo in the org gets its rows here.
 
 ## Mend Renovate
 
-Hosted Mend app, Free plan, repos selected at
-`https://github.com/organizations/fjcloudaiconsulting/settings/installations/167278400`.
+Hosted Mend app, Free plan, repos selected in
+the Mend installation settings of the org.
 
 - **`GHCR_READ_TOKEN`**: Mend org secret, a classic PAT with only `read:packages`, 90-day expiry, created
   2026-10-02 (expires around 2026-12-31). cloud-infra's `renovate.json` reads it as
@@ -222,9 +208,9 @@ name is pinned in an AWS trust policy: never rename it.
 | Workspace | Stack | Auth |
 |---|---|---|
 | `cloudflare` | `terraform/cloudflare` | Sensitive env var `CLOUDFLARE_API_TOKEN`, written by `cloudflare-tokens` (token `tf: cloudflare workspace`; its scopes are `cloudflare_account_token.cloudflare_workspace` there, never edit them in the dashboard); variable `account_id` |
-| `cloudflare-tokens` (INFRA-133) | `terraform/cloudflare-tokens` | Env `CLOUDFLARE_API_TOKEN` (**sensitive**): the bootstrap token, the one hand-made Cloudflare token (account-owned, Account API Tokens: Edit only, stored by the owner with a script that checks it first). It can mint any token, so treat it as account admin: only this workspace holds it, and the workspace does not manage it. Env `TFE_TOKEN` (**sensitive**): token of team `cloudflare-tokens`, custom access on workspace `cloudflare` only (variables write, runs read). Its state holds the value of every token it creates: remote state sharing off, destroy plans off, auto-apply off. Any in-repo branch whose PR touches `terraform/cloudflare-tokens/**` plans with these credentials (a `data "external"` there could read them), so only the owner and his agents push there, and Renovate needs dashboard approval for it; HCP Terraform never plans fork PRs |
+| `cloudflare-tokens` (INFRA-133) | `terraform/cloudflare-tokens` | Env `CLOUDFLARE_API_TOKEN` (**sensitive**): the bootstrap token, the one hand-made Cloudflare token (account-owned, Account API Tokens: Edit only, stored by the owner with a script that checks it first). Only this workspace holds it, and the workspace does not manage it. Env `TFE_TOKEN` (**sensitive**): token of team `cloudflare-tokens`, custom access on workspace `cloudflare` only (variables write, runs read). Token scopes change only in `terraform/cloudflare-tokens`; exposure notes: see the owner's private ops notes |
 | `tbd-backups` | `terraform/tbd-backups` | OIDC, two roles (plan, provisioner); variable `aws_account_id` |
-| `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): Hetzner project `fj-platform` token `tfc-hetzner` (Read & Write), held only here. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22) and `deploy_ssh_public_key` (`ssh-ed25519 ...`, not sensitive). Both have no default, so a plan without them fails. The Hetzner project and a second token `claude-readonly` (Read; owner's local hcloud context `fj-platform-ro`) are also hand-made |
+| `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): a project token, held only in the workspace. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22) and `deploy_ssh_public_key` (`ssh-ed25519 ...`, not sensitive). Both have no default, so a plan without them fails. The Hetzner project and its tokens are hand-made |
 
 The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
 
@@ -232,24 +218,10 @@ Never set `TFC_AWS_RUN_ROLE_ARN` on `tbd-backups`: it would give unapproved PR p
 in [`aws/bootstrap/`](../aws/bootstrap/); root creates the roles once and a workspace never manages its
 own role.
 
-## AWS (account 884686184019)
+## AWS
 
-- Local access is IAM Identity Center (organization instance, eu-central-1, INFRA-10): user `flamarion`, permission set
-  `AdministratorAccess` (8 h sessions, MFA on every sign-in), profile `fjc` (`aws sso login --profile fjc`), which the
-  aws-mcp server also uses (`AWS_MCP_PROXY_PROFILES=fjc`). Root has MFA, no access keys, and is kept for root-only tasks
-  in the console.
-- Created by hand once (root): OIDC provider `app.terraform.io` and the `tfc-*` roles. Everything else in
-  the backup chain is managed by the `tbd-backups` stack: bucket `tbd-mysql-backups-884686184019` (Object
-  Lock), KMS key, the uploader users and keys, OIDC provider `token.actions.githubusercontent.com`, role
-  `github-actions-backup-probe`. Details: `terraform/tbd-backups/README.md`.
-- Lightsail decommissioned 2026-10-14 (INFRA-176): the node, its firewall, alarms, budget, SNS topics, health check and the `aws-platform` workspace are gone. The CloudTrail trail `platform-management` was destroyed too (owner ruling 2026-10-14): the account keeps no trail, only the 90-day CloudTrail Event history. The log bucket `fjc-platform-cloudtrail-884686184019` is kept, unmanaged and no longer written to; its lifecycle rule expires the old logs.
-- Cost alerts, made by hand (ZIF-37, 2026-10-18; Terraform would need budgets and ce permissions on the `tfc-backups-*` roles,
-  a root re-mint): budget `aws-monthly-usage`, $3 a month on unblended cost before credits and refunds, mails the owner when
-  the actual or the forecast passes $3. Expected spend is about $1 a month, nearly all the KMS key ($1); the backup bucket adds
-  cents. October 2026 already passed $3 (Lightsail ran until 10-14), so it mails once for October; November is the first
-  real month. Cost Anomaly Detection: monitor
-  `Default-Services-Monitor` (per service), subscription `Default-Services-Subscription` mails the owner daily for any anomaly
-  of $1 or more (was $100 and 40%). Symptom of a drift: no mail when the month passes $3; check Billing > Budgets.
+- The backup chain (Object Lock bucket, KMS key, uploader users, OIDC providers, role `github-actions-backup-probe`) is managed by the `tbd-backups` stack; the OIDC provider `app.terraform.io` and the `tfc-*` roles were created by hand once (root). Details: `terraform/tbd-backups/README.md`.
+- Access, audit and cost alerts: see the owner's private ops notes.
 
 ## Cloudflare
 
@@ -289,12 +261,6 @@ workers.dev cannot: Cloudflare replaces the value on cross-zone subrequests. The
 (`dev.thebetterdecision.com`, `dev.ziftbook.com`, INFRA-173; `app.ziftbook.com`, INFRA-181; `app.thebetterdecision.com`, INFRA-175) get the same header from
 Cloudflare, so the same applies.
 
-Read 2026-10-04 (API, read-only), all four zones of the account (thebetterdecision.com, ziftbook.com,
-fjconsulting.dev, yetanothergrower.com): no Workers routes, no Snippets, no snippet rules. Workers custom domains:
-ziftbook.com and www.ziftbook.com, both `ziftbook-landing`. One Worker script, `ziftbook-landing`, which makes no
-outbound fetch (only its assets binding). One Pages project, `fjconsulting-website-dev` on fjconsulting.dev (no node
-hostname in that zone). One account member, the owner (Super Administrator).
-
 Workers custom domains, all attached by hand (not in Terraform or `wrangler.jsonc`, so no plan shows their drift). Each
 one owns a read-only proxied DNS record that Cloudflare creates and deletes with it; a CNAME on the same name blocks
 the attach. Recreate one with the Cloudflare API (`PUT /accounts/<account>/workers/domains`, body
@@ -305,24 +271,7 @@ the attach. Recreate one with the Cloudflare API (`PUT /accounts/<account>/worke
 | `ziftbook.com`, `www.ziftbook.com` | `ziftbook-landing` (www 301ed by the `ziftbook_redirects` zone rule before the Worker, INFRA-131; http by Always Use HTTPS and the Worker) | before 2026-10-04 |
 | `thebetterdecision.com` | `tbd-landing` | INFRA-61. Not `www`: the `tbd_redirects` rule in `terraform/cloudflare` 301s it to the apex |
 
-Re-read 2026-10-06 (API, read-only): still no Workers routes on thebetterdecision.com, ziftbook.com and fjconsulting.dev (yetanothergrower.com too: no routes, no Snippets); Workers custom domains are
-ziftbook.com and www.ziftbook.com (`ziftbook-landing`) and thebetterdecision.com (`tbd-landing`, attached by the owner,
-INFRA-61); scripts `tbd-landing` and `ziftbook-landing` only; the Snippets endpoints return nothing on the four zones. Both
-landing deploys ran green with the per-Worker tokens (ziftbook `landing.yml` and tbd `apex-deploy.yml`, 2026-10-05), and
-neither repo holds a repo-level `CLOUDFLARE_API_TOKEN` any more. The Cloudflare MCP grant cannot read API tokens (9109), so
-token scopes are the ones `cloudflare-tokens` applied (runs of 2026-10-05, all applied).
-
-Who can put code on a zone (a Pages project with a custom domain on an app zone counts the same as a Worker).
-Scopes are what the dashboard shows (names only), as of 2026-10-05:
-
-| Principal | Held in | Can do today | Scopes |
-|---|---|---|---|
-| Owner | dashboard, `wrangler login` | everything | Super Administrator |
-| Bootstrap token (INFRA-133) | HCP Terraform workspace `cloudflare-tokens`, env var `CLOUDFLARE_API_TOKEN`; that workspace's PR plans run provider code with it | mints, edits and deletes any account-owned token, so indirectly everything | Account API Tokens Write only. The only hand-made Cloudflare token |
-| `cloudflare` workspace token | HCP Terraform, env var `CLOUDFLARE_API_TOKEN`; every PR plan runs provider code with it | whatever its policies allow; Terraform manages no Worker, route, Snippet or Pages project | `tf: cloudflare workspace`, made by `cloudflare-tokens` (INFRA-133; policies in `terraform/cloudflare-tokens/main.tf`): thebetterdecision.com: Zone Write, Zone Settings Write, DNS Write, SSL and Certificates Write, Zone WAF Write, Dynamic URL Redirects Write (dashboard: Single Redirect, INFRA-61); ziftbook.com: the same with Zone Read instead of Zone Write (Dynamic URL Redirects Write since INFRA-131); fjconsulting.dev: Zone Read, DNS Write; account: Access: Apps and Policies Write (INFRA-117), Cloudflare One Connector: cloudflared Write (INFRA-165), Workers R2 Storage Write (ZIF-133: buckets, CORS, lifecycle, custom domains; no narrower group can create a bucket, and it can also read, write and delete objects in every bucket, so Ziftbook's photos are in this token's reach; the apps use their own bucket-scoped tokens). No other zone, no Workers Scripts or Workers Routes, so it cannot add a Worker route. In use since 2026-10-05; the hand-made `cloudflare-tfc` it replaced is deleted |
-| Ziftbook `CLOUDFLARE_API_TOKEN` | ziftbook `landing` environment secret, `main` only (2026-10-05; the old repo-level secret is deleted) | deploys `ziftbook-landing`; no longer touches its custom domains (ziftbook#181) | Individual Workers Editor on `ziftbook-landing` only; token `ziftbook-landing deploy`, adopted by `cloudflare-tokens` (INFRA-133 import) |
-| tbd `CLOUDFLARE_API_TOKEN` (INFRA-60) | tbd `landing` environment secret, `main` only (2026-10-05) | deploys `tbd-landing` (the apex since INFRA-61, and its workers.dev preview); never touches its custom domain | Individual Workers Editor on `tbd-landing` only; token `tbd-landing deploy`, adopted by `cloudflare-tokens` (INFRA-133 import) |
-| Cloudflare MCP OAuth grant (Claude sessions) | My Profile > Access Management > Connected Applications | full access, granted by the owner 2026-10-05 (it can deploy Workers and change zones); still 9109 on the API token lists | full |
+Who can put code on a zone and the token scopes: see the owner's private ops notes. Token scopes change only in `terraform/cloudflare-tokens`.
 
 Rules:
 
@@ -334,17 +283,7 @@ Rules:
 - Custom domains are attached by the owner (or Terraform), not by CI, and are not declared in `wrangler.jsonc`: a
   per-Worker Editor deploys an existing Worker only while the deploy does not add, change or remove a route or
   custom domain, and Custom Domains do not support per-Worker roles yet. Ziftbook stopped declaring them in ziftbook#181 (INFRA-113).
-- Residual, which no token narrowing removes: a landing Worker attached to an app zone runs in that zone, so its
-  code can spoof `CF-Connecting-IP` towards that zone's node hostnames. Today `ziftbook-landing` -> `app.ziftbook.com`
-  (production) and `dev.ziftbook.com` (staging), both through the tunnel; today `tbd-landing` (apex) -> `app.thebetterdecision.com` (production, through the tunnel since INFRA-175). Who can change
-  that code: whoever merges to the app repo's `main`, or holds its deploy token (an environment secret limited to `main`). Impact: a forged IP in TBD's audit log and rate-limit buckets; the same
-  token could already serve any page on the apex, which is the bigger risk. Owner decision on INFRA-98, 2026-10-06:
-  narrow, do not accept. Worker deploy token narrowing is complete for account-owned tokens (user-owned tokens are unreadable by agents: 9109; rules above, no consumer needs more than its own Worker); what is
-  left is this code-level residual. An edge WAF rule was tried and does not catch it (applied and tested 2026-10-07, then
-  removed; result on INFRA-136). Owner ruling 2026-10-08: not accepted, fix tracked in INFRA-145. The Pages tokens `fjconsulting-website-*` hold Pages Write
-  on the whole account (Cloudflare has no per-project Pages role); as we understand it (untested) a custom domain on an app zone would also need DNS
-  rights there, which they lack.
-- No scheduled probe for new routes or Snippets: once the deploy tokens are per-Worker, only the owner, the bootstrap token (by minting one) and a write-scoped MCP grant can add one, and a probe cannot see the code-level residual above.
+- Residuals and gaps: see the owner's private ops notes.
 
 ## Grafana Cloud
 
@@ -358,9 +297,9 @@ Made by hand by the owner (INFRA-85); the cluster side is `clusters/hetzner/obse
 | Logs retention 14 days | The stack's plan: Grafana Cloud Free keeps logs a fixed 14 days, no setting (owner ruling, ZIF-89) | Stack-wide. The Ziftbook privacy notices say Grafana Labs keeps server logs up to 14 days: a plan change (Pro keeps 30 days) needs the notices changed first. Symptom of a drift: Explore returns Ziftbook log lines older than 14 days |
 | Token `alloy-platform-node` on that policy (named for the old Lightsail node; the same token runs on Hetzner) | Key `token` of Secret `observability/grafana-cloud` (`clusters/hetzner/observability/grafana-cloud.secret.yaml`, a whole new file each time) | No expiry; rotate on suspicion. Write-only: it cannot read or delete data |
 | Folder `Platform` (uid `platform`), contact point `owner-email`, rule group `node-memory`, dashboard `Node memory` (uid `node-memory`) | The stack (INFRA-108), applied through the Grafana API from [`grafana/`](../grafana/) | The git files are the source; rules and contact point are API-provisioned, so the UI cannot edit them; dashboard UI edits are lost on the next apply. Apply procedure and alert table: [runbook](runbooks.md#memory-alerts). No service account or token is kept |
-| Alert rule group `log-retention` (`LogRetentionStale`) | The stack (INFRA-130), applied through the Grafana API from [`grafana/log-retention.rules.json`](../grafana/log-retention.rules.json) | API-provisioned like `node-memory`; apply command in the [runbook](runbooks.md#request-log-retention). Until applied, a stalled log-retention job raises no alert |
+| Alert rule group `log-retention` (`LogRetentionStale`) | The stack (INFRA-130), applied through the Grafana API from [`grafana/log-retention.rules.json`](../grafana/log-retention.rules.json) | API-provisioned like `node-memory`; apply command in the [runbook](runbooks.md#request-log-retention). Alert coverage: `grafana/` and runbooks.md |
 | Synthetic Monitoring checks `tbd-prod-health`, `ziftbook-prod-health` and alert rule group `synthetic-uptime` (`ProdEndpointDown`) | The stack (INFRA-172), applied through the Synthetic Monitoring API and the Grafana API from [`grafana/synthetic-*.json`](../grafana/) | HTTP checks every 2 min from 2 EU public probes; the SM access token is revoked after applying and not kept. Apply and free-tier math: [runbook](runbooks.md#synthetic-uptime). Applied and alert-tested 2026-10-20 |
-| Alert rule groups `ziftbook-app` (`ZiftbookApiErrors`, `ZiftbookJobsGaveUp`, `ZiftbookRefundFailed`, `ZiftbookJobQueueStuck`) and `node-disk` (`NodeDiskHigh`) | The stack (ZIF-89), applied through the Grafana API from [`grafana/ziftbook-app.rules.json`](../grafana/ziftbook-app.rules.json) and [`grafana/node-disk.rules.json`](../grafana/node-disk.rules.json) | API-provisioned like `node-memory`; apply and the metric-name check: [runbook](runbooks.md#ziftbook-app-alerts). Until applied, Ziftbook production 5xx bursts, given-up jobs, failed refunds, a stuck queue and a filling disk raise no alert |
+| Alert rule groups `ziftbook-app` (`ZiftbookApiErrors`, `ZiftbookJobsGaveUp`, `ZiftbookRefundFailed`, `ZiftbookJobQueueStuck`) and `node-disk` (`NodeDiskHigh`) | The stack (ZIF-89), applied through the Grafana API from [`grafana/ziftbook-app.rules.json`](../grafana/ziftbook-app.rules.json) and [`grafana/node-disk.rules.json`](../grafana/node-disk.rules.json) | API-provisioned like `node-memory`; apply and the metric-name check: [runbook](runbooks.md#ziftbook-app-alerts). Alert coverage: `grafana/` and runbooks.md |
 
 ## Cluster out-of-band material
 
@@ -404,4 +343,3 @@ commit body only.
 | Grafana Cloud token `alloy-platform-node` | no expiry, rotate on suspicion | Grafana Cloud section |
 | Cloudflare account-owned tokens (all managed by `cloudflare-tokens`) | per token; `expires_on` in `terraform/cloudflare-tokens` | [runbook](runbooks.md#cloudflare-api-tokens). A token Terraform made gets a replace run, its consumer is rewritten in the same apply; an imported one needs its consumer wired in Terraform first |
 | Cloudflare bootstrap token, HCP Terraform team token `cloudflare-tokens` | no expiry, rotate on suspicion | [runbook](runbooks.md#cloudflare-api-tokens) |
-| SSO session, profile `fjc` | 8 h | `aws sso login --profile fjc` |

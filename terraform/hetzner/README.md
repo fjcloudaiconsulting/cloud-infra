@@ -1,6 +1,6 @@
 # `hetzner`
 
-The Hetzner Cloud project `fj-platform` (INFRA-164, INFRA-169): three CAX21 (ARM64) servers in `nbg1` on a private
+The Hetzner Cloud project (INFRA-164, INFRA-169): three CAX21 (ARM64) servers in `nbg1` on a private
 network, a firewall, and the volume that holds the databases. The servers have no `user_data`: Ansible
 configures them afterwards from a static inventory (see the `nodes` output).
 
@@ -19,7 +19,7 @@ configures them afterwards from a static inventory (see the `nodes` output).
 HCP Terraform `FlamaCorp/hetzner`, VCS flow against this repo, working directory `terraform/hetzner`. Plan runs on
 the PR; apply runs on merge after approval in the UI. Created by the owner (not by Terraform).
 
-- Env `HCLOUD_TOKEN` (**sensitive**): Hetzner project token `tfc-hetzner` (Read & Write), set by the owner.
+- Env `HCLOUD_TOKEN` (**sensitive**): a project token, held only in the workspace, set by the owner.
 - Variable `ssh_allowed_cidrs` (HCL list, not sensitive), for example `["203.0.113.7/32"]`. If the owner's public IP
   changes, update it here and re-apply, or Ansible loses SSH (the Hetzner console still works).
 - Variable `deploy_ssh_public_key` (string, not sensitive): the `ssh-ed25519 ...` public key.

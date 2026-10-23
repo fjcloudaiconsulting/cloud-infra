@@ -80,13 +80,8 @@ jobs:
           # and must not be mistaken for a healthy empty bucket.
           # One listing per prefix (the role may list only these), merged into
           # one document. prefix=minimum dump bytes:
-          # - tbd-mysql, ziftbook-postgres: the k3s CronJob. tbd-mysql holds TBD's
-          #   data since the INFRA-48 cutover (~750 KB);
-          #   ziftbook-postgres (staging) dumps 12835 bytes with its 20-table schema (S3, 2026-10-06).
-          # - ziftbook-prod-postgres (INFRA-82): the same CronJob, Ziftbook production, same schema.
-          #   Both Ziftbook floors ~40% of that, like tbd-staging-mysql.
-          # - tbd-staging-mysql: the same CronJob (INFRA-67). First real dump 12152 bytes
-          #   (schema only, 53 tables), floor ~40% of that.
+          # - floors are about 40% of a real dump (tbd-mysql, tbd-staging-mysql, ziftbook-postgres,
+          #   ziftbook-prod-postgres: the k3s CronJob sets).
           floors="tbd-mysql=100000 tbd-staging-mysql=5000 ziftbook-postgres=5000 ziftbook-prod-postgres=5000"
           for spec in $floors; do
             if ! aws s3api list-objects-v2 \

@@ -211,7 +211,7 @@ HTTP metrics.
 |---|---|---|
 | Traces | The app's own `tracing.py` (the Ziftbook pattern): the HTTP SERVER span in a middleware, SQL spans from SQLAlchemy engine events, job, worker and migration spans | `opentelemetry-sdk` and the OTLP HTTP exporter, no contrib instrumentation packages |
 | Metrics | FastAPI native: `http.server.request.duration` and `http.server.active_requests` | the app registers a global `MeterProvider` before `FastAPI()` is built |
-| Logs | JSON lines on stdout with `request_id`, `trace_id`, `span_id`; no OTLP log export from the app. Alloy reads Ziftbook's lines through the kube API and sends the JSON ones to Grafana Cloud Loki (ZIF-89, 14-day retention, the Free plan's); TBD's are not sent (INFRA-110) | stdlib `logging` (the Ziftbook `logs.py` pattern) |
+| Logs | JSON lines on stdout with `request_id`, `trace_id`, `span_id`; no OTLP log export from the app. Alloy reads Ziftbook's lines through the kube API and sends the JSON ones to Grafana Cloud Loki (ZIF-89, 14-day retention, the Free plan's). Alert coverage: `grafana/` and runbooks.md | stdlib `logging` (the Ziftbook `logs.py` pattern) |
 
 Every app builds FastAPI with:
 
@@ -250,7 +250,7 @@ Environment for every process (`<role>` is `api`, `worker`, `scheduler` or `migr
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` |
 | `OTEL_LOGS_EXPORTER` | `none` |
 | `OTEL_METRICS_EXPORTER` | `otlp` |
-| `OTEL_TRACES_EXPORTER` | `otlp` in staging; `none` in production by default (owner ruling 2026-10-06, traces cost more compute than metrics) |
+| `OTEL_TRACES_EXPORTER` | `otlp` in staging; production default: see the namespace `otel` ConfigMap. Alert coverage: `grafana/` and runbooks.md |
 
 Traces are a per-environment switch, not an app setting: the app ships the capability and exports only when
 `OTEL_TRACES_EXPORTER=otlp`, and the namespace's `otel` ConfigMap holds the value. To investigate a production issue,
@@ -307,4 +307,4 @@ Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts 
 
 ## Cost
 
-AWS spend is the backup KMS key (about $1/month), S3 (backups, and the old CloudTrail logs until they expire) and small amounts elsewhere. The servers are billed by Hetzner.
+AWS holds the backup chain (`terraform/tbd-backups`). The servers are billed by Hetzner.
