@@ -121,8 +121,7 @@ runtime dependencies count as `fix`). A merge of `chore`, `docs`, `ci` and simil
 
 What the staging-first check does **not** do: it compares tags in git, not what staging actually runs. Staging's own
 health endpoint and the post-deploy smoke cover that (the smoke runs for `tbd-prod`, `tbd-staging` (version and frontend only), `ziftbook-staging` and
-`ziftbook-prod`). Admins can merge a red PR through the ruleset bypass, so treat red as
-"not yet", never as noise.
+`ziftbook-prod`). The checks are required with no bypass (INFRA-107): red means "not yet".
 
 ## When something goes wrong
 

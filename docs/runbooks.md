@@ -479,31 +479,9 @@ applies is the app's (256 KiB on this route). Rotate: Stripe > roll the key (or 
 
 ## TBD smoke account
 
-TBD's post-deploy smoke test (`scripts/smoke-test.sh` in the tbd repo) logs in as a dedicated production user: active,
-email verified, **no MFA** by design (TBD-371, the script cannot answer a TOTP challenge). Its username is also the only
-entry of `FOUNDER_COUNT_EXCLUDE_USERNAMES`, so it is not counted as a founder.
-
-The credentials live in these places, kept equal:
-
-- `tbd-prod/tbd-smoke` (`clusters/hetzner/tbd-prod/tbd-smoke.secret.yaml`, SOPS), keys `username` and `password`. Anyone
-  with cluster access reads them for a manual run (`KUBECONFIG=~/.kube/hetzner`):
-
-  ```bash
-  SU=$(kubectl -n tbd-prod get secret tbd-smoke -o jsonpath='{.data.username}' | base64 -d)
-  SP=$(kubectl -n tbd-prod get secret tbd-smoke -o jsonpath='{.data.password}' | base64 -d)
-  SMOKE_USERNAME=$SU SMOKE_PASSWORD=$SP SMOKE_BASE_URL=https://app.thebetterdecision.com ~/src/tbd/scripts/smoke-test.sh; unset SU SP
-  ```
-
-- cloud-infra environment `tbd-prod` secrets `SMOKE_USERNAME` / `SMOKE_PASSWORD` (write-only), used by the
-  [post-deploy smoke](#post-deploy-smoke).
-
-**Rotate** (never display the password; the hash is TBD's own `bcrypt`): generate it in memory, set the bcrypt hash on
-the user row in the production database (`UPDATE users SET password_hash=..., password_changed_at=UTC_TIMESTAMP() WHERE
-username=...`, expect 1 row), run the smoke test above with the new value, then `printf %s "$P" | gh secret set
-SMOKE_PASSWORD --env tbd-prod -R
-fjcloudaiconsulting/cloud-infra` and rewrite `tbd-smoke.secret.yaml` with
-`jq -n ... | sops encrypt --input-type json --output-type yaml --filename-override <file> /dev/stdin > <file>`. Last
-rotated 2026-10-04 (INFRA-48).
+TBD's post-deploy smoke test logs in as a dedicated production user. Its credentials live in the SOPS Secret
+`tbd-prod/tbd-smoke` and in this repo's `tbd-prod` environment secrets (used by the [post-deploy smoke](#post-deploy-smoke)),
+kept equal. Account controls, the manual run and the rotation procedure: owner private ops notes.
 
 ## Cloudflare Access on TBD staging
 
@@ -648,8 +626,7 @@ same, and CoreDNS holds two replicas with a PDB (`clusters/hetzner/kube-system/c
 30 s. The TBD scheduler, the Ziftbook worker, Flux and metrics-server are single pods and move to the other node.
 Staging keeps one replica and is down until its pods move.
 
-**Access.** NetBird's state volume is local-path storage on one app node, so kubectl over NetBird stops while that node
-is drained or down. That is accepted (INFRA-177): break-glass is SSH to any other server
+**Access.** kubectl over NetBird can stop while a node is drained; break-glass is SSH to any other server
 (`ssh root@<public IPv4> k3s kubectl ...`, port 22 open to `ssh_allowed_cidrs` in `terraform/hetzner`), the same path
 as [Hetzner cluster bootstrap](#hetzner-cluster-bootstrap). Run drains over SSH for that reason.
 
@@ -1043,7 +1020,7 @@ app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, project `fj-platform` > Servers > the server: Power
+applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
@@ -1162,8 +1139,7 @@ for p in 6443 10250 22; do timeout 4 nc -z hetzner-k3s.netbird.cloud $p && echo 
 Renew before the 90 days run out: the same `ssh` token line. Revoke every token at once with
 `kubectl -n netbird delete sa owner-admin`; your own access ends too. Flux recreates the account within its interval
 (up to 10 minutes; `sudo k3s kubectl get sa -n netbird owner-admin` over `ssh` on node-1 shows when), then mint a new
-token over `ssh` (node-1, as above) and rewrite `~/.kube/hetzner-token`. Anyone who can create pods
-or tokens in namespace `netbird` holds cluster-admin: never grant namespace-scoped rights there.
+token over `ssh` (node-1, as above) and rewrite `~/.kube/hetzner-token`. Grant no rights in namespace `netbird`.
 
 **7. Checks (lead).** With `KUBECONFIG=~/.kube/hetzner`:
 
