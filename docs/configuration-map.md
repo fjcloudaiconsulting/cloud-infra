@@ -93,6 +93,18 @@ Drift watch: workflow `release-drift-probe.yml` (daily) opens or updates one `[r
 Org `fjcloudaiconsulting` is on the **Free** plan: no org-level rulesets (the API answers 403), and
 private repositories cannot have branch protection, so every repo that must be protected is public.
 
+### GHCR retention (INFRA-92)
+
+Workflow `ghcr-retention.yml` (weekly, Monday 05:41 UTC, plus manual dispatch) prunes the 7 private container packages `tbd/{backend,migrations,frontend,mcp}` and `ziftbook/{backend,frontend,migrations}`: untagged versions older than 7 days and sha- versions older than 30 days go, unless a kept index references them or `clusters/**` pins their digest; any version with a v*, major.minor, `latest` or other non-sha- tag is never deleted. The token is the run's `GITHUB_TOKEN` (`packages: write`), no PAT.
+
+| Setting | Where | Notes |
+|---|---|---|
+| Admin role for repo cloud-infra on each package | Package > Package settings > Manage Actions access (owner, UI, per package) | Deleting a version needs Admin; Read (INFRA-107) is not enough. Admin also allows push, retag and package delete, and any repo admin can add a branch workflow with `packages: write`: accepted while only the 2 admins have write. Grant per app when enabling it (ziftbook first) |
+| `DELETE_APPS` | `env:` in `.github/workflows/ghcr-retention.yml` (git) | Empty = every run is a dry run. `"ziftbook"` or `"ziftbook,tbd"` enables deletes for those apps, only on `main` and only on the schedule or a dispatch with mode=delete |
+| Restore window | GitHub | A deleted version can be restored for 30 days (runbook "GHCR retention") |
+
+Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
+
 ### Branch protection
 
 | Repo | Mechanism | Rules |
