@@ -4,11 +4,12 @@
 Policy: never delete a version with a non-sha- tag (v*, major.minor, latest, anything else); keep sha-<hex>
 versions <= 30 days old and untagged versions <= 7 days old; keep every digest pinned under clusters/**; keep
 everything reachable from those roots through the registry manifests (an untagged version is usually a platform
-image of a kept multi-arch index). Everything else is deleted, indexes before their children.
-Every package is planned before any DELETE: one abort anywhere means zero DELETEs. Exit 1 on any abort.
+image of a kept multi-arch index). Everything else is deleted, outermost index first, then inner indexes, then leaf manifests.
+Every package is planned before any DELETE: one abort anywhere means zero DELETEs.
+GET only to api.github.com and ghcr.io, never following a redirect. Exit 1 on any abort.
 Delete needs ALL of: GITHUB_REF == refs/heads/main; event schedule, or workflow_dispatch with MODE=delete;
 the package's app listed in DELETE_APPS (comma separated, git-tracked in the workflow).
-Env: GITHUB_TOKEN, GITHUB_REF, GITHUB_EVENT_NAME, MODE, APP (ziftbook|tbd|all), MAX_DELETES (default 300),
+Env: GITHUB_TOKEN, GITHUB_REF, GITHUB_EVENT_NAME, MODE, APP (ziftbook|tbd|all), MAX_DELETES (default 400, per package, only packages that delete count),
 DELETE_APPS, GITHUB_STEP_SUMMARY. Unverified: whether version_count counts soft-deleted versions (INFRA-92 spec).
 
 Usage: ghcr-retention.py [clusters-dir]   (default: clusters)
@@ -31,21 +32,29 @@ PACKAGES = ["tbd/backend", "tbd/migrations", "tbd/frontend", "tbd/mcp",
 SHA_TAG = re.compile(r"sha-[0-9a-f]{7,}$")
 V_TAG = re.compile(r"v\d")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
-DELETE_PATH = re.compile(r"^/orgs/" + ORG + r"/packages/container/[^/]+/versions/\d+$")
+DELETE_URL = re.compile(re.escape(API) + "/orgs/" + ORG + "/packages/container/(?:"
+                        + "|".join(re.escape(urllib.parse.quote(p, safe="")) for p in PACKAGES) + r")/versions/\d+")
+GET_HOSTS = ("api.github.com", "ghcr.io")
+NEXT = re.compile(r'<([^>]+)>;\s*rel="next"')
 INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
 IMAGE_TYPES = ("application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json")
 ACCEPT = ", ".join(INDEX_TYPES + IMAGE_TYPES)
-SHA_DAYS, UNTAGGED_DAYS, DEFAULT_MAX = 30, 7, 300
+SHA_DAYS, UNTAGGED_DAYS, DEFAULT_MAX = 30, 7, 400
 
 
 class Abort(Exception):
     pass
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # a 3xx surfaces as an HTTPError, i.e. a non-200 answer
+
+
 def urlopen_http(method, url, headers):
-    """(status, headers, body) for one request; HTTP errors are answers, not exceptions."""
+    """(status, headers, body) for one request; HTTP errors are answers, not exceptions. No redirects."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, method=method, headers=headers), timeout=60) as r:
+        with urllib.request.build_opener(NoRedirect).open(urllib.request.Request(url, method=method, headers=headers), timeout=60) as r:
             return r.status, dict(r.headers), r.read()
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers), e.read()
@@ -55,11 +64,14 @@ def guarded(http):
     """Only GET, and DELETE of one version of an org container package, ever leave this process."""
     def call(method, url, headers):
         if method == "DELETE":
-            u = urllib.parse.urlparse(url)
-            if not (u.scheme + "://" + u.netloc == API and DELETE_PATH.match(u.path)):
-                raise Abort(f"refusing DELETE {u.path}")
+            if not DELETE_URL.fullmatch(url):
+                raise Abort(f"refusing DELETE {url!r}")
         elif method != "GET":
             raise Abort(f"refusing {method}")
+        else:
+            u = urllib.parse.urlparse(url)
+            if u.scheme != "https" or u.hostname not in GET_HOSTS:
+                raise Abort(f"refusing GET {url!r}")
         return http(method, url, headers)
     return call
 
@@ -79,11 +91,14 @@ def list_versions(http, api_h, pkg):
     base = f"{API}/orgs/{ORG}/packages/container/{urllib.parse.quote(pkg, safe='')}"
     for _ in range(2):  # a count drift while listing means versions moved: retry the whole listing once
         before = get_json(http, base, api_h, f"{pkg} count")[1]["version_count"]
-        out, url = [], base + "/versions?per_page=100"
+        out, url, pages = [], base + "/versions?per_page=100", 0
         while url:
+            pages += 1
+            if pages > before + 2:  # a page holds at least one version, so more pages than the count allows: a loop or a lying Link header
+                raise Abort(f"{pkg}: listing exceeds {pages - 1} pages for version_count {before}")
             h, page = get_json(http, url, api_h, f"{pkg} versions")
             out += page
-            m = re.search(r'<([^>]+)>;\s*rel="next"', header(h, "link"))
+            m = NEXT.search(header(h, "link"))
             url = m[1] if m else None
         after = get_json(http, base, api_h, f"{pkg} count")[1]["version_count"]
         if before == after == len(out):
@@ -114,7 +129,7 @@ def pins(clusters, pkg):
             for d in rx.findall(f.read_text())}
 
 
-def plan_package(http, api_h, pkg, clusters, now):
+def plan_package(http, api_h, pkg, clusters, now, mask=False):
     vs = parse_versions(pkg, list_versions(http, api_h, pkg), now)
     by_digest = {v["digest"]: v for v in vs}
     pinned = pins(clusters, pkg)
@@ -151,7 +166,8 @@ def plan_package(http, api_h, pkg, clusters, now):
 
     tok = get_json(http, f"https://ghcr.io/token?scope=repository:{ORG}/{pkg}:pull",
                    {"Authorization": "Basic " + base64.b64encode(f"x:{api_h['Authorization'].split()[1]}".encode()).decode()}, f"{pkg} token")[1]["token"]
-    print(f"::add-mask::{tok}")
+    if mask:
+        print(f"::add-mask::{tok}")
     reg_h = {"Authorization": f"Bearer {tok}", "Accept": ACCEPT}
     keep = {v["digest"] for v in roots}
     stack = [v["digest"] for v in roots]
@@ -168,10 +184,18 @@ def plan_package(http, api_h, pkg, clusters, now):
     dele = [v for v in vs if v["digest"] not in keep]
     for v in dele:
         v["index"] = manifest(v["digest"])[0] in INDEX_TYPES
-    assert not [v for v in dele if v["tags"] and any(not SHA_TAG.match(t) for t in v["tags"])], "would delete a non-sha tag"
+    if [v for v in dele if any(not SHA_TAG.match(t) for t in v["tags"])]:
+        raise Abort(f"{pkg}: would delete a non-sha tag")
     if any(V_TAG.match(t) for v in vs for t in v["tags"]) and not any(V_TAG.match(t) for v in vs if v not in dele for t in v["tags"]):
         raise Abort(f"{pkg}: would leave no v-tagged version")
-    return {"pkg": pkg, "reasons": reasons, "delete": sorted(dele, key=lambda v: not v["index"])}
+    ids = {v["digest"]: v for v in dele if v["index"]}
+    depth = {}
+
+    def level(v):  # deleted indexes above v, longest chain: outermost = 0
+        if v["id"] not in depth:
+            depth[v["id"]] = max((level(o) + 1 for o in ids.values() if v["digest"] in registry[o["digest"]][1]), default=0)
+        return depth[v["id"]]
+    return {"pkg": pkg, "reasons": reasons, "delete": sorted(dele, key=lambda v: level(v) if v["index"] else len(dele) + 1)}
 
 
 def delete_phase(http, api_h, plans):
@@ -210,7 +234,7 @@ def main(env=None, http=None, now=None, clusters="clusters"):
     now = now or dt.datetime.now(dt.timezone.utc)
     try:
         mx = env.get("MAX_DELETES") or str(DEFAULT_MAX)
-        if not (mx.isdigit() and int(mx) > 0):
+        if not (re.fullmatch(r"[0-9]+", mx) and int(mx) > 0):
             raise Abort(f"MAX_DELETES must be a positive integer, got {mx!r}")
         app = env.get("APP") or "all"
         if app not in ("all", "tbd", "ziftbook"):
@@ -221,11 +245,11 @@ def main(env=None, http=None, now=None, clusters="clusters"):
                    and (env.get("GITHUB_EVENT_NAME") == "schedule"
                         or (env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("MODE") == "delete")))
         apps = {a.strip() for a in (env.get("DELETE_APPS") or "").split(",")}
-        plans = [plan_package(http, api_h, p, clusters, now) for p in PACKAGES if app in ("all", p.split("/")[0])]
-        total = sum(len(p["delete"]) for p in plans)
-        if total > int(mx):
-            raise Abort(f"{total} deletes exceed MAX_DELETES {mx}")
+        plans = [plan_package(http, api_h, p, clusters, now, bool(env.get("GITHUB_ACTIONS"))) for p in PACKAGES if app in ("all", p.split("/")[0])]
         deleting = {p["pkg"] for p in plans if enabled and p["pkg"].split("/")[0] in apps}
+        for p in plans:
+            if p["pkg"] in deleting and len(p["delete"]) > int(mx):
+                raise Abort(f"{p['pkg']}: {len(p['delete'])} deletes exceed MAX_DELETES {mx}")
         text = summary(plans, deleting)
         print(text)
         if env.get("GITHUB_STEP_SUMMARY"):

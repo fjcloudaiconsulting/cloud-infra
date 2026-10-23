@@ -952,7 +952,7 @@ for `/dev/sdb`: grow the volume (below); for a root disk, look for old images (`
 
 ## GHCR retention
 
-Workflow `GHCR Retention` ([`ghcr-retention.yml`](../.github/workflows/ghcr-retention.yml), settings in [configuration-map.md](configuration-map.md)). Each run plans all selected packages first and writes a table per package (kept by reason, delete count) and the delete list (id, digest, tags, age) to the run summary; any abort means zero deletes.
+Workflow `GHCR Retention` ([`ghcr-retention.yml`](../.github/workflows/ghcr-retention.yml), settings in [configuration-map.md](configuration-map.md)). Each run plans all selected packages first and writes a table per package (kept by reason, delete count) and the delete list (id, digest, tags, age) to the run summary; any abort means zero deletes. The cap `max_deletes` (default 400) is per package and counts only packages that will delete (app in `DELETE_APPS`, delete mode); a dry-run package never trips it, an over-cap deleting package aborts everything.
 
 Dry run (always safe, also the weekly run while `DELETE_APPS` is empty): `gh workflow run ghcr-retention.yml --repo fjcloudaiconsulting/cloud-infra -f mode=dry-run -f app=all`, then `gh run watch` and read the summary. Check that every row to delete is untagged or sha- only, and that no id is a release you still run.
 

@@ -81,11 +81,11 @@ class World:
             return 200, {}, json.dumps({"version_count": n}).encode()
         page = int(urllib.parse.parse_qs(u.query).get("page", ["1"])[0])
         chunk = vs[(page - 1) * self.page_size: page * self.page_size]
-        hdrs = {}
-        if page * self.page_size < len(vs):
-            nxt = f"https://api.github.com{u.path}?per_page=100&page={page + 1}"
-            hdrs["Link"] = f'<{nxt}>; rel="next", <{nxt}>; rel="last"'
-        return 200, hdrs, json.dumps(chunk).encode()
+        last = max(1, -(-len(vs) // self.page_size))
+        link = lambda n, rel: f'<https://api.github.com{u.path}?per_page=100&page={n}>; rel="{rel}"'
+        rels = ([link(page - 1, "prev")] if page > 1 else []) + ([link(page + 1, "next")] if page < last else []) \
+            + ([link(last, "last")] if page < last else []) + ([link(1, "first")] if page > 1 else [])
+        return 200, {"Link": ", ".join(rels)} if rels else {}, json.dumps(chunk).encode()
 
     def deletes(self):
         return [r for r in self.reqs if r[0] == "DELETE"]
@@ -155,6 +155,7 @@ class Selection(unittest.TestCase):
         """Kills first-tag classification and v-only roots: [v, sha-], latest and major.minor survive."""
         w = World()
         w.add(ZB, 1, ["v1.2.3", "sha-abc1234"], 90)
+        w.add(ZB, 5, ["sha-abc1234", "v1.2.3"], 90)  # sha- first: tags[0] classification deletes it
         w.add(ZB, 2, ["latest"], 90)
         w.add(ZB, 3, ["0.20"], 90)
         w.add(ZB, 4, ["sha-abc1234"], 90)  # control
@@ -200,6 +201,18 @@ class Listing(unittest.TestCase):
             w.add(ZB, i, [], 100)
         rc, _, _ = run(w)
         self.assertEqual((rc, sorted(w.deleted)), (0, [1, 2, 3, 4, 5]))
+
+    def test_first_url_regardless_of_rel_parser_aborts_not_hangs(self):
+        """Kills a Link parser that follows the first <url> (prev on the last page loops) and a missing page bound."""
+        w = World(page_size=2)
+        for i in range(1, 6):
+            w.add(ZB, i, [], 100)
+        orig = gr.NEXT
+        gr.NEXT = re.compile(r'<([^>]+)>')
+        self.addCleanup(setattr, gr, "NEXT", orig)
+        rc, _, _ = run(w)
+        self.assertEqual((rc, w.deleted), (1, []))
+        self.assertLess(len(w.reqs), 100)
 
     def test_f7_count_mismatch_before_or_after_aborts(self):
         """Kills reading version_count once (or not at all): a drift before OR after listing aborts."""
@@ -280,24 +293,43 @@ class Aborts(unittest.TestCase):
                       "application/vnd.docker.distribution.manifest.v2+json"):
                 self.assertIn(t, h["Accept"])
 
-    def test_f12_over_max_deletes_in_last_package_deletes_nothing(self):
-        """Kills a per-package or running max check: overflow in the LAST package still means zero DELETEs."""
+    def test_f12_cap_is_per_deleting_package_overflow_in_last_aborts_everything(self):
+        """Kills a global total or running cap: ZB 1 + ZM 3 deletes, cap 2 aborts with zero DELETEs; cap 3 passes."""
         w = World()
         w.add(ZB, 1, [], 100)
-        w.add(ZM, 2, [], 100)
-        w.add(ZM, 3, [], 100)
+        for i in (2, 3, 4):
+            w.add(ZM, i, [], 100)
         rc, _, _ = run(w, MAX_DELETES="2")
         self.assertEqual((rc, w.deleted), (1, []))
         rc, _, _ = run(w, MAX_DELETES="3")
-        self.assertEqual((rc, sorted(w.deleted)), (0, [1, 2, 3]))
+        self.assertEqual((rc, sorted(w.deleted)), (0, [1, 2, 3, 4]))
+
+    def test_f12_dry_run_package_never_counts_toward_cap(self):
+        """Kills counting dry-run packages: a huge tbd dry-run plan must not abort ziftbook's delete."""
+        w = World()
+        w.add(ZB, 1, [], 100)
+        for i in range(10, 16):
+            w.add(TB, i, [], 100)
+        rc, _, _ = run(w, DELETE_APPS="ziftbook", MAX_DELETES="2")
+        self.assertEqual((rc, w.deleted), (0, [1]))
+
+    def test_default_cap_is_400_per_package(self):
+        """Kills the old 300 default: 400 deletes pass with MAX_DELETES unset, 401 abort."""
+        for n, want in ((400, 0), (401, 1)):
+            w = World(page_size=100)
+            for i in range(1, n + 1):
+                w.add(ZB, i, [], 100)
+            rc, _, _ = run(w, DELETE_APPS="ziftbook", APP="ziftbook")
+            self.assertEqual((rc, len(w.deleted)), (want, n if want == 0 else 0), n)
 
     def test_f12_bad_max_deletes_rejected(self):
         """Kills int() without validation: 0, abc, -1 and 1.5 are all rejected."""
-        for bad in ("0", "abc", "-1", "1.5"):
+        for bad in ("0", "abc", "-1", "1.5", "\u00b2", "5\n"):
             w = World()
             w.add(ZB, 1, [], 100)
-            rc, _, _ = run(w, MAX_DELETES=bad)
+            rc, _, err = run(w, MAX_DELETES=bad, GITHUB_ACTIONS="true")
             self.assertEqual((rc, w.deleted, w.reqs), (1, [], []), bad)
+            self.assertTrue(err.startswith("::error::"), bad)
 
     def test_f17_bearer_never_printed_on_500_path(self):
         """Kills logging headers or token responses: the bearer appears only in its ::add-mask:: line."""
@@ -305,11 +337,52 @@ class Aborts(unittest.TestCase):
         w.manifests[(ZM, dg(2))] = (500, {})
         with tempfile.TemporaryDirectory() as d:
             summ = pathlib.Path(d) / "s.md"
-            rc, out, err = run(w, GITHUB_STEP_SUMMARY=str(summ))
+            rc, out, err = run(w, GITHUB_STEP_SUMMARY=str(summ), GITHUB_ACTIONS="true")
             text = out + err + (summ.read_text() if summ.exists() else "")
         self.assertEqual(rc, 1)
         self.assertIn(f"::add-mask::{TOKEN}", out)
         self.assertNotIn(TOKEN, re.sub(r"::add-mask::.*", "", text))
+
+    def test_add_mask_only_inside_github_actions(self):
+        """Kills printing workflow commands locally: no ::add-mask:: and no token without GITHUB_ACTIONS."""
+        w = self.last_package_world()
+        rc, out, err = run(w)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("::add-mask::", out + err)
+        self.assertNotIn(TOKEN, out + err)
+
+    def test_candidate_manifest_non_200_aborts(self):
+        """Kills deleting a version whose own manifest could not be read."""
+        w = World()
+        w.add(ZB, 1, [], 100)
+        w.add(ZB, 2, [], 100)
+        w.manifests[(ZB, dg(2))] = (404, {})
+        rc, _, _ = run(w)
+        self.assertEqual((rc, w.deleted), (1, []))
+
+    def test_duplicate_id_bad_digest_bad_created_at_abort(self):
+        """Kills trusting the listing: duplicate id, malformed digest and unparseable created_at all abort."""
+        def dup(w):
+            w.pkgs[ZB].append(dict(w.pkgs[ZB][0]))
+
+        def digest(w):
+            w.pkgs[ZB][0]["name"] = "sha256:short"
+
+        def created(w):
+            w.pkgs[ZB][0]["created_at"] = "yesterday"
+        for brk in (dup, digest, created):
+            w = World()
+            w.add(ZB, 1, [], 100)
+            w.add(ZB, 2, [], 100)
+            brk(w)
+            rc, _, _ = run(w)
+            self.assertEqual((rc, w.deleted), (1, []), brk.__name__)
+
+    def test_no_assert_statements_in_script(self):
+        """Kills guards that vanish under python -O: the script must not rely on assert."""
+        import ast
+        tree = ast.parse(SCRIPT.read_text())
+        self.assertEqual([n.lineno for n in ast.walk(tree) if isinstance(n, ast.Assert)], [])
 
 
 class DeletePhase(unittest.TestCase):
@@ -344,6 +417,15 @@ class DeletePhase(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(w.deleted[0], 50)
         self.assertEqual(sorted(w.deleted), [1, 2, 50, 60])
+
+    def test_nested_index_deleted_outermost_first_even_with_lower_inner_id(self):
+        """Kills index-before-leaf only: inner index (id 5) is the outer's (id 50) child and must go after it, before leaves."""
+        w = World()
+        w.add(ZB, 1, [], 100)
+        w.add(ZB, 5, [], 100, children=[1])
+        w.add(ZB, 50, ["sha-aaaaaaa"], 40, children=[5])
+        rc, _, _ = run(w)
+        self.assertEqual((rc, w.deleted), (0, [50, 5, 1]))
 
     def test_f14_changed_tags_stop_all_further_deletes(self):
         """Kills skipping only the changed version: deleting its children would break the new release."""
@@ -399,6 +481,48 @@ class Guard(unittest.TestCase):
                 g(m, u, {})
         self.assertEqual(sent, [])
         self.assertEqual(g("DELETE", base + "ziftbook%2Fbackend/versions/12", {})[0], 204)
+
+    def test_delete_url_is_fullmatched_against_known_packages(self):
+        """Kills prefix/path-only matching: traversal, unknown package, query, fragment, trailing newline are refused."""
+        sent = []
+        g = gr.guarded(lambda m, u, h: sent.append((m, u)) or (204, {}, b""))
+        base = "https://api.github.com" + ORG
+        for u in (base + "..%2Fx/versions/1", base + "../versions/1", base + "other%2Fbackend/versions/1",
+                  base + "ziftbook%2Fbackend/versions/1?a=b", base + "ziftbook%2Fbackend/versions/1#f",
+                  base + "ziftbook%2Fbackend/versions/1\n"):
+            with self.assertRaises(gr.Abort, msg=u):
+                g("DELETE", u, {})
+        self.assertEqual(sent, [])
+
+    def test_get_only_api_github_and_ghcr_hosts(self):
+        """Kills an open GET: another host (or scheme) never leaves the process."""
+        sent = []
+        g = gr.guarded(lambda m, u, h: sent.append(u) or (200, {}, b"{}"))
+        for u in ("https://evil.example/x", "http://api.github.com/x", "https://api.github.com.evil.example/x"):
+            with self.assertRaises(gr.Abort, msg=u):
+                g("GET", u, {})
+        self.assertEqual(sent, [])
+        g("GET", "https://ghcr.io/token", {})
+        g("GET", "https://api.github.com/orgs/x", {})
+
+    def test_transport_does_not_follow_redirects(self):
+        """Kills following a 3xx (a redirect could carry the bearer elsewhere): the 302 comes back as a status."""
+        import http.server
+        import threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200 if self.path == "/elsewhere" else 302)
+                self.send_header("Location", "/elsewhere")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.assertEqual(gr.urlopen_http("GET", f"http://127.0.0.1:{srv.server_port}/", {})[0], 302)
 
 
 if __name__ == "__main__":

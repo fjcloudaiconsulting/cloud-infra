@@ -22,9 +22,9 @@ on:
         options: [all, ziftbook, tbd]
         default: all
       max_deletes:
-        description: Abort (zero deletes) if the plan exceeds this many
+        description: Abort (zero deletes) if any deleting package's plan exceeds this many
         type: number
-        default: 300
+        default: 400
 
 concurrency:
   group: ghcr-retention
@@ -39,7 +39,7 @@ env:
 jobs:
   retention:
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
