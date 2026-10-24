@@ -39,6 +39,8 @@ aws s3 cp "s3://$B/$M" manifest.json && jq . manifest.json   # date, tables, bot
 
 For an older night, set `M` to that night's manifest key. For a real restore, check that `date`
 predates the loss and `tables` is above 0: a run during the outage can upload a valid but empty set.
+After an incident, pick the newest set written *before the incident began*, not the newest overall,
+because any set written once the cluster was compromised may carry changes made during it.
 
 ## 2. Scratch servers (drill only)
 
@@ -97,8 +99,9 @@ The images are the ones `mysql.yaml`, [`clusters/hetzner/data/db-backup.yaml`](.
 
 ```bash
 POD=mysql   # postgres for ziftbook-postgres and ziftbook-prod-postgres
-# SQL on stdin, run as the database superuser over the pod's socket.
-my() { kubectl -n "$NS" exec -i "$POD" -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -NB "$@"' sh "$@"; }
+# SQL on stdin, run as the database superuser over the pod's socket. --binary-mode: the mysql client
+# otherwise runs `\!` and `system` lines from whatever it reads, backup content included (DATA-01).
+my() { kubectl -n "$NS" exec -i "$POD" -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --binary-mode -uroot -NB "$@"' sh "$@"; }
 pg() { kubectl -n "$NS" exec -i "$POD" -- psql -U postgres -XAtq -v ON_ERROR_STOP=1 "$@"; }
 for k in dump grants; do
   key=$(jq -r ".$k.key" manifest.json) sha=$(jq -r ".$k.sha256" manifest.json)
@@ -108,6 +111,11 @@ done
 ```
 
 Expect `/tmp/dump.sql.gz: OK` and `/tmp/grants.sql.gz: OK`. Anything else: stop, try an older night.
+
+The manifest's SHA256 proves the file is the copy the manifest names, not who wrote it: the same
+identity writes the dump, its hash and the manifest, so a set written while the cluster was
+compromised can still check out here (DATA-04). This is why step 1 prefers a set from before the
+incident, MySQL replays with `--binary-mode`, and the Postgres files are scanned before replay.
 
 ## 4. Restore
 
@@ -120,12 +128,44 @@ for every `tbd` database name in this step and in step 5, or the staging data la
 
 ```bash
 kubectl -n "$NS" exec "$POD" -- sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
-  gzip -dc /tmp/grants.sql.gz | mysql -uroot &&
-  mysql -uroot -e "CREATE DATABASE IF NOT EXISTS tbd" &&
-  gzip -dc /tmp/dump.sql.gz | mysql -uroot tbd && echo restored'
+  gzip -dc /tmp/grants.sql.gz | mysql --binary-mode -uroot &&
+  mysql --binary-mode -uroot -e "CREATE DATABASE IF NOT EXISTS tbd" &&
+  gzip -dc /tmp/dump.sql.gz | mysql --binary-mode -uroot tbd && echo restored'
 ```
 
-**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). The globals recreate every role, so `role "postgres" already
+**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). `psql` runs backslash meta-commands
+(`\!` runs a shell command) and, as superuser, `COPY ... FROM/TO PROGRAM`, so it would execute code a
+crafted set carries (DATA-01). Scan both files first and abort if either is refused. Load the scanner
+into the pod (its single quotes do not survive a nested `sh -c`):
+
+```bash
+kubectl -n "$NS" exec -i "$POD" -- sh -c 'cat >/tmp/scan.awk' <<'AWK'
+# BEGIN pg-restore-scan — tests/test_restore_runbook.py extracts and exercises this program.
+# Refuse a gunzipped Postgres backup that carries anything psql would act on beyond what pg_dump and
+# pg_dumpall 18 emit. Lines inside a COPY ... FROM stdin data block are opaque data (psql does not
+# interpret them), so they are skipped; everything else is checked. Exit non-zero on the first refusal.
+function refuse(why) { print "SCAN REFUSED (" why "): " $0 > "/dev/stderr"; exit 1 }
+# A COPY ... FROM stdin data block runs until a line that is exactly \. — its rows are data, not SQL.
+!in_copy && /^COPY .* FROM stdin;[ \t]*$/ { in_copy = 1; next }
+in_copy && /^\\\.[ \t]*$/ { in_copy = 0; next }
+in_copy { next }
+# Outside a data block a leading backslash is a client meta-command: allow only the three 18 emits.
+/^\\/ { if ($0 ~ /^\\(connect|restrict|unrestrict)([ \t]|$)/) next; refuse("client meta-command") }
+# COPY ... FROM/TO PROGRAM runs a shell as the server; pg_dump never writes it.
+/FROM PROGRAM/ || /TO PROGRAM/ { refuse("COPY ... PROGRAM") }
+# The only legitimate SUPERUSER line is the postgres role restoring itself (pg_dumpall --globals-only).
+/^ALTER ROLE postgres WITH SUPERUSER / { next }
+{ t = $0; gsub(/NOSUPERUSER/, "", t); if (t ~ /SUPERUSER/) refuse("SUPERUSER grant") }
+/^ALTER ROLE postgres([ \t]|$)/ { refuse("ALTER ROLE postgres") }
+# END pg-restore-scan
+AWK
+kubectl -n "$NS" exec "$POD" -- sh -c '
+  for k in grants dump; do
+    gzip -dc "/tmp/$k.sql.gz" | awk -f /tmp/scan.awk || { echo "!! refused /tmp/$k.sql.gz; do not replay" >&2; exit 1; }
+  done' && echo "scan passed"
+```
+
+Replay only after `scan passed`. The globals recreate every role, so `role "postgres" already
 exists` is the one expected error; the dump carries its own `CREATE DATABASE`.
 
 ```bash

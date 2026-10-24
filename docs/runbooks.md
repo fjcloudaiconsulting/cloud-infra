@@ -6,7 +6,10 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 (`~/.kube/hetzner`, over NetBird) and never prints a secret value.
 
 Database restores are
-[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md).
+[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
+set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
+runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql`, so backup
+content cannot run commands during recovery.
 
 ## Follow Flux and rollouts
 
