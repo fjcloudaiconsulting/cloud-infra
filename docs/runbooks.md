@@ -89,7 +89,7 @@ pass closes it. The failure says which step failed:
 |---|---|---|
 | `never converged (live X, expected Y)` | The new backend never served: Flux did not apply, the image did not pull, the migration or the pod crashed. `live none` means the app was down | [Follow Flux and rollouts](#follow-flux-and-rollouts): `flux get kustomizations`, `kubectl -n <namespace> get pods,events` |
 | `frontend GET / returned N` (`/robots.txt` for `tbd-staging`) | The backend serves, the frontend does not | `kubectl -n <namespace> get pods -l app=frontend`, its logs |
-| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (Ziftbook: `/api/health/dependencies`) and the backend logs |
+| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (TBD: in the cluster only, e.g. `kubectl -n tbd-prod port-forward deploy/backend 8000`, INF-09; Ziftbook: `/api/health/dependencies`) and the backend logs |
 | `could not fetch ...` | The GitHub API did not return the app's smoke script at that tag | The tag exists in the app repo, then re-run |
 | `bad backend tag` | The manifest has no plain `vX.Y.Z` backend tag | The manifest |
 
