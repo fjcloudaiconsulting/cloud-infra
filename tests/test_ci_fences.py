@@ -120,5 +120,62 @@ class KubeconformSchemasPinned(unittest.TestCase):
         self.assertTrue(any("/datreeio/CRDs-catalog/" in loc for loc in locs), locs)
 
 
+# GHA-08: paths whose change reaches CI, cluster-admin, the backup chain or the hosts.
+TIER0 = (".github/", "renovate.json", "clusters/hetzner/flux-system/", "clusters/hetzner/system-upgrade/",
+         "clusters/hetzner/netbird/", "terraform/", "aws/", "ansible/", ".sops.yaml")
+OWNER = re.compile(r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:/[A-Za-z0-9._-]+)?|[^@\s]+@[^@\s]+\.[a-z]+")
+
+
+def codeowners_rules(text):
+    """[(pattern, owners)] in file order; raises on syntax GitHub's CODEOWNERS does not accept."""
+    rules = []
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.split(" #")[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        pattern, *owners = line.split()
+        if pattern.startswith("!") or "[" in pattern or "\\" in pattern:
+            raise ValueError(f"line {n}: negation, character ranges and escapes are not supported: {pattern}")
+        bad = [o for o in owners if not OWNER.fullmatch(o)]
+        if not owners or bad:
+            raise ValueError(f"line {n}: not an owner: {bad or 'none'}")
+        rules.append((pattern, owners))
+    return rules
+
+
+def owners_of(rules, path):
+    """Owners of a repo path by the last matching rule (anchored patterns only: `/dir/` or `/file`)."""
+    found = []
+    for pattern, owners in rules:
+        if not pattern.startswith("/") or "*" in pattern:
+            raise ValueError(f"use an anchored literal pattern here: {pattern}")
+        p = pattern[1:]
+        if path == p or (p.endswith("/") and path.startswith(p)):
+            found = owners
+    return found
+
+
+class CodeOwners(unittest.TestCase):
+    """GHA-08: the owner reviews every change to a tier-0 path once the main ruleset requires code-owner review."""
+
+    def test_tier0_paths_are_owned(self):
+        rules = codeowners_rules((ROOT / ".github/CODEOWNERS").read_text())
+        for path in TIER0:
+            with self.subTest(path):
+                self.assertTrue((ROOT / path).exists(), f"{path} no longer exists: update TIER0 and CODEOWNERS")
+                probe = path + "x" if path.endswith("/") else path
+                self.assertEqual(owners_of(rules, probe), ["@flamarion"])
+
+    def test_parser_rejects_what_github_ignores(self):
+        for line in ("!/x/ @flamarion", "/x/[ab] @flamarion", "/x/", "/x/ flamarion"):
+            with self.subTest(line):
+                with self.assertRaises(ValueError):
+                    codeowners_rules(line)
+        rules = codeowners_rules("# c\n/a/ @flamarion\n/a/b @org/team  # note\n")
+        self.assertEqual(owners_of(rules, "a/x"), ["@flamarion"])
+        self.assertEqual(owners_of(rules, "a/b"), ["@org/team"])  # the last match wins
+        self.assertEqual(owners_of(rules, "b"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

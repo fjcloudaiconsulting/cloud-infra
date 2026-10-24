@@ -115,6 +115,12 @@ cloud-infra `main` also has a ruleset with **no bypass** that requires `Terrafor
 (strict), so not even an admin merge goes past a red check (INFRA-107, created 2026-10-23). A staging bump that Renovate
 automerges as a branch still lands, because the pushed commit already carries both green checks.
 
+`.github/CODEOWNERS` (GHA-08) names the owner on the tier-0 paths: `.github/`, `renovate.json`, `flux-system`,
+`system-upgrade`, `netbird`, `terraform/`, `aws/`, `ansible/` and `.sops.yaml`. It only requests a review until the
+`main` pull-request ruleset turns on **Require review from Code Owners** (owner, ruleset setting). With a single owner,
+the owner's own PRs to those paths then need a bypass or a second code owner: decide that before turning it on. A
+staging automerge touches none of these paths.
+
 ### Tag protection
 
 Git release tags `v*` are immutable by policy. Each repo below has a ruleset `tag protection` on
