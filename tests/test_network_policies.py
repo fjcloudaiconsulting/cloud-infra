@@ -1,15 +1,19 @@
-"""Fences on the NetworkPolicies between namespaces: which pods reach the database servers in `data` (K8S-04).
+"""Fences on the NetworkPolicies between namespaces: which pods reach the database servers in `data` (K8S-04) and
+what the app namespaces may reach outside the pod network (K8S-07).
 
-Stdlib only: `python3 -m unittest discover -s tests`. Manifests are read with test_tbd_manifests' parser. The sets the
-policies must admit are derived from the workload manifests, so a new database client or tunnel route fails here until
-its policy follows.
+Stdlib only: `python3 -m unittest discover -s tests`. Manifests are read with test_tbd_manifests' parser, Terraform
+with test_tbd_edge's helpers. The sets the policies must admit are derived from the workload manifests and the
+Terraform, so a new database client or a renumbered network fails here until its policy follows.
 """
+import ipaddress
 import re
 import unittest
 
-from test_tbd_manifests import containers, manifests, workloads
+from test_tbd_edge import TF, resource_body
+from test_tbd_manifests import POD_CIDR, containers, manifests, workloads
 
 APP_NAMESPACES = ("tbd-prod", "tbd-staging", "ziftbook-prod", "ziftbook-staging")
+IMDS = ipaddress.ip_network("169.254.169.254/32")
 NS_LABEL = "kubernetes.io/metadata.name"
 # The server each app's namespaces use. The URLs sit in SOPS Secrets, so the engine is not read from them.
 SERVER = {"tbd": "mysql", "ziftbook": "postgres"}
@@ -93,7 +97,7 @@ def reads_database_url(namespace, container):
 
 
 def database_clients(namespace):
-    """The `app` labels of the workloads in an app namespace whose pods (init containers included) read a database URL."""
+    """The `app` labels of an app namespace's workloads whose pods (init containers included) read a database URL."""
     return {pod_labels(d).get("app") for _, d in workloads(namespace)
             if any(reads_database_url(namespace, c) for c in containers(d))}
 
@@ -108,6 +112,18 @@ def server_policy(server):
 
 def ingress_peers(spec):
     return [p for rule in spec.get("ingress") or [] for p in rule.get("from") or []]
+
+
+def hetzner_network():
+    """The nodes' private network (`hcloud_network.main` ip_range) and the node addresses in `local.nodes`."""
+    text = (TF / "hetzner/main.tf").read_text()
+    m = re.search(r'(?m)^\s*ip_range\s*=\s*"([^"]+)"', resource_body(text, "hcloud_network", "main"))
+    if not m:
+        raise AssertionError("hcloud_network.main has no ip_range")
+    nodes = [ipaddress.ip_address(ip) for ip in re.findall(r'\bip\s*=\s*"([^"]+)"', text)]
+    if not nodes:
+        raise AssertionError("no node addresses in terraform/hetzner/main.tf")
+    return ipaddress.ip_network(m.group(1)), nodes
 
 
 # ---- tests --------------------------------------------------------------------------------------------------------
@@ -134,7 +150,8 @@ class DatabaseClientsOnly(unittest.TestCase):
             admitted = {}
             for peer in ingress_peers(server_policy(server)):
                 if "namespaceSelector" in peer:
-                    admitted.setdefault(named_namespace(peer), set()).update(app_allowlist(peer.get("podSelector") or {}))
+                    apps = app_allowlist(peer.get("podSelector") or {})
+                    admitted.setdefault(named_namespace(peer), set()).update(apps)
             want = {ns: apps for ns, apps in clients.items() if ns.split("-")[0] == app}
             self.assertEqual(admitted, want, server)
 
@@ -152,6 +169,36 @@ class DatabaseClientsOnly(unittest.TestCase):
                 self.assertTrue(any(selects(p["podSelector"], pod_labels(d)) for p in same_ns),
                                 f"data {d['kind']}/{d['metadata']['name']} is not admitted to {server}")
         self.assertTrue({("db-backup", "mysql"), ("db-backup", "postgres")} <= seen, seen)
+
+
+class AppEgressSkipsTheNodes(unittest.TestCase):
+    """K8S-07: the app namespaces' egress to addresses (ipBlock) leaves out the node network and instance metadata.
+    Pods, and Services (DNATed to pod addresses before the policy applies), stay reachable through a pod peer."""
+
+    def test_node_network_holds_the_nodes_and_not_the_pods(self):
+        net, nodes = hetzner_network()
+        for ip in nodes:
+            self.assertIn(ip, net)
+        self.assertFalse(net.overlaps(ipaddress.ip_network(POD_CIDR)), "excepting the node network would cut pods")
+
+    def test_every_app_namespace_excepts_the_node_network(self):
+        net, _ = hetzner_network()
+        for ns in APP_NAMESPACES:
+            egress = [s for s in policies(ns).values() if "Egress" in s["policyTypes"]]
+            self.assertTrue(any(s["podSelector"] == {} for s in egress), f"{ns}: no egress policy for every pod")
+            for s in egress:
+                for rule in s.get("egress") or []:
+                    # A rule without `to` allows every address, the node network included.
+                    self.assertTrue(rule.get("to"), f"{ns}: egress rule without `to`")
+                    for peer in rule["to"]:
+                        if "ipBlock" not in peer:
+                            continue
+                        cidr = ipaddress.ip_network(peer["ipBlock"]["cidr"])
+                        excepted = [ipaddress.ip_network(e) for e in peer["ipBlock"].get("except") or []]
+                        for target in (net, IMDS):
+                            if cidr.overlaps(target):
+                                self.assertTrue(any(target.subnet_of(e) for e in excepted),
+                                                f"{ns}: ipBlock {cidr} does not except {target}")
 
 
 if __name__ == "__main__":

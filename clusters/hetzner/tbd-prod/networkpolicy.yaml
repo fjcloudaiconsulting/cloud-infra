@@ -1,8 +1,9 @@
 # Ingress to tbd-prod is deny-by-default. The Cloudflare Tunnel (cloudflared namespace, INFRA-175; no Traefik on this
 # cluster) reaches the frontend, and the backend for /api and /health (the tunnel routes; /ready stays internal, INF-09).
 # Nothing else reaches the backend (INF-01): the frontend makes no server-side backend calls since tbd TBD-624. The
-# scheduler takes no traffic. Egress is open except instance metadata (INFRA-43). Node-local traffic bypasses these policies (see data/networkpolicy.yaml); the data
-# policy admits the backend and the scheduler to MySQL.
+# scheduler takes no traffic. Egress is open except instance metadata (INFRA-43) and the node network. Node-local
+# traffic bypasses these policies (see data/networkpolicy.yaml); the data policy admits the backend and the scheduler
+# to MySQL.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -55,6 +56,8 @@ spec:
         - port: 8000
 ---
 # Pods are listed separately because ipBlock is meant for addresses outside the cluster.
+# The node network (hcloud_network.main in terraform/hetzner) is excepted too: no pod here talks to a node (no API
+# token, no hostNetwork peer). Pods, and Services once DNATed to their pod addresses, match the namespace peer.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -68,4 +71,4 @@ spec:
         - namespaceSelector: {}
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
+            except: [169.254.169.254/32, 10.0.0.0/16]

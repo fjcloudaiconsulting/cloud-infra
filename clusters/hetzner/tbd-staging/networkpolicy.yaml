@@ -1,6 +1,6 @@
 # Ingress to tbd-staging is deny-by-default. The only way in is the Cloudflare Tunnel (cloudflared namespace, INFRA-173;
 # no Traefik on this cluster), to the frontend, the backend and MCP; the frontend makes no backend calls (INF-01). Egress
-# is open except instance metadata.
+# is open except instance metadata and the node network.
 # data/networkpolicy.yaml admits the backend and MCP to MySQL only. Node-local traffic bypasses these policies.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -76,6 +76,8 @@ spec:
         - port: 8001
 ---
 # Pods are listed separately because ipBlock is meant for addresses outside the cluster.
+# The node network (hcloud_network.main in terraform/hetzner) is excepted too: no pod here talks to a node (no API
+# token, no hostNetwork peer). Pods, and Services once DNATed to their pod addresses, match the namespace peer.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -89,4 +91,4 @@ spec:
         - namespaceSelector: {}
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
+            except: [169.254.169.254/32, 10.0.0.0/16]

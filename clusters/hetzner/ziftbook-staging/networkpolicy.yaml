@@ -1,7 +1,8 @@
 # Ingress to ziftbook-staging is deny-by-default. The Cloudflare Tunnel (cloudflared namespace, INFRA-173; no Traefik on
 # this cluster) reaches the frontend; only the frontend reaches the backend,
 # which is what makes trusting X-Forwarded-For from the pod CIDR safe (backend.yaml). Egress is open except instance
-# metadata (egress-no-imds). Node-local traffic bypasses these policies (see data/networkpolicy.yaml).
+# metadata and the node network (egress-no-imds). Node-local traffic bypasses these policies (see
+# data/networkpolicy.yaml).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -52,6 +53,8 @@ spec:
 ---
 # Egress is open except the instance metadata endpoint: staging images automerge, and nothing here needs IMDS.
 # Pods are listed separately because ipBlock is meant for addresses outside the cluster.
+# The node network (hcloud_network.main in terraform/hetzner) is excepted too: no pod here talks to a node (no API
+# token, no hostNetwork peer). Pods, and Services once DNATed to their pod addresses, match the namespace peer.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -65,4 +68,4 @@ spec:
         - namespaceSelector: {}
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
+            except: [169.254.169.254/32, 10.0.0.0/16]

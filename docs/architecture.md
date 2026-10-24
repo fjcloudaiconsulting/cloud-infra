@@ -108,6 +108,9 @@ Three Hetzner CAX21 ARM64 servers in nbg1 run k3s HA (`terraform/hetzner`, host 
 The app namespaces enforce Pod Security restricted, `data` baseline. Every app namespace has a LimitRange with default memory limits, and its `default`
 ServiceAccount pulls from GHCR through `ghcr-pull`. Manifests:
 [`clusters/hetzner/namespaces/`](../clusters/hetzner/namespaces/).
+Their egress (`egress-no-imds` in each `networkpolicy.yaml`) reaches every pod and Service and the internet, except
+instance metadata and the node network: no app pod uses the Kubernetes API or a node address. A workload that
+needs one must get its own egress rule first.
 
 ## Data stores
 
