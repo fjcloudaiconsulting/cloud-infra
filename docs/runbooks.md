@@ -509,8 +509,9 @@ so the order never breaks it.
 answers 302 to `*.cloudflareaccess.com`; `/health` and `/robots.txt` answer 200; `/api/` answers 302.
 MCP paths: `curl -s https://dev.thebetterdecision.com/.well-known/oauth-protected-resource/mcp` returns the backend's
 JSON, `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://dev.thebetterdecision.com/mcp` answers 401 from the MCP
-server (not 302), `curl -s -X POST https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
-(not 302), and `/api/v1/auth/me` still answers 302.
+server (not 302), `curl -s -d '' https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
+(not 302; `-d ''` sends `Content-Length: 0`, a bare `-X POST` sends no length and gets the body rule's 403), and
+`/api/v1/auth/me` still answers 302.
 **Lockout:** applications edited in the dashboard are drift that the next apply reverts; to open staging again, remove
 `cloudflare_zero_trust_access_application.tbd_staging` in a PR.
 
