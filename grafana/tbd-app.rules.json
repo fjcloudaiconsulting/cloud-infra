@@ -1,0 +1,132 @@
+{
+  "title": "tbd-app",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "tbd-csp-reports-dropped",
+      "title": "TbdCspReportsDropped",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 4500,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (outcome) (tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=\"global_budget\"} - (last_over_time(tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=\"global_budget\"}[1d] offset 1h) or tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=\"global_budget\"} * 0))",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD production dropped {{ printf \"%.0f\" $values.A.Value }} CSP report(s) in the last hour: the global budget was spent, so later reports are not stored. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
+    },
+    {
+      "uid": "tbd-csp-report-sink-failing",
+      "title": "TbdCspReportSinkFailing",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 4500,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (outcome) (tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=~\"counter_unavailable|write_failed\"} - (last_over_time(tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=~\"counter_unavailable|write_failed\"}[1d] offset 1h) or tbd_security_csp_reports_total{service_name=\"tbd-api\", deployment_environment_name=\"production\", outcome=~\"counter_unavailable|write_failed\"} * 0))",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD production could not store {{ printf \"%.0f\" $values.A.Value }} CSP report(s) in the last hour ({{ $labels.outcome }}): the sink fails open. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
+    }
+  ]
+}
