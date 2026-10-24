@@ -128,7 +128,7 @@ spec:
           # Dump containers never fail the pod, so upload always runs and decides the Job's outcome.
           initContainers:
             - name: mysql-dump
-              image: mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+              image: mysql:8.4.13@sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69
               command: [bash, -c, 'bash /scripts/mysql-dump.sh || echo "!! mysql dump failed" >&2; exit 0']
               env:
                 # TBD production data (here since INFRA-175): an empty dump fails the set.
@@ -158,7 +158,7 @@ spec:
             # TBD staging (INFRA-67): same script, its own set. Runs after the production dump and never fails the
             # pod, so a broken staging database costs only its own set (and the Job's status that night).
             - name: mysql-dump-staging
-              image: mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+              image: mysql:8.4.13@sha256:76f0358884cb92d9a086d24e5671c38048d3fef40f2588703d73eb55392d6b69
               # timeout: a hung staging dump must not run out the Job's deadline before production uploads.
               command: [bash, -c, 'timeout 600 bash /scripts/mysql-dump.sh || echo "!! mysql staging dump failed" >&2; exit 0']
               env:
