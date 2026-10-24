@@ -878,6 +878,28 @@ misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`,
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
 
+### TBD app alerts
+
+Rule group `tbd-app` (folder Platform) watches the TBD backend's CSP report sink in production
+(`tbd_security_csp_reports_total`, service `tbd-api`; the counter exists once prod runs a tbd release that includes it, expected 0.303.1). A series appears only on the
+first report with that `outcome`, so the rules count new reports the same way as the Ziftbook counter rules (now
+minus the last value seen up to a day before the window, or 0 if the series is newer) and treat no data as OK.
+
+| Alert | Fires when | Severity, repeat |
+|---|---|---|
+| `TbdCspReportsDropped` | any CSP report dropped in the last hour because the global budget was spent (`outcome="global_budget"`): later reports in that window are not stored | warning, daily |
+| `TbdCspReportSinkFailing` | any CSP report not stored in the last hour because the counter store or the write failed (`outcome` `counter_unavailable` or `write_failed`); the sink fails open | warning, daily |
+
+When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
+of dropped reports is either a real CSP regression (a release that blocks its own assets) or someone flooding the
+report endpoint; the app decides which, not infra.
+
+Apply as under [Memory alerts](#memory-alerts):
+`api PUT /api/v1/provisioning/folder/platform/rule-groups/tbd-app grafana/tbd-app.rules.json`. The metric name is
+not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
+`count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
+returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
+
 ### Find a request's logs
 
 Ziftbook's log lines (staging and prod) are in Grafana Cloud Loki for 14 days (ZIF-89). Grafana > Explore > the stack's
