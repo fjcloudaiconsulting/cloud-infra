@@ -218,6 +218,9 @@ name is pinned in an AWS trust policy: never rename it.
 | `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): a project token, held only in the workspace. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22) and `deploy_ssh_public_key` (`ssh-ed25519 ...`, not sensitive). Both have no default, so a plan without them fails. The Hetzner project and its tokens are hand-made |
 
 The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
+Every stack requires the same `~> 1.16.0` (a test holds it to the CI pin), so a workspace left on another minor fails
+its plan. Lock files carry `h1:` hashes for both platforms in use: refresh them with
+`terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`.
 
 A speculative plan runs with the workspace's own credentials. `tests/test_terraform_fences.py` keeps every stack to
 the providers and provider arguments listed in that file and refuses `external` and `http` data sources, remote

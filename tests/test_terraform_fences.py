@@ -619,5 +619,86 @@ class BackupRolePolicies(unittest.TestCase):
         ])
 
 
+# Lock entries recorded with a single h1: hash before this fence, in a stack another change owns. Keyed on the
+# version, so the next bump of either provider must record both platforms.
+SINGLE_H1 = {("cloudflare-tokens", "registry.terraform.io/cloudflare/cloudflare", "5.26.0"),
+             ("cloudflare-tokens", "registry.terraform.io/hashicorp/tfe", "0.81.0")}
+
+
+def lock_problems(stack_name, text):
+    """A lock file must hash every provider for both platforms in use: linux_amd64 (HCP Terraform, CI) and
+    darwin_arm64 (the owner's machine). The format does not say which platform an h1: hash is for, so the check is
+    two or more h1: hashes per provider (the zh: hashes cover the registry's zips for every platform)."""
+    problems = []
+    providers = re.findall(r'(?ms)^provider "([^"]+)" \{\n(.*?)^\}', text)
+    if not providers:
+        problems.append(f"{stack_name}: the lock file records no provider")
+    for address, body_ in providers:
+        version = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', body_)
+        h1 = re.findall(r'"h1:[A-Za-z0-9+/=]+"', body_)
+        if len(h1) < 2 and (stack_name, address, version and version.group(1)) not in SINGLE_H1:
+            problems.append(f"{stack_name}: {address} has {len(h1)} h1: hash(es); run terraform providers lock "
+                            "-platform=linux_amd64 -platform=darwin_arm64")
+        if normalize(address) not in PROVIDER_ALLOWLIST:
+            problems.append(f"{stack_name}: the lock file records {address}, not in the allowlist")
+    return problems
+
+
+def version_problems(constraints, ci_workflow):
+    """Every stack requires one and the same `~> X.Y.Z`, and CI's pinned Terraform satisfies it."""
+    ci = re.search(r"terraform_version:\s*v?(\d+)\.(\d+)\.(\d+)", ci_workflow)
+    if not ci:
+        return ["ci.yml pins no terraform_version"]
+    problems = []
+    for stack_name, found in sorted(constraints.items()):
+        m = re.fullmatch(r"~> (\d+)\.(\d+)\.(\d+)", found[0]) if len(found) == 1 else None
+        if not m or m.group(1, 2) != ci.group(1, 2) or int(ci.group(3)) < int(m.group(3)):
+            problems.append(f"{stack_name}: required_version {found} must be one \"~> X.Y.Z\" that CI's "
+                            f"Terraform {'.'.join(ci.groups())} satisfies")
+    if len({tuple(f) for f in constraints.values()}) > 1:
+        problems.append(f"the stacks require different Terraform versions: {constraints}")
+    return problems
+
+
+def stacks():
+    """{stack name: directory} of every root stack directly under terraform/."""
+    return {d.name: d for d in sorted(TERRAFORM.iterdir()) if d.is_dir() and any(d.glob("*.tf"))}
+
+
+class LockFilesAndVersions(unittest.TestCase):
+    def test_repo_lock_files_hash_both_platforms(self):
+        self.assertGreaterEqual(len(stacks()), 5)
+        for name, d in stacks().items():
+            with self.subTest(name):
+                self.assertTrue((d / ".terraform.lock.hcl").is_file(), f"{name} has no lock file")
+                self.assertEqual(lock_problems(name, (d / ".terraform.lock.hcl").read_text()), [])
+
+    def test_single_platform_lock_fails(self):
+        hetzner = (TERRAFORM / "hetzner/.terraform.lock.hcl").read_text()
+        first, *rest = re.findall(r'\s*"h1:[^"]+",', hetzner)
+        self.assertTrue(rest, "fixture needs the hetzner lock with two h1: hashes")
+        one = hetzner.replace(rest[0], "")
+        self.assertIn("has 1 h1: hash(es)", "".join(lock_problems("hetzner", one)))
+        # fence: the exemption is per version, so a bump of an exempt provider must hash both platforms.
+        tokens = (TERRAFORM / "cloudflare-tokens/.terraform.lock.hcl").read_text()
+        bumped = tokens.replace('version     = "0.81.0"', 'version     = "0.82.0"')
+        self.assertNotEqual(bumped, tokens)
+        self.assertIn("hashicorp/tfe has 1 h1", "".join(lock_problems("cloudflare-tokens", bumped)))
+
+    def test_lock_file_with_another_provider_fails(self):
+        lock = 'provider "registry.terraform.io/hashicorp/external" {\n  version = "2.3.5"\n  hashes = [\n' \
+               '    "h1:a=",\n    "h1:b=",\n  ]\n}\n'
+        self.assertIn("not in the allowlist", "".join(lock_problems("x", lock)))
+
+    def test_every_stack_requires_the_terraform_version_ci_pins(self):
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        found = {name: re.findall(r'required_version\s*=\s*"([^"]+)"', "".join(p.read_text() for p in d.glob("*.tf")))
+                 for name, d in stacks().items()}
+        self.assertEqual(version_problems(found, ci), [])
+        self.assertTrue(version_problems({**found, "x": [">= 1.6"]}, ci))
+        self.assertTrue(version_problems({**found, "x": []}, ci))
+        self.assertTrue(version_problems(found, ci.replace("terraform_version: v1.16", "terraform_version: v1.17")))
+
+
 if __name__ == "__main__":
     unittest.main()
