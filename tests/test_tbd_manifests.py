@@ -432,5 +432,26 @@ class CorsAppOriginOnly(unittest.TestCase):
         self.assertGreaterEqual(seen, 3)  # tbd-prod backend and scheduler, tbd-staging backend
 
 
+
+class ProductionMode(unittest.TestCase):
+    """INF-04: every TBD process that loads the backend settings runs with APP_ENV=production, set in the manifest:
+    the API, the migrate init container, the scheduler, MCP and any Job or CronJob added later."""
+
+    def test_every_tbd_settings_process_sets_app_env_production(self):
+        seen = set()
+        for ns in TBD_NAMESPACES:
+            for f, d in workloads(ns):
+                for c in containers(d):
+                    img = tbd_image(c)
+                    if img in (None, "frontend"):  # the frontend does not load the backend settings
+                        continue
+                    seen.add((ns, d["metadata"]["name"], c["name"]))
+                    env = {e.get("name"): e for e in c.get("env") or []}
+                    self.assertEqual(env.get("APP_ENV"), {"name": "APP_ENV", "value": "production"}, where(f, d, c))
+        self.assertTrue({("tbd-prod", "backend", "migrate"), ("tbd-prod", "backend", "backend"),
+                         ("tbd-prod", "scheduler", "scheduler"), ("tbd-staging", "backend", "migrate"),
+                         ("tbd-staging", "backend", "backend"), ("tbd-staging", "mcp", "mcp")} <= seen, seen)
+
+
 if __name__ == "__main__":
     unittest.main()
