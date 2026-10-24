@@ -458,7 +458,8 @@ Service photos (ZIF-133) live in Cloudflare R2, EU jurisdiction, two buckets per
 | `ziftbook-media-<env>` | public read on `img-dev.ziftbook.com` (staging) or `img.ziftbook.com` (prod) only | none; the app sets `Cache-Control` on upload |
 
 The S3 endpoint of an EU bucket is `https://<account id>.eu.r2.cloudflarestorage.com`, set as
-`ZIF_S3_ENDPOINT` on backend and worker (the `.eu` matters: the default endpoint does not see these buckets).
+`ZIF_S3_ENDPOINT` on backend and worker (the `.eu` matters: the default endpoint does not see these buckets). The web
+has it too, with `ZIF_MEDIA_URL`, only for its Content-Security-Policy (ZB-12): keep the three in step.
 Bucket names and the jurisdiction are fixed at creation.
 
 One-time owner steps, in this order:
