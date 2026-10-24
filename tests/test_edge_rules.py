@@ -186,5 +186,46 @@ class BodyLengthRequired(unittest.TestCase):
             self.assertTrue(blocked(h, "POST", p), (h, p))
 
 
+class AuthRateLimitPaths(unittest.TestCase):
+    """EDGE-05: the TBD sign-in and token paths share the zone's edge counter; chatty paths stay out of it."""
+
+    EXPRESSION_MAX = 4096  # Cloudflare's limit on a rule expression, in characters
+
+    def path_lists(self):
+        text = (TF / "cloudflare/rate_limit.tf").read_text()
+        m = re.search(r"(?ms)^\s*auth_rate_limit_paths\s*=\s*\{(.*?)^\s*\}\s*$", text)
+        self.assertIsNotNone(m, "local.auth_rate_limit_paths not found")
+        lists = {k: [hcl_unquote(s) for s in re.findall(HCL_STRING, v)]
+                 for k, v in re.findall(r"(?ms)^\s*(\w+)\s*=\s*\[(.*?)\]", m.group(1))}
+        self.assertEqual(set(lists), {"tbd", "ziftbook"})
+        return text, lists
+
+    def test_tbd_sign_in_and_token_paths_are_counted(self):
+        _, lists = self.path_lists()
+        tbd = lists["tbd"]
+        for path in ("/api/v1/auth/login", "/api/v1/auth/verify", "/api/v1/auth/google/callback",
+                     "/api/v1/auth/sso-stepup/callback", "/api/v1/oauth/token", "/api/v1/oauth/register"):
+            self.assertIn(path, tbd)
+        # One person reaches 20 in 10 s on these (tabs refreshing, typing in sign-up, a burst of CSP reports), and the
+        # counter is the one sign-in uses. The OAuth consent endpoints are not sign-in either.
+        for path in ("/api/v1/auth/refresh", "/api/v1/auth/check-username", "/api/v1/security/csp-report",
+                     "/api/v1/oauth/authorize", "/api/v1/oauth/authorize/context"):
+            self.assertNotIn(path, tbd)
+
+    def test_lists_are_exact_paths_without_duplicates_and_fit_the_expression_limit(self):
+        text, lists = self.path_lists()
+        # The template holds an interpolation with quotes of its own: take the line's outer quotes.
+        body = resource_body(text, "cloudflare_ruleset", "auth_rate_limit")
+        expr = hcl_unquote(re.search(r'(?m)^\s*expression\s*=\s*"(.*)"\s*$', body).group(1))
+        joined = '${join(" ", [for p in each.value : jsonencode(p)])}'
+        self.assertIn(joined, expr)
+        for zone, paths in lists.items():
+            self.assertEqual(len(paths), len(set(paths)), zone)
+            for p in paths:
+                self.assertRegex(p, r"^/[a-z0-9/._-]+$", (zone, p))
+            rendered = expr.replace(joined, " ".join(f'"{p}"' for p in paths))
+            self.assertLessEqual(len(rendered), self.EXPRESSION_MAX, zone)
+
+
 if __name__ == "__main__":
     unittest.main()
