@@ -81,8 +81,13 @@ from one IP (per Cloudflare data center) to those paths gets a 429 from Cloudfla
 address can send to them. The zones are on the Free plan, which allows one such rule per zone and matches on the path only,
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.
 
+A zone custom rule caps request bodies on the TBD app hosts (`app.` and `dev.`, BE-13): a request that declares a
+`Content-Length` over 16 MiB gets Cloudflare's 403 block page. The largest upload TBD accepts is 5 MiB; the backend's
+own caps cover a body sent without a length.
+
 - Terraform: [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf), rate limit in
-  [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf)
+  [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf), body cap in
+  [`terraform/cloudflare/body_limit.tf`](../terraform/cloudflare/body_limit.tf)
 
 ## Node and k3s
 

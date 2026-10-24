@@ -96,5 +96,44 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
         self.assertEqual(route(rules, "x.thebetterdecision.com", "/api/v1/auth/login"), "http_status:404")
 
 
+class BodyLimit(unittest.TestCase):
+    """BE-13: Cloudflare refuses a request to a TBD app host whose declared body is over the cap."""
+
+    IMPORT_UPLOAD_CAP = 5 * 1024 * 1024  # tbd backend MAX_UPLOAD_BYTES, the largest file it accepts
+    CL = 'http.request.headers["content-length"][0]'
+
+    def rule(self):
+        body = resource_body((TF / "cloudflare/body_limit.tf").read_text(), "cloudflare_ruleset", "tbd_body_limit")
+        self.assertRegex(body, r"zone_id\s*=\s*cloudflare_zone\.tbd\.id")
+        self.assertRegex(body, r'phase\s*=\s*"http_request_firewall_custom"')
+        self.assertRegex(body, r'action\s*=\s*"block"')
+        self.assertRegex(body, r"enabled\s*=\s*true")
+        return hcl_unquote(re.search(rf"expression\s*=\s*{HCL_STRING}", body).group(1))
+
+    def test_expression_covers_both_hosts_and_caps_above_the_largest_upload(self):
+        expr = self.rule()
+        cl = re.escape(self.CL)
+        m = re.fullmatch(
+            rf'\(http\.host in \{{"([^"]+)" "([^"]+)"\}}\) and \(len\({cl}\) gt (\d+) or '
+            rf'\(len\({cl}\) eq (\d+) and {cl} gt "(\d+)"\)\)', expr)
+        self.assertIsNotNone(m, expr)
+        hosts, longer, same, cap = {m.group(1), m.group(2)}, int(m.group(3)), int(m.group(4)), m.group(5)
+        self.assertEqual(hosts, {"app.thebetterdecision.com", "dev.thebetterdecision.com"})
+        # A string compare is a number compare only between strings of one length.
+        self.assertEqual(longer, len(cap))
+        self.assertEqual(same, len(cap))
+        self.assertEqual(int(cap), 16 * 1024 * 1024)
+        self.assertGreaterEqual(int(cap), 3 * self.IMPORT_UPLOAD_CAP)
+
+        def blocked(length):
+            v = str(length)
+            return len(v) > longer or (len(v) == same and v > cap)
+
+        for n in (0, 1, 9, 2_000_000, self.IMPORT_UPLOAD_CAP + 64 * 1024, 9_999_999, int(cap)):
+            self.assertFalse(blocked(n), n)
+        for n in (int(cap) + 1, 20_000_000, 99_999_999, 100_000_000, 100 * 1024 * 1024):
+            self.assertTrue(blocked(n), n)
+
+
 if __name__ == "__main__":
     unittest.main()
