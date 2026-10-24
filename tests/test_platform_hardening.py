@@ -1,5 +1,5 @@
 """Fences on the platform layer: Flux's RBAC and images (clusters/hetzner/flux-system), the upgrade controller's
-images (clusters/hetzner/system-upgrade) and ServiceAccount tokens in every pod under clusters/.
+images (clusters/hetzner/system-upgrade), ServiceAccount tokens in every pod under clusters/ and Pod Security levels.
 
 Stdlib only, plus `kubectl kustomize` (or `kustomize build`) for the directories that carry kustomize patches: the
 render is what Flux applies, so these fences read it rather than the vendored upstream files. Without either tool the
@@ -23,6 +23,15 @@ PINNED = re.compile(r"^[a-z0-9][a-z0-9./_-]*:[\w][\w.-]*@sha256:[0-9a-f]{64}$")
 # upgrade controller and the two Flux controllers.
 TOKEN_ALLOWLIST = {("observability", "alloy"), ("system-upgrade", "system-upgrade"),
                    *((FLUX_NS, c) for c in FLUX_CONTROLLERS)}
+PSA = "pod-security.kubernetes.io/"
+# Pod Security `restricted` (latest) admits only these volume types.
+RESTRICTED_VOLUMES = {"configMap", "csi", "downwardAPI", "emptyDir", "ephemeral", "persistentVolumeClaim", "projected",
+                      "secret"}
+SELINUX_TYPES = {"", "container_t", "container_init_t", "container_kvm_t", "container_engine_t"}
+LEVELS = ("privileged", "baseline", "restricted")
+# Privileged namespaces not yet labelled for warn and audit: netbird's Namespace is in netbird/netbird.yaml, which only
+# its owner changes. Drop it from this set once that file carries the labels.
+WARN_AUDIT_PENDING = {"netbird"}
 
 
 # ---- helpers ------------------------------------------------------------------------------------------------------
@@ -82,6 +91,72 @@ def label(doc, key):
     return ((doc.get("metadata") or {}).get("labels") or {}).get(key)
 
 
+def namespaces():
+    """Every Namespace object in git by name, as applied: the rendered one where a kustomization patches it."""
+    out = {name_of(d): d for _, d in cluster_docs() if d.get("kind") == "Namespace"}
+    for rel in (FLUX_NS, "system-upgrade"):
+        out.update({name_of(d): d for d in of_kind(render(rel), "Namespace")})
+    return out
+
+
+def restricted_violations(doc):
+    """Why a workload's pod template fails Pod Security `restricted` (latest), one message per control; [] when it
+    passes. Stricter than the admission check where that is simpler (any sysctl, any non-default procMount)."""
+    spec = pod_spec(doc)
+    psc = spec.get("securityContext") or {}
+    out = [f"spec.{k}" for k in ("hostNetwork", "hostPID", "hostIPC") if spec.get(k)]
+    for v in spec.get("volumes") or []:
+        kinds = set(v) - {"name"}
+        if not kinds <= RESTRICTED_VOLUMES:
+            out.append(f"volume {v.get('name')}: {sorted(kinds - RESTRICTED_VOLUMES)}")
+    if psc.get("sysctls"):
+        out.append("spec.securityContext.sysctls")
+    annotations = ((doc.get("spec") or {}).get("template") or {}).get("metadata", {}).get("annotations") or {}
+    for k, v in annotations.items():
+        if ("apparmor" in k or "seccomp" in k) and str(v).lower() == "unconfined":
+            out.append(f"annotation {k}")
+
+    def common(sc, where):
+        if (sc.get("windowsOptions") or {}).get("hostProcess"):
+            out.append(f"{where}.windowsOptions.hostProcess")
+        se = sc.get("seLinuxOptions") or {}
+        if se.get("user") or se.get("role") or se.get("type", "") not in SELINUX_TYPES:
+            out.append(f"{where}.seLinuxOptions")
+        if (sc.get("appArmorProfile") or {}).get("type") == "Unconfined":
+            out.append(f"{where}.appArmorProfile")
+        if sc.get("runAsUser") == 0:
+            out.append(f"{where}.runAsUser 0")
+
+    common(psc, "spec.securityContext")
+    pod_seccomp = (psc.get("seccompProfile") or {}).get("type")
+    for c in containers(doc) + (spec.get("ephemeralContainers") or []):
+        where = f"container {c.get('name')}"
+        sc = c.get("securityContext") or {}
+        common(sc, where)
+        if sc.get("privileged"):
+            out.append(f"{where}: privileged")
+        if sc.get("allowPrivilegeEscalation") is not False:
+            out.append(f"{where}: allowPrivilegeEscalation is not false")
+        caps = sc.get("capabilities") or {}
+        if "ALL" not in (caps.get("drop") or []):
+            out.append(f"{where}: capabilities do not drop ALL")
+        if set(caps.get("add") or []) - {"NET_BIND_SERVICE"}:
+            out.append(f"{where}: adds capabilities {caps['add']}")
+        if not (sc.get("runAsNonRoot") is True or (sc.get("runAsNonRoot") is None and psc.get("runAsNonRoot") is True)):
+            out.append(f"{where}: runAsNonRoot is not true")
+        if (sc.get("seccompProfile") or {}).get("type", pod_seccomp) not in ("RuntimeDefault", "Localhost"):
+            out.append(f"{where}: seccompProfile is not RuntimeDefault or Localhost")
+        if sc.get("procMount", "Default") != "Default":
+            out.append(f"{where}: procMount")
+        if any(p.get("hostPort") for p in c.get("ports") or []):
+            out.append(f"{where}: hostPort")
+        handlers = [c.get(p) or {} for p in ("livenessProbe", "readinessProbe", "startupProbe")]
+        handlers += list((c.get("lifecycle") or {}).values())
+        if any((h.get(k) or {}).get("host") for h in handlers for k in ("httpGet", "tcpSocket")):
+            out.append(f"{where}: probe or lifecycle host")
+    return out
+
+
 def grants(rule, group, resource, verb):
     """True when an RBAC rule allows `verb` on `resource` in API group `group` (wildcards included)."""
     return (any(g in ("*", group) for g in rule.get("apiGroups") or [])
@@ -110,6 +185,45 @@ class HelperSelfTest(unittest.TestCase):
         for ref in ("rancher/kubectl:v1.36.2", f"rancher/kubectl@{digest}", f"rancher/kubectl:v1@{digest[:-1]}",
                     f"rancher/kubectl:v1@sha256:{'0' * 64}x", f"rancher/kubectl:v1@sha512:{'0' * 64}"):
             self.assertNotRegex(ref, PINNED)
+
+    def test_restricted_checker(self):
+        def pod(**over):
+            c = {"name": "c", "image": "i", "securityContext": {
+                "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}}
+            spec = {"securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
+                    "containers": [c], "volumes": [{"name": "v", "emptyDir": {}}]}
+            for path, value in over.items():
+                *keys, last = path.split(".")
+                node = spec
+                for k in keys:
+                    node = node[int(k)] if isinstance(node, list) else node.setdefault(k, {})
+                if value is None:
+                    node.pop(last, None)
+                else:
+                    node[last] = value
+            return {"kind": "Deployment", "spec": {"template": {"spec": spec}}}
+
+        self.assertEqual(restricted_violations(pod()), [])
+        self.assertEqual(restricted_violations(pod(**{"containers.0.securityContext.capabilities.add":
+                                                      ["NET_BIND_SERVICE"]})), [])
+        bad = {
+            "hostNetwork": True,
+            "volumes": [{"name": "h", "hostPath": {"path": "/"}}],
+            "securityContext.runAsNonRoot": None,
+            "securityContext.seccompProfile": None,
+            "securityContext.runAsUser": 0,
+            "containers.0.securityContext.privileged": True,
+            "containers.0.securityContext.allowPrivilegeEscalation": None,
+            "containers.0.securityContext.capabilities.drop": [],
+            "containers.0.securityContext.capabilities.add": ["SYS_ADMIN"],
+            "containers.0.securityContext.runAsNonRoot": False,
+            "containers.0.securityContext.seccompProfile": {"type": "Unconfined"},
+            "containers.0.ports": [{"containerPort": 80, "hostPort": 80}],
+            "initContainers": [{"name": "init", "image": "i"}],
+        }
+        for path, value in bad.items():
+            with self.subTest(path=path):
+                self.assertNotEqual(restricted_violations(pod(**{path: value})), [])
 
     def test_parse_docs_skips_crds(self):
         text = "kind: CustomResourceDefinition\nspec:\n  x: [a, [b]]\n---\nkind: A\nmetadata:\n  name: a\n"
@@ -220,6 +334,35 @@ class ServiceAccountTokens(unittest.TestCase):
             self.assertIsNone(mount, f"{what}: sets automountServiceAccountToken true for {ns}/{sa}")
             self.assertIn((ns, sa), no_automount, f"{what}: mounts the token of {ns}/{sa}")
         self.assertGreater(seen, 15)
+
+
+class PodSecurity(unittest.TestCase):
+    """K8S-09: every namespace states its Pod Security level, the ones that can enforce restricted do, and the
+    privileged ones at least warn and audit at baseline."""
+
+    def test_every_namespace_enforces_a_level(self):
+        for name, ns in namespaces().items():
+            self.assertIn(label(ns, PSA + "enforce"), LEVELS, name)
+
+    def test_flux_system_and_data_enforce_restricted(self):
+        restricted = {n for n, d in namespaces().items() if label(d, PSA + "enforce") == "restricted"}
+        self.assertLessEqual({FLUX_NS, "data", "cloudflared", *APP_NAMESPACES}, restricted)
+
+    def test_every_pod_in_a_restricted_namespace_meets_restricted(self):
+        restricted = {n for n, d in namespaces().items() if label(d, PSA + "enforce") == "restricted"}
+        seen = set()
+        for where, d in cluster_docs():
+            if d.get("kind") in WORKLOAD_KINDS and namespace_of(d) in restricted:
+                seen.add(namespace_of(d))
+                self.assertEqual(restricted_violations(d), [], f"{where} {d['kind']}/{name_of(d)}")
+        self.assertLessEqual({FLUX_NS, "data", "cloudflared", *APP_NAMESPACES}, seen)
+
+    def test_privileged_namespaces_warn_and_audit_at_baseline(self):
+        for name, ns in namespaces().items():
+            if label(ns, PSA + "enforce") != "privileged" or name in WARN_AUDIT_PENDING:
+                continue
+            for mode in ("warn", "audit"):
+                self.assertIn(label(ns, PSA + mode), ("baseline", "restricted"), f"{name}: {mode}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,9 @@ metadata:
     # Never deleted by Flux: pruning it would take the database volumes with it.
     kustomize.toolkit.fluxcd.io/prune: disabled
   labels:
-    pod-security.kubernetes.io/enforce: baseline
+    # Every pod here (databases, backup, bootstrap Jobs, init containers too) runs non-root with no capabilities and
+    # the runtime's seccomp profile; tests/test_platform_hardening.py keeps each template within restricted (K8S-09).
+    pod-security.kubernetes.io/enforce: restricted
 ---
 apiVersion: v1
 kind: LimitRange

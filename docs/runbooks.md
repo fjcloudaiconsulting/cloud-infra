@@ -1145,8 +1145,9 @@ ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yam
 
 Upgrading Flux later (Renovate ignores `flux-system/`): regenerate the components, and in the same PR move `newTag`
 and `digest` of both `images:` entries in `flux-system/kustomization.yaml` (index digest, as for kubectl in
-[Upgrade k3s](#upgrade-k3s)). `tests/test_platform_hardening.py` fails while a tag differs from the generated file;
-a render error `testing value /rules/<n> failed` means the RBAC patch's rule moved: fix its index.
+[Upgrade k3s](#upgrade-k3s)). `tests/test_platform_hardening.py` fails while a tag differs from the generated file
+or a controller pod falls outside Pod Security restricted, which `flux-system` enforces (a rejected pod would stop
+Flux); a render error `testing value /rules/<n> failed` means the RBAC patch's rule moved: fix its index.
 
 ```bash
 flux install --export --components=source-controller,kustomize-controller > clusters/hetzner/flux-system/gotk-components.yaml
