@@ -47,6 +47,14 @@ class ZiftbookIngress(unittest.TestCase):
                 rules = by_app[app][0]["ingress"]
                 self.assertEqual([(r.get("from"), r.get("ports")) for r in rules], [(frm, ports)], f"{ns} {app}")
 
+    def test_selectors_match_the_pod_labels(self):
+        # A renamed pod label would silently leave its allow policy selecting nothing.
+        for ns in NAMESPACES:
+            apps = {d["metadata"]["name"]: d["spec"]["template"]["metadata"]["labels"].get("app")
+                    for _, d in manifests(ns) if d.get("kind") == "Deployment"}
+            for app in ("frontend", "backend", "worker"):
+                self.assertEqual(apps.get(app), app, f"{ns}: Deployment {app} pod label app")
+
 
 if __name__ == "__main__":
     unittest.main()
