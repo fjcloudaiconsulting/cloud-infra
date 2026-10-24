@@ -104,7 +104,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: alloy
-          image: grafana/alloy:v1.21.0-distroless@sha256:5f109d2671427722972a0eb8dcd115b93821565969e19b934645a4711c98e576
+          image: grafana/alloy:v1.21.2-distroless@sha256:0e512ae8aa9cfa47fadb11c4a6d6e086dceca5e1a7740ab87ab7d58dc87041dd
           args:
             - run
             - /etc/alloy/config.alloy
