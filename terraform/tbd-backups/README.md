@@ -116,6 +116,13 @@ simulate-principal-policy` rather than asserted — 28 checks, all as intended:
 enough that a genuine apply failure is plausible; the fix is a policy update,
 and it is far preferable to the account-admin role this replaced.
 
+`.github/scripts/check-tbd-backups-fences.py` (CI) fails a PR that widens either
+policy: IAM beyond the six backup identities, S3 beyond the bucket, key actions
+beyond the key tagged `component=mysql-offhost-backup`, a verb other than
+Get/List/Describe in the plan policy, or a missing `NeverReadBackupContent` /
+`NeverMintTheK3sUploaderCredentials` Deny. A deliberate widening changes the
+fence in the same PR, where review sees it.
+
 ## The self-authorization hazard, and why it is survivable here
 
 This workspace manages the trust policy that admits this workspace. That is the

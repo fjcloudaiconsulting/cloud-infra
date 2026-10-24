@@ -13,14 +13,18 @@ determined author. Who and what may trigger a plan, and with which credentials, 
 The HCL is read as text. `lex` blanks comments and leaves strings, templates and heredocs alone, so a `#` or `/*`
 inside a string cannot hide the lines after it. Anything the scan cannot read as a plain value fails.
 """
+import json
 import pathlib
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TERRAFORM = ROOT / "terraform"
+FENCE = ROOT / ".github/scripts/check-tbd-backups-fences.py"
 
 # Every provider source the stacks use today. Adding one is a reviewed change to this list.
 PROVIDER_ALLOWLIST = {
@@ -444,6 +448,153 @@ class PlanTimeCode(unittest.TestCase):
         self.assertFlags(stack(main), "no external or http data sources")
         self.assertFlags(stack('locals {\n  a = "#"\n}\ndata "http" "x" {\n  url = "u"\n}\n'),
                          "no external or http data sources")
+
+
+def run_fence(mutate=None, main=None):
+    """Run check-tbd-backups-fences.py on a copy of the files it reads; mutate(docs) edits the parsed
+    {"provisioner": ..., "plan": ...} policies in aws/bootstrap/ first, main(text) the stack's main.tf."""
+    with tempfile.TemporaryDirectory() as tmp:
+        d = pathlib.Path(tmp)
+        (d / ".github/scripts").mkdir(parents=True)
+        shutil.copy(FENCE, d / ".github/scripts")
+        shutil.copytree(ROOT / "terraform/tbd-backups", d / "terraform/tbd-backups",
+                        ignore=shutil.ignore_patterns(".terraform"))
+        shutil.copytree(ROOT / "aws/bootstrap", d / "aws/bootstrap")
+        if mutate:
+            paths = {n: d / f"aws/bootstrap/tfc-backups-{n}.json" for n in ("provisioner", "plan")}
+            docs = {n: json.loads(p.read_text()) for n, p in paths.items()}
+            mutate(docs)
+            for n, p in paths.items():
+                p.write_text(json.dumps(docs[n], indent=2))
+        if main:
+            tf = d / "terraform/tbd-backups/main.tf"
+            text = tf.read_text()
+            tf.write_text(main(text))
+            assert tf.read_text() != text, "the main.tf mutation matched nothing"
+        return subprocess.run([sys.executable, "-I", str(d / ".github/scripts" / FENCE.name)],
+                              capture_output=True, text=True)
+
+
+def statement(doc, sid):
+    return next(s for s in doc["Statement"] if s.get("Sid") == sid)
+
+
+def added(name, **stmt):
+    return lambda docs: docs[name]["Statement"].append({"Sid": "Added", "Effect": "Allow", **stmt})
+
+
+def edited(name, sid, fn):
+    return lambda docs: fn(statement(docs[name], sid))
+
+
+def dropped(name, sid):
+    return lambda docs: docs[name]["Statement"].remove(statement(docs[name], sid))
+
+
+OTHER_ROLE = "arn:aws:iam::123456789012:role/other"
+
+
+class BackupRolePolicies(unittest.TestCase):
+    """The provisioner (apply) and plan role policies stay inside the backup chain."""
+
+    def assertFenceFails(self, cases):
+        for label, mutate, needle in cases:
+            with self.subTest(label):
+                r = run_fence(mutate)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(needle, r.stdout)
+
+    def test_repo_policies_pass(self):
+        # guard: the committed documents pass, also after a parse and re-serialize round trip.
+        for mutate in (None, lambda docs: None):
+            r = run_fence(mutate)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_provisioner_widenings_fail(self):
+        iam = "ManageOnlyTheBackupIdentities"
+        self.assertFenceFails([
+            ("every action", added("provisioner", Action="*", Resource="*"), "allows every action"),
+            ("iam on *", added("provisioner", Action="iam:*", Resource="*"), "IAM stays on the six backup"),
+            ("iam write on *", added("provisioner", Action=["iam:PutRolePolicy"], Resource="*"),
+             "IAM stays on the six backup"),
+            ("a seventh identity", edited("provisioner", iam, lambda s: s["Resource"].append(OTHER_ROLE)),
+             "IAM stays on the six backup"),
+            ("a role wildcard", edited("provisioner", iam, lambda s: s["Resource"].append(
+                OTHER_ROLE.replace("123456789012:role/other", "123456789012:role/*"))), "IAM stays on the six backup"),
+            ("NotAction", added("provisioner", NotAction="iam:*", Resource="*"), "no NotAction or NotResource"),
+            ("NotResource", added("provisioner", Action="s3:*", NotResource="arn:aws:s3:::x"),
+             "no NotAction or NotResource"),
+            ("s3 on every bucket", added("provisioner", Action="s3:*", Resource="*"), "S3 stays on the backup bucket"),
+            ("kms:* without the tag", edited("provisioner", "ManageTheBackupKey", lambda s: s.pop("Condition")),
+             "keys not tagged"),
+            ("a key action on any key", edited("provisioner", "CreateTheBackupKey",
+                                               lambda s: s["Action"].append("kms:ScheduleKeyDeletion")),
+             "keys not tagged"),
+            ("another service", added("provisioner", Action="secretsmanager:GetSecretValue", Resource="*"),
+             "only ['iam', 'kms', 's3', 'sts'] actions"),
+            ("sts beyond identity", added("provisioner", Action="sts:AssumeRole", Resource="*"), "STS beyond"),
+        ])
+
+    def test_terraform_applies_the_checked_documents(self):
+        doc = 'file("${path.module}/../../aws/bootstrap/%s")'
+        inline = ('jsonencode({ Version = "2012-10-17", '
+                  'Statement = [{ Effect = "Allow", Action = "*", Resource = "*" }] })')
+        attach = ('\nresource "aws_iam_role_policy_attachment" "extra" {\n'
+                  '  role       = aws_iam_role.tfc_backups_provisioner.name\n'
+                  '  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"\n}\n')
+        cases = [
+            ("inline provisioner policy", lambda t: t.replace(doc % "tfc-backups-provisioner.json", inline),
+             "must be exactly file() of aws/bootstrap/tfc-backups-provisioner.json"),
+            ("inline plan policy", lambda t: t.replace(doc % "tfc-backups-plan.json", inline),
+             "must be exactly file() of aws/bootstrap/tfc-backups-plan.json"),
+            ("plan role trusted like the apply role", lambda t: t.replace(doc % "tfc-backups-plan-trust.json",
+                                                                          doc % "tfc-backups-trust.json"),
+             "must be exactly file() of aws/bootstrap/tfc-backups-plan-trust.json"),
+            ("plan policy on the apply role", lambda t: t.replace("role   = aws_iam_role.tfc_backups_plan.id",
+                                                                  "role   = aws_iam_role.tfc_backups_provisioner.id"),
+             "must attach to aws_iam_role.tfc_backups_plan"),
+            ("a second policy on a TFC role", lambda t: t + attach, "refers to a TFC role"),
+            ("a second inline policy by role name", lambda t: t + attach.replace(
+                "aws_iam_role.tfc_backups_provisioner.name", '"tfc-backups-plan"'), "refers to a TFC role"),
+        ]
+        for label, main, needle in cases:
+            with self.subTest(label):
+                r = run_fence(main=main)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(needle, r.stdout)
+
+    def test_provisioner_denies_stay(self):
+        content, mint = "NeverReadBackupContent", "NeverMintTheK3sUploaderCredentials"
+        self.assertFenceFails([
+            ("content deny dropped", dropped("provisioner", content), f"Deny {content}"),
+            ("content deny loses kms:Decrypt",
+             edited("provisioner", content, lambda s: s["Action"].remove("kms:Decrypt")), f"Deny {content}"),
+            ("content deny narrowed", edited("provisioner", content, lambda s: s.update(Resource="arn:aws:s3:::x/*")),
+             f"Deny {content}"),
+            ("content deny conditioned", edited("provisioner", content, lambda s: s.update(
+                Condition={"Bool": {"aws:ViaAWSService": "true"}})), f"Deny {content}"),
+            ("mint deny dropped", dropped("provisioner", mint), f"Deny {mint}"),
+            ("mint deny turned Allow", edited("provisioner", mint, lambda s: s.update(Effect="Allow")), f"Deny {mint}"),
+            ("mint deny loses CreateLoginProfile", edited("provisioner", mint,
+                                                          lambda s: s["Action"].remove("iam:CreateLoginProfile")),
+             f"Deny {mint}"),
+        ])
+
+    def test_plan_role_writes_fail(self):
+        ids = "ReadBackupIdentities"
+        self.assertFenceFails([
+            ("iam:PassRole", edited("plan", ids, lambda s: s["Action"].append("iam:PassRole")), "stays read-only"),
+            ("a bucket write", added("plan", Action="s3:PutBucketPolicy", Resource="*"), "stays read-only"),
+            ("every action", added("plan", Action="*", Resource="*"), "stays read-only"),
+            ("a service wildcard", added("plan", Action="kms:*", Resource="*"), "stays read-only"),
+            ("a read on another service", added("plan", Action="secretsmanager:GetSecretValue", Resource="*"),
+             "stays read-only"),
+            ("sts beyond identity", added("plan", Action="sts:AssumeRole", Resource="*"), "stays read-only"),
+            ("NotAction", added("plan", NotAction="s3:GetObject", Resource="*"), "no NotAction or NotResource"),
+            ("content deny dropped", dropped("plan", "NeverReadBackupContent"), "Deny NeverReadBackupContent"),
+            ("content deny turned Allow", edited("plan", "NeverReadBackupContent", lambda s: s.update(Effect="Allow")),
+             "Deny NeverReadBackupContent"),
+        ])
 
 
 if __name__ == "__main__":
