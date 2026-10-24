@@ -575,9 +575,15 @@ sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s (one screen f
   on that disk. Usage is against the full size, including ext4's reserved blocks (about 5%), so writes fail near 95%:
   alert at 85 to 90%. The kubelet's own `/metrics` is not scraped (about 58,000 control-plane series on k3s, which tripled
   Alloy's memory).
-- **Apps:** whatever an app sends as OTLP/HTTP metrics or traces to `http://alloy.observability.svc:4318` (set
-  `OTEL_EXPORTER_OTLP_ENDPOINT` to that; adoption is INFRA-105 for TBD and INFRA-106 for Ziftbook). Only the app namespaces
-  may reach the port (`tbd-staging`, `tbd-prod`, `ziftbook-staging`, `ziftbook-prod`). Alloy deletes `url.*`, `http.request.header.*`, `client.address`,
+- **Apps:** whatever an app sends as OTLP/HTTP metrics or traces to `http://alloy.observability.svc:4318` from
+  `tbd-prod` and `ziftbook-prod`, or `:4319` from `tbd-staging` and `ziftbook-staging` (`OTEL_EXPORTER_OTLP_ENDPOINT` in
+  the namespace's `otel` ConfigMap; adoption is INFRA-105 for TBD and INFRA-106 for Ziftbook). The NetworkPolicy admits
+  each namespace to its own port only (EDGE-04), so a pod still on the other port after an `otel.yaml` change sends
+  nothing until it restarts. Alloy sets `deployment.environment.name` from the port (`production` or `staging`,
+  whatever the app sent), drops app metrics named like the platform's own series (`up`, `scrape_*`, `node_*`,
+  `machine_*`, `container_*`, `probe_*`, `log_retention_*`, in any case or separator: name app metrics `<app>.*`),
+  refuses request bodies over 4 MiB, and refuses app data while its heap is over 144 MiB (the SDK retries; scrapes and
+  logs are not affected). Alloy deletes `url.*`, `http.request.header.*`, `client.address`,
   `exception.message`, `exception.stacktrace` and the old `http.url`, `http.target`, `http.client_ip`, `net.sock.peer.addr`
   from data point, span, span event, scope and resource attributes (by key only: span names and messages are the app's to keep clean).
 
@@ -609,6 +615,7 @@ kubectl -n observability logs ds/alloy --since=10m | grep -E 'level=(error|warn)
 # Nothing, or only "Failed to open directory, disabling udev device properties" once at start (harmless).
 # A pod that never starts with a recursiveReadOnly error: the runtime lacks recursive read-only mounts.
 # "401" or "Unauthorized" from otelcol.exporter.otlphttp: wrong token, instance ID or a revoked token.
+# "Memory usage is above soft limit" from otelcol.processor.memory_limiter: app data is being refused; see Memory below.
 kubectl -n observability top pod                  # memory: limit 256Mi
 ```
 
@@ -620,7 +627,9 @@ http://localhost:12345.
 **Memory:** measured locally (Alloy v1.20.1, this config, the node's real cAdvisor payload, no app traffic yet) at
 52 to 100 MiB working set: about 55 MiB anonymous memory plus up to about 45 MiB of the Alloy binary's page cache.
 Request 128Mi (headroom for app metrics), limit 256Mi, `GOMEMLIMIT` 200MiB. Scraping the kubelet's `/metrics` as well took it to 160 MiB. If `kubectl top` shows it near the limit, look
-for a new high-cardinality series in the app metrics before raising it.
+for a new high-cardinality series in the app metrics before raising it. The app receivers' memory limiters (`limit`
+180MiB, `spike_limit` 36MiB in `config.alloy`) refuse app data above 144 MiB of heap and must stay under `GOMEMLIMIT`:
+raise the three together (`tests/test_telemetry_receiver.py` checks the order).
 
 ## Drain or lose an app node
 
@@ -721,7 +730,8 @@ line's timestamp, the oldest, and empties a live `*.log` or deletes a kubelet-ro
 older than 6 days (worst case 6 days 1 hour). It covers every pod on the node (Ziftbook and the databases too). It never
 unlinks a live log: `kubectl logs -f` on a truncated container goes quiet until reconnected, and a container keeps only
 its last 0 to 6 days of history. After a clean pass it posts the gauge `log_retention_last_success_timestamp_seconds`
-to Alloy; Grafana rule `LogRetentionStale` (group `log-retention`, applied like the memory rules below, `api PUT
+to Alloy's heartbeat receiver (`:4320`, which only the log-retention pods reach and which keeps only that gauge; the app
+receivers drop the name, EDGE-04); Grafana rule `LogRetentionStale` (group `log-retention`, applied like the memory rules below, `api PUT
 /api/v1/provisioning/folder/platform/rule-groups/log-retention grafana/log-retention.rules.json`) mails the owner when it is
 over 3 hours old or absent (it fires until the first run after the first apply). Per node since INFRA-171 (the DaemonSet
 labels its heartbeat `instance=<node>`); the rule ignores series without an `instance` label (the old single-node

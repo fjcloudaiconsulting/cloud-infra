@@ -252,7 +252,7 @@ Environment for every process (`<role>` is `api`, `worker`, `scheduler` or `migr
 |---|---|
 | `OTEL_SERVICE_NAME` | `<app>-<role>` |
 | `OTEL_RESOURCE_ATTRIBUTES` | `service.namespace=<app>,deployment.environment.name=<prod or staging>,service.version=<version>` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | the in-cluster collector (INFRA-85); `http://127.0.0.1:4318` for the local LGTM stack |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | the in-cluster collector (INFRA-85) on the environment's port: `http://alloy.observability.svc:4318` in production, `:4319` in staging (EDGE-04); `http://127.0.0.1:4318` for the local LGTM stack |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` |
 | `OTEL_PROPAGATORS` | `tracecontext` |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` |
@@ -273,6 +273,13 @@ credentials (a write-only access policy token for an EU stack) live in one SOPS 
 copies during a rollout. Not the `k8s-monitoring` Helm chart, which deploys several Alloys plus node-exporter and
 kube-state-metrics. Measured by INFRA-85 against the real cAdvisor payload: 52 to 100 MiB working set (request 128Mi,
 limit 256Mi).
+
+Each source has its own receiver (EDGE-04): production apps on 4318, staging apps on 4319, the log-retention heartbeat
+on 4320, and the NetworkPolicy admits each only to its own port. On the app receivers Alloy sets
+`deployment.environment.name` from the port, whatever the app sent; drops app metrics named like the platform's own
+series, which the alert rules read (`up`, `scrape_*`, `node_*`, `machine_*`, `container_*`, `probe_*`,
+`log_retention_*`); caps a request body at 4 MiB; and refuses app data (the SDK retries) while its heap is high. The
+heartbeat receiver takes the one heartbeat gauge only.
 
 The collector is the second line of defense, not the first:
 

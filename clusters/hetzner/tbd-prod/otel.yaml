@@ -11,6 +11,7 @@ metadata:
   namespace: tbd-prod
 data:
   OTEL_RESOURCE_ATTRIBUTES: service.namespace=tbd,deployment.environment.name=production
+  # Alloy's production receiver: only the production namespaces reach 4318 (staging sends to 4319).
   OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy.observability.svc:4318
   OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
   OTEL_PROPAGATORS: tracecontext
