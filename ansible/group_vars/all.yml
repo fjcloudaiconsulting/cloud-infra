@@ -21,7 +21,9 @@ api_endpoint: "{{ private_ip if (k3s_init_node | bool) else k3s_join_peer }}"
 token: "{{ lookup('community.sops.sops', playbook_dir ~ '/secrets.sops.yaml', extract='[\"k3s_token\"]') }}"
 user_kubectl: false
 # The admin kubeconfig fetched from node-1 lands here on the machine running Ansible, never in ~/.kube/config.
+# site.yml then writes its cluster CA to kubeconfig_ca and deletes it (its client certificate is system:masters).
 kubeconfig: ~/.kube/fjc-hetzner.yaml
+kubeconfig_ca: ~/.kube/hetzner-ca.crt
 manage_firewall: false
 # GOGC=50 trades a little CPU for a smaller k3s heap (about 846Mi to 625Mi RSS, measured on the old Lightsail node, INFRA-80).
 # The installer rewrites k3s.service.env; the collection re-adds this line after it on every run.

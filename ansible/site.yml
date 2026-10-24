@@ -35,7 +35,8 @@
   # The collection writes the token into config.yaml; no diff may print it.
   diff: false
   pre_tasks:
-    # Without kubectl here the collection silently skips fetching the admin kubeconfig.
+    # Without kubectl here the collection silently skips fetching the admin kubeconfig, which the cluster CA is read
+    # from (post_tasks).
     - name: Kubectl is installed on this machine
       run_once: true
       delegate_to: localhost
@@ -187,11 +188,22 @@
       delay: 10
       changed_when: false
 
-    - name: Keep the fetched admin kubeconfig private
+    # The fetched kubeconfig's client certificate is system:masters, which no RBAC change revokes, so only its cluster
+    # CA is kept (the owner's kubeconfig names it: docs/runbooks.md, Hetzner cluster bootstrap step 6). Break-glass is
+    # `k3s kubectl` over SSH, which needs no copy here.
+    - name: Keep only the cluster CA from the fetched admin kubeconfig
       when: (kubeconfig | expanduser) is file
       run_once: true
       delegate_to: localhost
       become: false
-      ansible.builtin.file:
-        path: "{{ kubeconfig | expanduser }}"
-        mode: "0600"
+      block:
+        - name: Write the cluster CA next to the kubeconfig
+          ansible.builtin.copy:
+            dest: "{{ kubeconfig_ca | expanduser }}"
+            content: "{{ (lookup('ansible.builtin.file', kubeconfig | expanduser) | from_yaml).clusters[0].cluster['certificate-authority-data'] | b64decode }}"
+            mode: "0600"
+
+        - name: Delete the fetched admin kubeconfig
+          ansible.builtin.file:
+            path: "{{ kubeconfig | expanduser }}"
+            state: absent

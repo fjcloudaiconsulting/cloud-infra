@@ -1140,16 +1140,18 @@ ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
 ```
 
-**6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
-`netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
+**6. kubeconfig over NetBird (owner).** The CA is `~/.kube/hetzner-ca.crt`, which the Ansible k3s play writes from
+the admin kubeconfig it fetches (it then deletes that kubeconfig: its `system:masters` client certificate cannot be
+revoked); the token is `netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
 file that the kubeconfig names as `tokenFile` (kubectl reads it on every call), so it never sits in a variable or
 argv. Renewing is that one `ssh` line again. The server is the peer's NetBird name; its certificate is the API
 server's, which names `kubernetes`, hence `--tls-server-name`.
 
 ```bash
 export KUBECONFIG=~/.kube/hetzner
-kubectl config view --raw --kubeconfig ~/.kube/fjc-hetzner.yaml -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > ~/.kube/hetzner-ca.crt && grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt   # 1
+# 1. Missing (the play fetches only when k3s rewrites its kubeconfig): the CA is public, read it over ssh:
+# ssh root@$N1 cat /var/lib/rancher/k3s/server/tls/server-ca.crt > ~/.kube/hetzner-ca.crt
+grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt
 kubectl config set-cluster hetzner --server=https://hetzner-k3s.netbird.cloud:6443 --tls-server-name=kubernetes \
   --certificate-authority="$HOME/.kube/hetzner-ca.crt" --embed-certs
 (umask 077; ssh root@$N1 k3s kubectl -n netbird create token owner-admin --duration=2160h > ~/.kube/hetzner-token)

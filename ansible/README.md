@@ -23,7 +23,7 @@ because a network attached after first boot is missing from cloud-init's netplan
   `sops`, and the Ansible age key: `export SOPS_AGE_KEY_FILE=~/.config/sops/age/ansible-hetzner.txt`. The owner's
   cluster key is never needed for Ansible.
 - `kubectl` on this machine. The k3s play checks it first: without it the collection silently skips fetching the
-  admin kubeconfig.
+  admin kubeconfig, which the play reads the cluster CA from.
 - `ansible-galaxy collection install -r requirements.yml` (installs into the git-ignored `collections/`).
 - The deploy key at `~/.ssh/fjc-hetzner-deploy`.
 - `inventory.yaml` holds each server's primary IPv4 (they outlive server rebuilds). The first play refuses a
@@ -84,8 +84,10 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
    ```
 
 5. Check: `ssh root@<node-1> k3s kubectl get nodes -o wide` shows three Ready nodes; db-1 carries the taint.
-   The admin kubeconfig is fetched to `~/.kube/fjc-hetzner.yaml` (mode 0600) with the server set to node-1's
-   private IP; it works only from inside the private network or over a tunnel.
+   The play fetches the admin kubeconfig to `~/.kube/fjc-hetzner.yaml`, writes its cluster CA to
+   `~/.kube/hetzner-ca.crt` and deletes it: its client certificate is `system:masters`, which no RBAC change revokes.
+   Day-to-day access is the owner token over NetBird ([bootstrap runbook](../docs/runbooks.md#hetzner-cluster-bootstrap)
+   step 6, which uses that CA file); break-glass is `ssh root@<server> k3s kubectl ...`.
 
 ## Steady-state run
 
