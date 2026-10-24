@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.30.0@sha256:1ee4e3584a3d28f136177fba68d0867eb0400112fce2f6d112484926813c9dab
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.31.0@sha256:893fe4e97caa0c9fd0e54c9e0ea70834ce4f2ddbd29ffb212316ae3627e2afe1
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -67,7 +67,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.30.0@sha256:2876ff118d175345efacc0fa62f80e27c6fc6179f208916bb84f9b095677108a
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.31.0@sha256:ec754adc68119fd2095a47ead00b8dd7eb9f5eed46d78296ff650d94dcc5f7cf
           ports:
             - containerPort: 8000
           envFrom:
@@ -85,6 +85,14 @@ spec:
                   name: ziftbook-totp
                   key: key
                   optional: true
+            # Pepper for the rate-limit keys (ZB-25): the email or IP in each key is stored as its HMAC under it, so the
+            # rate_limits table holds no addresses. One value per environment, the worker's too; changing it restarts every
+            # counter once (docs/runbooks.md "Ziftbook rate-limit key"). Not optional: the Secret is in git.
+            - name: ZIF_RATE_LIMIT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-rate-limit
+                  key: rate-limit-key
             # Stripe sandbox keys (ZIF-158, docs/runbooks.md "Ziftbook Stripe"). optional: unset turns payments off, the
             # app runs without them. The webhook route checks its own signature with the webhook secret.
             - name: ZIF_STRIPE_SECRET_KEY

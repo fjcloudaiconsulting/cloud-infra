@@ -1,13 +1,17 @@
 # Ziftbook production database (INFRA-82): the same bootstrap as ziftbook-bootstrap (postgres-bootstrap.yaml, same
 # pinned bootstrap.sql), run against its own database `ziftbook_prod`, created here first (CREATE DATABASE has no IF NOT
-# EXISTS, so the check is a query). The Ziftbook migrations hardcode the role names ziftbook_app and ziftbook_migrate,
-# and roles are cluster-wide, so bootstrap.sql reuses staging's two roles (the same postgres Secret keys: its ALTER ROLE
-# changes nothing). Production's applications do not log in as them. Two login roles of its own, ziftbook_prod_app and
-# ziftbook_prod_migrate (passwords: Secret postgres-ziftbook-prod), are members of those roles without inheriting, and
-# default to SET ROLE to them at login, so every statement runs as ziftbook_app or ziftbook_migrate (ownership, default
-# privileges and RLS as the migrations expect) while the connect check is made against the login role. Then CONNECT on
-# ziftbook_prod is taken from PUBLIC and the shared roles and given to the two login roles only, and PUBLIC loses CONNECT
-# on staging's `ziftbook`: staging's credentials cannot open production, and production's cannot open staging.
+# EXISTS, so the check is a query). The Ziftbook migrations hardcode the role names ziftbook_app, ziftbook_migrate and
+# ziftbook_worker, and roles are cluster-wide, so bootstrap.sql reuses staging's three roles (the same Secret keys as
+# staging's Job: its ALTER ROLE changes nothing). Production's applications do not log in as them. Three login roles of
+# its own, ziftbook_prod_app and ziftbook_prod_migrate (passwords: Secret postgres-ziftbook-prod) and ziftbook_prod_worker
+# (Secret postgres-ziftbook-prod-worker, ZB-08), are members of those roles without inheriting, and default to SET ROLE
+# to them at login, so every statement runs as ziftbook_app, ziftbook_migrate or ziftbook_worker (ownership, default
+# privileges, RLS and the worker's own grants as the migrations expect) while the connect check is made against the
+# login role. Then CONNECT on ziftbook_prod is taken from PUBLIC and the shared roles and given to the three login roles
+# only, and PUBLIC loses CONNECT on staging's `ziftbook`: staging's credentials cannot open production, and production's
+# cannot open staging. A role setting applies to the role that logs in, and SET ROLE does not load the target's, so
+# bootstrap.sql's search_path for ziftbook_app and ziftbook_worker is set here on the two runtime login roles too
+# (ZB-31); the app's pool reset (RESET ALL, RESET ROLE) returns to these login settings.
 # Ordering: Flux applies everything in one batch. The production backend and worker retry their migrate init container
 # until this Job has created the database and roles, so no ordering between them is needed. Rotation and failure notes:
 # see postgres-bootstrap.yaml.
@@ -36,9 +40,9 @@ spec:
           image: curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
           env:
             - name: URL
-              value: https://raw.githubusercontent.com/fjcloudaiconsulting/ziftbook/21974f3a39eae3a194aaa0e1ac1a2cfa7a5f37b5/backend/migrations/bootstrap.sql
+              value: https://raw.githubusercontent.com/fjcloudaiconsulting/ziftbook/afcc222885e6df46e7dbc830d9a3b2fbbf72b504/backend/migrations/bootstrap.sql
             - name: SHA256
-              value: d5a918ef1e4329dc6fdc0bc50cababd81d27d61a5db2c225258e05a24db68d15
+              value: ad12d2174033a5677c315e1f838ddf910517a4c7e992a0ff81d10c7d9300a9dc
           command: [sh, -c, 'curl -fsSLo /work/bootstrap.sql "$URL" && echo "$SHA256  /work/bootstrap.sql" | sha256sum -c -']
           resources:
             requests:
@@ -61,13 +65,46 @@ spec:
             - sh
             - -c
             - |
+              # Stop at the first failure: a failed step fails the Job and never goes on to the next.
+              set -e
               until pg_isready -q; do sleep 2; done
               psql -v ON_ERROR_STOP=1 -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = 'ziftbook_prod'" | grep -q 1 ||
                 psql -v ON_ERROR_STOP=1 -d postgres -c 'CREATE DATABASE ziftbook_prod'
-              psql -v ON_ERROR_STOP=1 -f /work/bootstrap.sql
+              # The password check first, then bootstrap.sql and the production roles in one transaction: a run that stops
+              # changes nothing. Run apart, a stop after bootstrap.sql would leave its CONNECT grant on ziftbook_prod to the
+              # shared roles (staging's logins) in place. bootstrap.sql must stay transactional (it is: roles and grants).
               exec psql -v ON_ERROR_STOP=1 <<'SQL'
+              \set ON_ERROR_STOP on
               \getenv prod_migrate_password ZIF_PROD_MIGRATE_PASSWORD
               \getenv prod_app_password ZIF_PROD_APP_PASSWORD
+              \getenv prod_worker_password ZIF_PROD_WORKER_PASSWORD
+
+              -- Stop before any change if a password is unset or empty: PASSWORD '' would clear that login role's
+              -- password. Same check as bootstrap.sql's for ZIF_WORKER_PASSWORD; the message never holds a value.
+              \set prod_migrate_password_missing true
+              \if :{?prod_migrate_password}
+              SELECT :'prod_migrate_password' = '' AS prod_migrate_password_missing \gset
+              \endif
+              \if :prod_migrate_password_missing
+              DO $$ BEGIN RAISE EXCEPTION 'ZIF_PROD_MIGRATE_PASSWORD is unset or empty'; END $$;
+              \endif
+              \set prod_app_password_missing true
+              \if :{?prod_app_password}
+              SELECT :'prod_app_password' = '' AS prod_app_password_missing \gset
+              \endif
+              \if :prod_app_password_missing
+              DO $$ BEGIN RAISE EXCEPTION 'ZIF_PROD_APP_PASSWORD is unset or empty'; END $$;
+              \endif
+              \set prod_worker_password_missing true
+              \if :{?prod_worker_password}
+              SELECT :'prod_worker_password' = '' AS prod_worker_password_missing \gset
+              \endif
+              \if :prod_worker_password_missing
+              DO $$ BEGIN RAISE EXCEPTION 'ZIF_PROD_WORKER_PASSWORD is unset or empty'; END $$;
+              \endif
+
+              BEGIN;
+              \i /work/bootstrap.sql
 
               SELECT 'CREATE ROLE ziftbook_prod_migrate LOGIN'
               WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ziftbook_prod_migrate') \gexec
@@ -75,20 +112,31 @@ spec:
               SELECT 'CREATE ROLE ziftbook_prod_app LOGIN'
               WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ziftbook_prod_app') \gexec
 
+              SELECT 'CREATE ROLE ziftbook_prod_worker LOGIN'
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ziftbook_prod_worker') \gexec
+
               ALTER ROLE ziftbook_prod_migrate PASSWORD :'prod_migrate_password';
               ALTER ROLE ziftbook_prod_app PASSWORD :'prod_app_password';
+              ALTER ROLE ziftbook_prod_worker PASSWORD :'prod_worker_password';
 
               GRANT ziftbook_migrate TO ziftbook_prod_migrate WITH INHERIT FALSE, SET TRUE;
               GRANT ziftbook_app TO ziftbook_prod_app WITH INHERIT FALSE, SET TRUE;
+              GRANT ziftbook_worker TO ziftbook_prod_worker WITH INHERIT FALSE, SET TRUE;
               ALTER ROLE ziftbook_prod_migrate SET role = ziftbook_migrate;
               ALTER ROLE ziftbook_prod_app SET role = ziftbook_app;
+              ALTER ROLE ziftbook_prod_worker SET role = ziftbook_worker;
 
-              REVOKE CONNECT ON DATABASE :"DBNAME" FROM PUBLIC, ziftbook_app, ziftbook_migrate;
-              GRANT CONNECT ON DATABASE :"DBNAME" TO ziftbook_prod_app, ziftbook_prod_migrate;
+              -- ZB-31: bootstrap.sql's search_path for ziftbook_app and ziftbook_worker, on the login roles that SET ROLE
+              -- to them (a role's settings apply only to the role that logs in).
+              ALTER ROLE ziftbook_prod_app SET search_path = public, pg_temp;
+              ALTER ROLE ziftbook_prod_worker SET search_path = public, pg_temp;
+
+              REVOKE CONNECT ON DATABASE :"DBNAME" FROM PUBLIC, ziftbook_app, ziftbook_migrate, ziftbook_worker;
+              GRANT CONNECT ON DATABASE :"DBNAME" TO ziftbook_prod_app, ziftbook_prod_migrate, ziftbook_prod_worker;
 
               -- Production's login roles reach nothing of staging's: PUBLIC could connect to every database.
               REVOKE CONNECT ON DATABASE ziftbook FROM PUBLIC;
-
+              COMMIT;
               SQL
           env:
             - name: PGHOST
@@ -112,6 +160,12 @@ spec:
                 secretKeyRef:
                   name: postgres
                   key: ziftbook-app-password
+            # The shared role's password: the same Secret as staging's Job, or the two Jobs would reset it in turn.
+            - name: ZIF_WORKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-worker
+                  key: password
             - name: ZIF_PROD_MIGRATE_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -122,6 +176,11 @@ spec:
                 secretKeyRef:
                   name: postgres-ziftbook-prod
                   key: app-password
+            - name: ZIF_PROD_WORKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-prod-worker
+                  key: password
           resources:
             requests:
               cpu: 10m

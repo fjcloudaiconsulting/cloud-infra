@@ -11,8 +11,8 @@
 # it: its redirect rule runs in an earlier phase). DNS-only records never reach it.
 #
 # One counter per address for all paths of a zone. 20 requests in 10 s is far above a person signing in (a few
-# requests) and above the TBD post-deploy smoke test (one login). GET /api/session on ziftbook.com shares the path of
-# the sign-in POST, so reads count too. Paths are matched after the zones' URL normalization (docs/configuration-map.md,
+# requests) and above the TBD post-deploy smoke test (one login). GET /api/session and GET /api/admin/session on ziftbook.com
+# share the paths of the sign-in POSTs, so reads count too. Paths are matched after the zones' URL normalization (docs/configuration-map.md,
 # Cloudflare); a path with an encoded slash also counts, since no app route needs one. Residuals of the plan: the
 # counter is per address and per data center, so many addresses (or one IPv6 prefix) get more.
 #
@@ -46,6 +46,8 @@ locals {
     ]
     ziftbook = [
       "/api/session",
+      "/api/admin/session",
+      "/api/admin/session/second-factor",
       "/api/sign-up",
       "/api/sign-up/complete",
       "/api/password-reset",
