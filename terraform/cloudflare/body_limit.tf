@@ -6,8 +6,7 @@
 # 16 MiB: three times the largest file the backend accepts (the 5 MiB import upload, tbd MAX_UPLOAD_BYTES), and above
 # the largest import confirm (at most 10,000 rows that echo that file's content). The Free plan's rules language reads
 # a header as a string, so the rule compares the digit count first and only then the 8-digit value: between strings of
-# one length, the string order is the number order. A body sent without a Content-Length is not counted here; the
-# backend's own per-route caps apply to it.
+# one length, the string order is the number order.
 #
 # A rule added in the dashboard is drift that the next apply removes; if the zone already has dashboard custom rules,
 # the create fails until that ruleset is imported. Back out with enabled = false. The workspace token's Zone WAF Write
