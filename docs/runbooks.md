@@ -386,6 +386,10 @@ The S3 endpoint of an EU bucket is `https://<account id>.eu.r2.cloudflarestorage
 `ZIF_S3_ENDPOINT` on backend and worker (the `.eu` matters: the default endpoint does not see these buckets).
 Bucket names and the jurisdiction are fixed at creation.
 
+For now `ZIF_S3_ENDPOINT` is left off the backend in both environments on purpose. Photo uploads answer 503 and
+existing photos keep loading, until the environment runs the ziftbook release with the image-library update
+(ziftbook #329). Put it back on the backend with that image bump.
+
 One-time owner steps, in this order:
 
 1. Cloudflare dashboard > R2 Object Storage: enable R2 on the account (it asks for a payment method even on the

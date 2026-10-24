@@ -119,8 +119,9 @@ spec:
               value: ziftbook-media-staging
             - name: ZIF_MEDIA_URL
               value: https://img-dev.ziftbook.com
-            - name: ZIF_S3_ENDPOINT
-              value: https://fb5eb042529f2621c6de3f34c6801174.eu.r2.cloudflarestorage.com
+            # ZIF_S3_ENDPOINT is left out on purpose until this environment runs the release with the image-library
+            # update (ziftbook #329): without it the API answers 503 to photo uploads, and existing photos still load
+            # from ZIF_MEDIA_URL. Put it back (it is the R2 account endpoint, see git history) with that image bump.
             - name: ZIF_S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
