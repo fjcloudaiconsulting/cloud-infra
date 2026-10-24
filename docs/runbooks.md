@@ -270,10 +270,12 @@ A Ziftbook database with no user redirects every page to `/setup` and refuses si
 backend logs the ERROR `setup token unset: first-run setup refused` while it has no token (ZIF-70, since v0.25.0).
 `/setup` creates the first platform admin once, against `ZIF_SETUP_TOKEN` (backend only, Secret `ziftbook-setup`, key
 `token`, at least 32 characters; shorter counts as unset). It works only while there is no user, so the token is
-single-use; staging is already set up.
+single-use; staging is already set up, and so is production (ZIF-217): its `backend.yaml` no longer has the env, so a
+repeat on an empty database starts by adding it back (step 1; tests/test_ziftbook_manifests.py forbids it, lift that while setting up).
 
 1. Write the Secret on a branch, generated, never typed, with the public key only, in bash from the repo root. Nothing
-   is printed except `1`; it refuses to overwrite an existing file. Open the PR and merge it. The backend reads the
+   is printed except `1`; it refuses to overwrite an existing file. The same PR adds `ZIF_SETUP_TOKEN` to the `backend`
+   container of `ziftbook-prod/backend.yaml` (`secretKeyRef` name `ziftbook-setup`, key `token`, `optional: true`). Open the PR and merge it. The backend reads the
    token at start: if the Secret arrives without a manifest change, `kubectl -n ziftbook-prod rollout restart deploy/backend`:
 
    ```sh
@@ -294,8 +296,8 @@ single-use; staging is already set up.
    kubectl -n ziftbook-prod get secret ziftbook-setup -o jsonpath='{.data.token}' | base64 -d | pbcopy
    ```
 
-3. Delete `clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml` in a PR. Flux prunes the Secret; the backend
-   keeps the old value in its environment until the next restart, which is harmless once a user exists.
+3. Delete `clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml` and the `ZIF_SETUP_TOKEN` env in a PR (the env
+   change rolls the backend, so no pod keeps the token). Flux prunes the Secret.
 
 ## MySQL database per app environment
 
