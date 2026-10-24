@@ -63,11 +63,20 @@ spec:
             - configMapRef:
                 name: otel # otel.yaml
           env:
+            # Its own database role (ZB-08): ziftbook_worker, every privilege of ziftbook_app plus minting the email
+            # tokens. Its own Secret, apart from the API's `ziftbook`: an API given this URL could mint tokens itself.
+            # The password is data/postgres-ziftbook-worker, set by both bootstrap Jobs.
             - name: ZIF_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: ziftbook
+                  name: ziftbook-worker-database
                   key: database-url
+            # The backend's rate-limit pepper (ZB-25): the worker's per-recipient email limits are keyed with it too.
+            - name: ZIF_RATE_LIMIT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-rate-limit
+                  key: rate-limit-key
             - name: ZIF_APP_URL # email links; the backend reads it too
               value: https://dev.ziftbook.com
             # Mailgun HTTP API like TBD: EU region, the shared dev sending domain m.fjconsulting.dev (own sending key per environment). ZIF-151 consumes these names;

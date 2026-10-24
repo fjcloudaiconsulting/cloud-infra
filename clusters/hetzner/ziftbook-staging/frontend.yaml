@@ -57,6 +57,13 @@ spec:
                   name: ziftbook-turnstile
                   key: site-key
                   optional: true
+            # Content-Security-Policy origins (ZB-12), read per request: images from the media domain (the backend's
+            # ZIF_MEDIA_URL) and photo uploads to the R2 account endpoint the API presigns them for (docs/runbooks.md
+            # "R2 for Ziftbook photos"). The web holds no R2 credential and uses the endpoint for the policy only.
+            - name: ZIF_MEDIA_URL
+              value: https://img-dev.ziftbook.com
+            - name: ZIF_S3_ENDPOINT
+              value: https://fb5eb042529f2621c6de3f34c6801174.eu.r2.cloudflarestorage.com
             - name: OTEL_TRACES_EXPORTER
               value: none
             - name: OTEL_LOGS_EXPORTER
