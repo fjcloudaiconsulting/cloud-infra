@@ -123,6 +123,33 @@ Get/List/Describe in the plan policy, or a missing `NeverReadBackupContent` /
 `NeverMintTheK3sUploaderCredentials` Deny. A deliberate widening changes the
 fence in the same PR, where review sees it.
 
+### What the plan role reads
+
+`aws/bootstrap/tfc-backups-plan.json` grants what this stack's refresh reads and
+no more: Get/List on the six backup identities, `iam:ListOpenIDConnectProviders`
+(it takes no resource), the bucket's configuration, the metadata of keys tagged
+`component=mysql-offhost-backup`, and `kms:ListAliases` (no resource either:
+`aws_kms_alias` is read by listing). The workspace applies this document itself
+(`aws_iam_role_policy.tfc_backups_plan`), so a change takes effect only after
+Confirm & Apply.
+
+⚠ Every run's plan phase assumes this role, the run that would apply a fix
+included. If plans fail with `AccessDenied` after a change here, the workspace
+cannot repair itself: as the account admin, put the corrected document by hand
+(the `put-role-policy` for `tfc-backups-plan` in Genesis step 2b), then merge
+the fix. Before Confirm & Apply of a change to this document, simulate it:
+
+```bash
+aws iam simulate-custom-policy --policy-input-list file://aws/bootstrap/tfc-backups-plan.json \
+  --action-names kms:DescribeKey kms:GetKeyPolicy kms:GetKeyRotationStatus kms:ListResourceTags \
+  --resource-arns <backup key ARN> \
+  --context-entries ContextKeyName=aws:ResourceTag/component,ContextKeyValues=mysql-offhost-backup,ContextKeyType=string \
+  --query 'EvaluationResults[].[EvalActionName,EvalDecision]' --output text
+# expect allowed. Then iam:GetRole iam:GetRolePolicy iam:ListRolePolicies iam:ListAttachedRolePolicies on each
+# role ARN, iam:GetUser iam:GetUserPolicy on the uploader and iam:GetOpenIDConnectProvider on both providers:
+# allowed. iam:GetAccountAuthorizationDetails on '*': implicitDeny.
+```
+
 ## The self-authorization hazard, and why it is survivable here
 
 This workspace manages the trust policy that admits this workspace. That is the

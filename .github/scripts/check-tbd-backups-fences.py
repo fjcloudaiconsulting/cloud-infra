@@ -197,13 +197,16 @@ kept_deny("provisioner", prov, "NeverReadBackupContent", CONTENT, r"\*")
 kept_deny("provisioner", prov, "NeverMintTheK3sUploaderCredentials", {"iam:CreateAccessKey", "iam:CreateLoginProfile"},
           r"arn:aws:iam::\d{12}:user/k3s-backup-uploader")
 
-# The plan role reads: Get, List and Describe verbs on the four services, and STS only to learn who it is.
+# The plan role reads: Get, List and Describe verbs on the four services, and STS only to learn who it is. It reads
+# only what this stack's refresh reads: the six identities, the bucket and the tagged key. kms:ListAliases takes no
+# resource (aws_kms_alias is read by listing), so it alone stays on every key.
 plan = json.loads((BOOTSTRAP / "tfc-backups-plan.json").read_text())
 for sid, acts, res, stmt in allows("plan", plan):
     bad = sorted(a for a in acts
                  if not re.fullmatch(r"(s3|kms|iam):(get|list|describe)[a-z0-9]*\*?|sts:getcalleridentity", a))
     check(not bad, f"plan policy statement {sid!r} allows {bad}; the plan role stays read-only "
           "(Get*, List*, Describe*)")
+    scoped("plan", sid, acts, res, stmt, {"kms:listaliases"})
 kept_deny("plan", plan, "NeverReadBackupContent", CONTENT, r"\*")
 
 for f in failures:

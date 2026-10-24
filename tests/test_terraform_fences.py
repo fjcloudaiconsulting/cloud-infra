@@ -596,6 +596,28 @@ class BackupRolePolicies(unittest.TestCase):
              "Deny NeverReadBackupContent"),
         ])
 
+    def test_plan_role_reads_stay_on_the_backup_chain(self):
+        ids, key = "ReadBackupIdentities", "ReadKeyMetadata"
+        tag = {"StringEquals": {"aws:ResourceTag/component": "mysql-offhost-backup"}}
+        self.assertFenceFails([
+            ("iam reads on every identity", edited("plan", ids, lambda s: s.update(Resource="*")),
+             "IAM stays on the six backup identities"),
+            ("a seventh identity", edited("plan", ids, lambda s: s["Resource"].append(OTHER_ROLE)),
+             "IAM stays on the six backup identities"),
+            ("an account-wide iam read", added("plan", Action="iam:GetAccountAuthorizationDetails", Resource="*"),
+             "IAM stays on the six backup identities"),
+            ("key reads on every key", edited("plan", key, lambda s: s.pop("Condition")), "keys not tagged"),
+            ("another tag value", edited("plan", key, lambda s: s.update(
+                Condition={"StringEquals": {"aws:ResourceTag/component": "other"}})), "keys not tagged"),
+            ("the tag only if it exists", edited("plan", key, lambda s: s.update(
+                Condition={"StringEqualsIfExists": tag["StringEquals"]})), "keys not tagged"),
+            ("a key read beside ListAliases",
+             edited("plan", "ListKeyAliasesTakesNoResource",
+                    lambda s: s.update(Action=["kms:ListAliases", "kms:GetKeyPolicy"])), "keys not tagged"),
+            ("another bucket", added("plan", Action="s3:GetBucketPolicy", Resource="arn:aws:s3:::other"),
+             "S3 stays on the backup bucket"),
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()
