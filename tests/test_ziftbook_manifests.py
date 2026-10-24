@@ -7,7 +7,9 @@ import unittest
 from test_tbd_manifests import containers, manifests, where
 
 APP_HOST = {"ziftbook-prod": "app.ziftbook.com", "ziftbook-staging": "dev.ziftbook.com"}
-NEVER = {"ZIF_TURNSTILE_DISABLED", "ZIF_CSP_ENFORCE", "ZIF_SETUP_TOKEN"}
+# ZIF_CSP_ENFORCE is not here: it is opt-in ("true" enforces, anything else is report-only), so setting it only
+# tightens the web. A repeat first-run setup lifts ZIF_SETUP_TOKEN from this set for its PR (runbooks.md).
+NEVER = {"ZIF_TURNSTILE_DISABLED", "ZIF_SETUP_TOKEN"}
 
 
 def container(ns, name):
