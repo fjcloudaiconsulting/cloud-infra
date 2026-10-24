@@ -93,5 +93,32 @@ class AppImagesPinnedByDigest(unittest.TestCase):
         self.assertEqual(stale(set(), set()), [])
 
 
+class KubeconformSchemasPinned(unittest.TestCase):
+    """GHA-09: kubeconform reads its schemas from commits named in ci.yml, so they change only with a repo change."""
+
+    def locations(self):
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        env = dict(re.findall(r"(?m)^ +([A-Z][A-Z0-9_]*): (\S+)$", ci))
+        out = []
+        for loc in re.findall(r"-schema-location\s+(\S+)", ci):
+            loc = re.sub(r"\$\{?([A-Z][A-Z0-9_]*)\}?", lambda m: env.get(m.group(1), m.group(0)), loc.strip("\"'"))
+            out.append(loc)
+        return out
+
+    def test_no_default_location(self):
+        self.assertNotIn("default", self.locations())
+
+    def test_every_location_is_pinned_to_a_commit(self):
+        locs = self.locations()
+        self.assertEqual(len(locs), 2, locs)
+        for loc in locs:
+            self.assertRegex(loc, r"^https://raw\.githubusercontent\.com/[\w.-]+/[\w.-]+/[0-9a-f]{40}/")
+        # The same layout as kubeconform's default, at a fixed commit.
+        self.assertTrue(any(re.fullmatch(
+            r"https://raw\.githubusercontent\.com/yannh/kubernetes-json-schema/[0-9a-f]{40}/\{\{ ?\.NormalizedKubernetesVersion ?\}\}"
+            r"-standalone\{\{ ?\.StrictSuffix ?\}\}/\{\{ ?\.ResourceKind ?\}\}\{\{ ?\.KindSuffix ?\}\}\.json", loc) for loc in locs), locs)
+        self.assertTrue(any("/datreeio/CRDs-catalog/" in loc for loc in locs), locs)
+
+
 if __name__ == "__main__":
     unittest.main()
