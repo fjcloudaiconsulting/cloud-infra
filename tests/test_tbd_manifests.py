@@ -412,5 +412,25 @@ class VisitorAddressFromCloudflare(unittest.TestCase):
                          ("tbd-staging", "frontend"), ("tbd-staging", "mcp")} <= seen, seen)
 
 
+
+class CorsAppOriginOnly(unittest.TestCase):
+    """FE-01: the API allows credentialed cross-origin calls from the app's own origin only, never from the apex or
+    www (marketing pages that never call the API)."""
+
+    def test_cors_origins_equal_the_app_url(self):
+        seen = 0
+        for ns in TBD_NAMESPACES:
+            for f, d in workloads(ns):
+                for c in containers(d):
+                    env = {e.get("name"): e.get("value") for e in c.get("env") or []}
+                    if "BACKEND_CORS_ORIGINS" not in env:
+                        continue
+                    seen += 1
+                    app_url = env.get("APP_URL")
+                    self.assertRegex(app_url or "", r"^https://[a-z0-9.-]+$", where(f, d, c))
+                    self.assertEqual(env["BACKEND_CORS_ORIGINS"], app_url, where(f, d, c))
+        self.assertGreaterEqual(seen, 3)  # tbd-prod backend and scheduler, tbd-staging backend
+
+
 if __name__ == "__main__":
     unittest.main()
