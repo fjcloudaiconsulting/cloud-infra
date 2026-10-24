@@ -1,5 +1,5 @@
-"""Fences on the platform layer: Flux's RBAC and images (clusters/hetzner/flux-system) and the upgrade controller's
-images (clusters/hetzner/system-upgrade).
+"""Fences on the platform layer: Flux's RBAC and images (clusters/hetzner/flux-system), the upgrade controller's
+images (clusters/hetzner/system-upgrade) and ServiceAccount tokens in every pod under clusters/.
 
 Stdlib only, plus `kubectl kustomize` (or `kustomize build`) for the directories that carry kustomize patches: the
 render is what Flux applies, so these fences read it rather than the vendored upstream files. Without either tool the
@@ -12,12 +12,17 @@ import shutil
 import subprocess
 import unittest
 
-from test_tbd_manifests import CLUSTERS, WORKLOAD_KINDS, _Parser, containers
+from test_tbd_manifests import ROOT, CLUSTERS, WORKLOAD_KINDS, _Parser, containers, hand_written, load_all, pod_spec
 
 FLUX_NS = "flux-system"
 FLUX_CONTROLLERS = ("source-controller", "kustomize-controller")
+APP_NAMESPACES = ("tbd-prod", "tbd-staging", "ziftbook-prod", "ziftbook-staging")
 # repo:tag@sha256:<64 hex>: the tag for people, the digest for the kubelet.
 PINNED = re.compile(r"^[a-z0-9][a-z0-9./_-]*:[\w][\w.-]*@sha256:[0-9a-f]{64}$")
+# The only ServiceAccounts whose pods talk to the API and so mount a token (namespace, name): Alloy's discovery, the
+# upgrade controller and the two Flux controllers.
+TOKEN_ALLOWLIST = {("observability", "alloy"), ("system-upgrade", "system-upgrade"),
+                   *((FLUX_NS, c) for c in FLUX_CONTROLLERS)}
 
 
 # ---- helpers ------------------------------------------------------------------------------------------------------
@@ -57,6 +62,24 @@ def of_kind(docs, *kinds):
 
 def name_of(doc):
     return (doc.get("metadata") or {}).get("name")
+
+
+def namespace_of(doc):
+    return (doc.get("metadata") or {}).get("namespace")
+
+
+def cluster_docs():
+    """(where, doc) for every hand-written document under clusters/, plus the rendered flux-system: the Flux
+    controllers' pods are only in its generated file, and the render is what runs."""
+    out = []
+    for f in hand_written():
+        out.extend((str(f.relative_to(ROOT)), d) for d in load_all(f))
+    out.extend(("render of flux-system", d) for d in render(FLUX_NS))
+    return out
+
+
+def label(doc, key):
+    return ((doc.get("metadata") or {}).get("labels") or {}).get(key)
 
 
 def grants(rule, group, resource, verb):
@@ -163,6 +186,40 @@ class PinnedImages(unittest.TestCase):
         for d in pods:
             for c in containers(d):
                 self.assertRegex(c.get("image") or "", PINNED, f"{d['kind']}/{name_of(d)} container {c['name']}")
+
+
+class ServiceAccountTokens(unittest.TestCase):
+    """K8S-06: a pod gets an API token only when its ServiceAccount is one that needs the API."""
+
+    def test_default_accounts_mount_no_token(self):
+        accounts = {(namespace_of(d), name_of(d)): d for _, d in cluster_docs() if d.get("kind") == "ServiceAccount"}
+        for ns in ("data", *APP_NAMESPACES):
+            sa = accounts.get((ns, "default"))
+            self.assertIsNotNone(sa, f"{ns}: no default ServiceAccount in git")
+            self.assertIs(sa.get("automountServiceAccountToken"), False, f"{ns}/default")
+            # Flux must never delete a namespace's default account (removing the file would otherwise prune it).
+            self.assertEqual((sa["metadata"].get("annotations") or {}).get("kustomize.toolkit.fluxcd.io/prune"),
+                             "disabled", f"{ns}/default")
+
+    def test_no_pod_mounts_a_token_unless_allowlisted(self):
+        docs = cluster_docs()
+        no_automount = {(namespace_of(d), name_of(d)) for _, d in docs
+                        if d.get("kind") == "ServiceAccount" and d.get("automountServiceAccountToken") is False}
+        seen = 0
+        for where, d in docs:
+            if d.get("kind") not in WORKLOAD_KINDS:
+                continue
+            seen += 1
+            spec, ns = pod_spec(d), namespace_of(d)
+            what = f"{where} {d['kind']}/{name_of(d)}"
+            self.assertTrue(ns, f"{what}: no namespace")
+            sa = spec.get("serviceAccountName") or spec.get("serviceAccount") or "default"
+            mount = spec.get("automountServiceAccountToken")
+            if mount is False or (ns, sa) in TOKEN_ALLOWLIST:
+                continue
+            self.assertIsNone(mount, f"{what}: sets automountServiceAccountToken true for {ns}/{sa}")
+            self.assertIn((ns, sa), no_automount, f"{what}: mounts the token of {ns}/{sa}")
+        self.assertGreater(seen, 15)
 
 
 if __name__ == "__main__":

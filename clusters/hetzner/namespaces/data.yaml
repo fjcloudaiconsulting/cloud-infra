@@ -33,3 +33,14 @@ spec:
   hard:
     requests.memory: 1Gi
     limits.memory: 1536Mi
+---
+# Nothing in this namespace talks to the Kubernetes API, so its pods start without a token (K8S-06).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default
+  namespace: data
+  annotations:
+    # Removing this file must not make Flux delete the namespace's default account.
+    kustomize.toolkit.fluxcd.io/prune: disabled
+automountServiceAccountToken: false
