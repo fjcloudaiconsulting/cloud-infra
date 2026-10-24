@@ -194,6 +194,46 @@ def ssh_key(key_type, comment="owner@laptop"):
     return f"{key_type} {base64.b64encode(blob).decode()}" + (f" {comment}" if comment else "")
 
 
+# ---- k3s API audit policy ------------------------------------------------------------------------------------------
+
+AUDIT_RULE_KEYS = {"level", "users", "userGroups", "verbs", "resources", "nonResourceURLs"}
+
+
+def _audit_rule_matches(rule, req):
+    unknown = set(rule) - AUDIT_RULE_KEYS
+    if unknown:
+        raise AssertionError(f"audit rule keys this fence does not model: {sorted(unknown)}")
+    if "users" in rule and req["user"] not in rule["users"]:
+        return False
+    if "userGroups" in rule and not set(req["groups"]) & set(rule["userGroups"]):
+        return False
+    if "verbs" in rule and req["verb"] not in rule["verbs"]:
+        return False
+    if "path" in req:  # a non-resource request
+        if "resources" in rule:
+            return False
+        urls = rule.get("nonResourceURLs")
+        return urls is None or any(req["path"] == u or (u.endswith("*") and req["path"].startswith(u[:-1]))
+                                   for u in urls)
+    if "nonResourceURLs" in rule:
+        return False
+    if "resources" not in rule:
+        return True
+    # "nodes" matches the resource only, not nodes/status: subresources are named explicitly (or with a *).
+    return any(g.get("group", "") == req.get("group", "") and (not g.get("resources") or req["resource"] in g["resources"])
+               for g in rule["resources"])
+
+
+def audit_level(policy, user, verb, resource=None, group="", groups=("system:authenticated",), path=None):
+    """The level the API server logs a request at: the first matching rule's, None when no rule matches."""
+    req = {"user": user, "groups": list(groups), "verb": verb}
+    req.update({"path": path} if path else {"resource": resource, "group": group})
+    for rule in policy["rules"]:
+        if _audit_rule_matches(rule, req):
+            return rule["level"]
+    return "None"
+
+
 def kubeconfig_block(site_plays):
     post = next(p for p in site_plays if p.get("name") == "K3s servers")["post_tasks"]
     blocks = [t for t in post if "block" in t and "kubeconfig" in str(t.get("when"))]
@@ -319,6 +359,76 @@ class PublicNicExposure(unittest.TestCase):
                          "private_cidr is the Hetzner private subnet")
         for name, ip in server_private_ips().items():
             self.assertIn(ipaddress.ip_address(ip), ipaddress.ip_network(cidr), name)
+
+
+class ApiAuditLog(unittest.TestCase):
+    """ANS-02: the API servers write an audit log under a policy Ansible installs before k3s is configured."""
+
+    ADMIN = {"user": "system:admin", "groups": ("system:masters", "system:authenticated")}
+    OWNER = {"user": "system:serviceaccount:netbird:owner-admin",
+             "groups": ("system:serviceaccounts", "system:serviceaccounts:netbird", "system:authenticated")}
+    FLUX = {"user": "system:serviceaccount:flux-system:kustomize-controller",
+            "groups": ("system:serviceaccounts", "system:serviceaccounts:flux-system", "system:authenticated")}
+    KUBELET = {"user": "system:node:node-1", "groups": ("system:nodes", "system:authenticated")}
+
+    def policy(self):
+        return load_all(ANSIBLE / "files/k3s-audit-policy.yaml")[0]
+
+    def test_api_server_args_point_at_the_policy_and_cap_the_log(self):
+        args = dict(a.split("=", 1) for a in server_config().get("kube-apiserver-arg") or [])
+        self.assertEqual(args.get("audit-policy-file"), all_vars()["k3s_audit_policy_file"])
+        self.assertTrue(args.get("audit-log-path", "").startswith("/var/lib/rancher/k3s/server/logs/"))
+        for key in ("audit-log-maxage", "audit-log-maxbackup", "audit-log-maxsize"):
+            self.assertRegex(args.get(key, ""), r"^[1-9]\d*$", key)
+        # The CAX21 root disk holds the OS, images and etcd: the log may take at most 1 GB per server.
+        self.assertLessEqual((int(args["audit-log-maxbackup"]) + 1) * int(args["audit-log-maxsize"]), 1024)
+
+    def test_site_installs_the_policy_before_k3s(self):
+        pre = list(flat_tasks(play("K3s servers")["pre_tasks"]))
+        copies = [module_args(t, "ansible.builtin.copy") for t in pre if module_args(t, "ansible.builtin.copy")]
+        self.assertIn({"src": "k3s-audit-policy.yaml", "dest": "{{ k3s_audit_policy_file }}", "owner": "root",
+                       "group": "root", "mode": "0600"}, copies)
+        self.assertTrue((ANSIBLE / "files/k3s-audit-policy.yaml").is_file())
+
+    def test_policy_levels(self):
+        pol = self.policy()
+        self.assertEqual((pol.get("apiVersion"), pol.get("kind")), ("audit.k8s.io/v1", "Policy"))
+        self.assertIn("RequestReceived", pol.get("omitStages") or [])
+        cases = [
+            # (who, verb, resource, group, expected)
+            (self.OWNER, "get", "secrets", "", "Metadata"),
+            (self.FLUX, "patch", "secrets", "", "Metadata"),
+            (self.OWNER, "list", "configmaps", "", "Metadata"),
+            (self.ADMIN, "create", "serviceaccounts/token", "", "Metadata"),
+            (self.KUBELET, "create", "serviceaccounts/token", "", "Metadata"),
+            (self.KUBELET, "create", "tokenreviews", "authentication.k8s.io", "Metadata"),
+            (self.ADMIN, "create", "pods/exec", "", "Request"),
+            (self.OWNER, "get", "pods/exec", "", "Request"),
+            (self.OWNER, "create", "pods/attach", "", "Request"),
+            (self.OWNER, "create", "pods/portforward", "", "Request"),
+            (self.ADMIN, "create", "clusterrolebindings", "rbac.authorization.k8s.io", "Request"),
+            (self.FLUX, "patch", "roles", "rbac.authorization.k8s.io", "Request"),
+            (self.OWNER, "delete", "rolebindings", "rbac.authorization.k8s.io", "Request"),
+            (self.OWNER, "patch", "nodes", "", "Request"),
+            (self.ADMIN, "delete", "nodes", "", "Request"),
+            (self.KUBELET, "get", "secrets", "", "None"),
+            (self.KUBELET, "watch", "configmaps", "", "None"),
+            ({"user": "system:kube-controller-manager", "groups": ("system:authenticated",)}, "list", "secrets", "",
+             "None"),
+            (self.KUBELET, "patch", "nodes/status", "", "None"),
+            (self.OWNER, "get", "clusterroles", "rbac.authorization.k8s.io", "None"),
+        ]
+        for who, verb, resource, group, want in cases:
+            got = audit_level(pol, who["user"], verb, resource, group, who["groups"])
+            self.assertEqual(got, want, f"{who['user']} {verb} {group}/{resource}")
+        for path in ("/healthz", "/livez", "/readyz", "/readyz/etcd", "/version"):
+            self.assertEqual(audit_level(pol, "system:anonymous", "get", path=path), "None", path)
+
+    def test_secret_values_are_never_logged(self):
+        pol = self.policy()
+        for who in (self.ADMIN, self.OWNER, self.FLUX, self.KUBELET):
+            for verb in ("get", "list", "watch", "create", "update", "patch", "delete"):
+                self.assertIn(audit_level(pol, who["user"], verb, "secrets", "", who["groups"]), ("None", "Metadata"))
 
 
 if __name__ == "__main__":

@@ -36,6 +36,8 @@ manage_firewall: false
 extra_service_envs: ["GOGC=50"]
 k3s_node_labels: []
 k3s_node_taints: []
+# The API audit policy (files/k3s-audit-policy.yaml), installed by site.yml before k3s is configured.
+k3s_audit_policy_file: /etc/rancher/k3s/audit-policy.yaml
 # Merged last over the collection's generated config, so cluster-init and server below are what k3s gets.
 server_config_yaml: |
   node-name: {{ inventory_hostname }}
@@ -49,6 +51,13 @@ server_config_yaml: |
   kubelet-arg: ["fail-swap-on=false"]
   # NodePorts answer on the private network only, never on the public NIC (no Service uses one today).
   kube-proxy-arg: ["nodeport-addresses={{ private_cidr }}"]
+  # API audit log (README.md, "API audit log"): at most 5 files of 100 MB per server, none older than 30 days.
+  kube-apiserver-arg:
+    - "audit-policy-file={{ k3s_audit_policy_file }}"
+    - "audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log"
+    - "audit-log-maxage=30"
+    - "audit-log-maxbackup=4"
+    - "audit-log-maxsize=100"
   tls-san: {{ groups['server'] | map('extract', hostvars, 'private_ip') | list | to_json }}
   node-label: {{ k3s_node_labels | to_json }}
   node-taint: {{ k3s_node_taints | to_json }}

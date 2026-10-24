@@ -1,0 +1,38 @@
+---
+# k3s API audit policy, installed by site.yml at k3s_audit_policy_file (group_vars/all.yml). The API server reads it
+# at start, so a change takes effect on the next `-e k3s_reconfigure=true` run. The first matching rule wins and a
+# request no rule matches is not logged. Secrets stay at Metadata: Request or RequestResponse would log their values.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# RequestReceived only repeats the ResponseComplete event of the same request.
+omitStages: ["RequestReceived"]
+rules:
+  # Noise: health and version probes, and the control plane's and the nodes' own reads (kubelets read every pod's
+  # Secrets and ConfigMaps).
+  - level: None
+    nonResourceURLs: ["/healthz*", "/livez*", "/readyz*", "/version"]
+  - level: None
+    users: ["system:apiserver", "system:kube-controller-manager", "system:kube-scheduler", "system:kube-proxy"]
+    verbs: ["get", "list", "watch"]
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get", "list", "watch"]
+  # A shell or a tunnel into a pod: who, which pod, which command.
+  - level: Request
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  # Changes to who may do what, and to the nodes (labels, taints, cordons).
+  - level: Request
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+    resources:
+      - group: rbac.authorization.k8s.io
+      - group: ""
+        resources: ["nodes"]
+  # Who read or changed credentials and config, and who minted or checked a token: metadata only, never values.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "configmaps", "serviceaccounts/token"]
+      - group: authentication.k8s.io
+        resources: ["tokenreviews"]

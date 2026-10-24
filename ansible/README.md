@@ -125,6 +125,21 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
    quorum guard. k3s versions move through system-upgrade-controller (INFRA-179), not this playbook.
 5. Paste the `PLAY RECAP` into the PR with the SHA.
 
+## API audit log
+
+Each k3s server writes an API audit log to `/var/lib/rancher/k3s/server/logs/audit.log` (at most 5 files of 100 MB,
+none older than 30 days). The policy is [`files/k3s-audit-policy.yaml`](files/k3s-audit-policy.yaml), installed on
+every run as `/etc/rancher/k3s/audit-policy.yaml`: metadata (who, what, when, never a value) for Secrets, ConfigMaps,
+token requests and token reviews; the request too for exec, attach, port-forward, RBAC changes and node changes. The
+API server reads both only at start, so the log begins, and a policy change applies, after a `-e k3s_reconfigure=true`
+run (each server restarts in turn behind the quorum guard). A server logs only the requests it served, so read all
+three:
+
+    ssh root@<server> tail -n 200 /var/lib/rancher/k3s/server/logs/audit.log \
+      | jq -c '{t: .requestReceivedTimestamp, user: .user.username, verb, res: .objectRef.resource, ns: .objectRef.namespace, name: .objectRef.name}'
+
+The log stays on the node; nothing ships it (or the SSH journal) elsewhere yet, so a root intruder can delete it.
+
 ## Rolling reboot
 
 unattended-upgrades installs kernel updates but never reboots (`node_base`), so a node runs the old kernel until it is
