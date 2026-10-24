@@ -881,7 +881,7 @@ API traffic.
 ### TBD app alerts
 
 Rule group `tbd-app` (folder Platform) watches the TBD backend's CSP report sink in production
-(`tbd_security_csp_reports_total`, service `tbd-api`; the counter ships with tbd 0.303.1). A series appears only on the
+(`tbd_security_csp_reports_total`, service `tbd-api`; the counter exists once prod runs a tbd release that includes it, expected 0.303.1). A series appears only on the
 first report with that `outcome`, so the rules count new reports the same way as the Ziftbook counter rules (now
 minus the last value seen up to a day before the window, or 0 if the series is newer) and treat no data as OK.
 
@@ -896,9 +896,9 @@ report endpoint; the app decides which, not infra.
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/tbd-app grafana/tbd-app.rules.json`. The metric name is
-not yet confirmed: after 0.303.1 runs and a first CSP report arrives, check in Explore that
-`count by (__name__, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
-returns `tbd_security_csp_reports_total`; a different name leaves both rules silent.
+not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
+`count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
+returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
 
 ### Find a request's logs
 
