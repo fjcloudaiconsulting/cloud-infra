@@ -3,6 +3,12 @@
 # Bootstrap pin only: the Plans in clusters/hetzner/system-upgrade/plans.yaml win once the cluster runs.
 # renovate: datasource=github-releases depName=k3s-io/k3s
 k3s_version: v1.36.5+k3s1
+# The k3s installer site.yml puts on a server: install.sh at the commit of a k3s tag, checked against this sha256. It
+# installs whatever k3s_version names, so a k3s bump does not need a new pin. To move it: the tag's commit
+# (`gh api 'repos/k3s-io/k3s/commits/<tag, + as %2B>' --jq .sha`) and `sha256sum` of install.sh at that commit.
+# The k3s binary itself is still fetched by install.sh and checked only against the release's own sha256sum file.
+k3s_install_sh_commit: "3dd98cc58ec34991e7e59b93663eee2e26fc1f65"  # v1.36.5+k3s1
+k3s_install_sh_sha256: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
 
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.

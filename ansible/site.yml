@@ -169,11 +169,13 @@
         group: root
         mode: "0600"
 
-    # The collection only downloads get.k3s.io when this file is absent, so the installer stays pinned to k3s_version.
-    - name: Install the k3s installer from the release tag
+    # The collection only downloads get.k3s.io when this file is absent, so this pinned installer is the one it runs:
+    # install.sh at a k3s tag's commit, checked against its sha256 (both in group_vars/all.yml).
+    - name: Install the pinned k3s installer
       when: k3s_apply | bool
       ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version }}/install.sh
+        url: https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_install_sh_commit }}/install.sh
+        checksum: sha256:{{ k3s_install_sh_sha256 }}
         dest: /usr/local/bin/k3s-install.sh
         owner: root
         group: root

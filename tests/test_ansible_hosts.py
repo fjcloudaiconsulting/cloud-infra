@@ -465,5 +465,55 @@ class K3sTokenRotation(unittest.TestCase):
             self.assertIn("rotate-the-k3s-token-live", rows.get(item, ""), item)
 
 
+class PinnedDownloads(unittest.TestCase):
+    """ANS-06: everything Ansible downloads is checked against a pinned hash; the k3s installer comes from a commit."""
+
+    @staticmethod
+    def get_urls():
+        """Every get_url call in our own playbooks and roles (not the installed collections)."""
+        found = []
+
+        def walk(node, where):
+            if isinstance(node, dict):
+                for key, val in node.items():
+                    if key in ("ansible.builtin.get_url", "get_url"):
+                        found.append((where, node.get("name"), val))
+                    walk(val, where)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item, where)
+
+        for f in sorted(ANSIBLE.rglob("*.y*ml")):
+            rel = f.relative_to(ANSIBLE)
+            if rel.parts[0] in ("collections", ".ansible") or f.name.endswith(".sops.yaml"):
+                continue
+            for doc in load_all(f):
+                walk(doc, str(rel))
+        return found
+
+    def test_every_get_url_has_a_sha256_checksum(self):
+        found = self.get_urls()
+        self.assertTrue(found, "no get_url found: the walk is broken")
+        for where, name, args in found:
+            self.assertRegex(str(args.get("checksum", "")), r"^sha256:", f"{where}: {name}")
+
+    def test_k3s_installer_is_pinned_by_commit_and_hash(self):
+        v = all_vars()
+
+        def fill(text):
+            return re.sub(r"\{\{\s*(\w+)\s*\}\}", lambda m: str(v[m.group(1)]), text)
+
+        installers = [a for _, _, a in self.get_urls() if a.get("dest") == "/usr/local/bin/k3s-install.sh"]
+        self.assertEqual(len(installers), 1)
+        self.assertRegex(fill(installers[0]["url"]),
+                         r"^https://raw\.githubusercontent\.com/k3s-io/k3s/[0-9a-f]{40}/install\.sh$")
+        self.assertRegex(fill(installers[0]["checksum"]), r"^sha256:[0-9a-f]{64}$")
+
+    def test_renovate_still_sees_k3s_version(self):
+        # renovate.json's k3s regex manager needs its comment line directly above k3s_version.
+        self.assertRegex((ANSIBLE / "group_vars/all.yml").read_text(),
+                         r"# renovate: datasource=github-releases depName=k3s-io/k3s\nk3s_version: v\S+\n")
+
+
 if __name__ == "__main__":
     unittest.main()
