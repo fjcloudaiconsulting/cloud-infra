@@ -7,6 +7,8 @@ k3s_version: v1.36.5+k3s1
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.
 private_nic: enp7s0
+# The private subnet (hcloud_network_subnet.main in terraform/hetzner/main.tf); every private_ip is in it.
+private_cidr: 10.0.1.0/24
 
 # Public keys root accepts besides the one next to ansible_ssh_private_key_file (node_base writes exactly these):
 # the next deploy key during a rotation, or a second operator key. ed25519 or sk-ssh-ed25519@openssh.com only.
@@ -45,6 +47,8 @@ server_config_yaml: |
   secrets-encryption: true
   write-kubeconfig-mode: "0600"
   kubelet-arg: ["fail-swap-on=false"]
+  # NodePorts answer on the private network only, never on the public NIC (no Service uses one today).
+  kube-proxy-arg: ["nodeport-addresses={{ private_cidr }}"]
   tls-san: {{ groups['server'] | map('extract', hostvars, 'private_ip') | list | to_json }}
   node-label: {{ k3s_node_labels | to_json }}
   node-taint: {{ k3s_node_taints | to_json }}

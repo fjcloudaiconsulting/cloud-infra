@@ -1,10 +1,10 @@
 variable "ssh_allowed_cidrs" {
-  description = "IPv4 CIDRs allowed to reach port 22 on every node (the only inbound rule). Set as a workspace variable."
+  description = "IPv4 CIDRs, each /24 or narrower, allowed to reach port 22 on every node (the only inbound rule). Set as a workspace variable."
   type        = list(string)
 
   validation {
-    condition     = length(var.ssh_allowed_cidrs) > 0 && alltrue([for c in var.ssh_allowed_cidrs : can(cidrnetmask(c)) && !endswith(c, "/0")])
-    error_message = "ssh_allowed_cidrs must be a non-empty list of IPv4 CIDRs (not /0), for example 203.0.113.7/32."
+    condition     = length(var.ssh_allowed_cidrs) > 0 && alltrue([for c in var.ssh_allowed_cidrs : can(cidrnetmask(c)) && can(regex("/(2[4-9]|3[0-2])$", c))])
+    error_message = "ssh_allowed_cidrs must be a non-empty list of IPv4 CIDRs, each /24 or narrower, for example 203.0.113.7/32."
   }
 }
 

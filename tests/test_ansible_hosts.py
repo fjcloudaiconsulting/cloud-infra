@@ -11,7 +11,8 @@ import struct
 import types
 import unittest
 
-from test_tbd_manifests import load_all
+from test_tbd_edge import resource_body
+from test_tbd_manifests import _Parser, load_all
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ANSIBLE = ROOT / "ansible"
@@ -21,6 +22,24 @@ HETZNER_TF = ROOT / "terraform/hetzner"
 
 def all_vars():
     return load_all(ANSIBLE / "group_vars/all.yml")[0]
+
+
+def server_config():
+    """server_config_yaml, parsed. `{{ name }}` of a plain string in group_vars/all.yml is filled in; any other
+    expression becomes JINJA and `{% %}` tags are dropped (only the static keys are fenced here)."""
+    v = all_vars()
+
+    def fill(m):
+        val = v.get(m.group(1).strip())
+        return val if isinstance(val, str) and "{" not in val else "JINJA"
+
+    text = re.sub(r"\{%.*?%\}", "", re.sub(r"\{\{(.*?)\}\}", fill, v["server_config_yaml"]))
+    return _Parser(text.split("\n"), "server_config_yaml").block(0)
+
+
+def server_private_ips():
+    hosts = load_all(ANSIBLE / "inventory.yaml")[0]["all"]["children"]["server"]["hosts"]
+    return {name: h["private_ip"] for name, h in hosts.items()}
 
 
 def plays(path):
@@ -278,6 +297,28 @@ class RootSshKeys(unittest.TestCase):
             self.assertTrue(hcl_eval(cond, deploy_ssh_public_key=key), key)
         for key in (ssh_key("ssh-rsa"), ssh_key("ecdsa-sha2-nistp256"), "", "ssh-ed25519"):
             self.assertFalse(hcl_eval(cond, deploy_ssh_public_key=key), key)
+
+
+class PublicNicExposure(unittest.TestCase):
+    """ANS-01 (part): the SSH allowlist takes only /24 or narrower entries, and NodePorts listen on the private
+    network only."""
+
+    def test_ssh_allowlist_needs_a_24_or_narrower_prefix(self):
+        cond = tf_validation("ssh_allowed_cidrs")
+        for ok in (["203.0.113.7/32"], ["198.51.100.0/24"], ["203.0.113.7/32", "198.51.100.0/24"]):
+            self.assertTrue(hcl_eval(cond, ssh_allowed_cidrs=ok), ok)
+        for bad in ([], ["0.0.0.0/0"], ["0.0.0.0/1"], ["0.0.0.0/1", "128.0.0.0/1"], ["198.51.100.0/23"],
+                    ["203.0.113.7"], ["2001:db8::/48"], ["203.0.113.7/32", "0.0.0.0/1"], ["not-an-ip/32"]):
+            self.assertFalse(hcl_eval(cond, ssh_allowed_cidrs=bad), bad)
+
+    def test_nodeports_listen_on_the_private_network_only(self):
+        cidr = all_vars()["private_cidr"]
+        self.assertIn(f"nodeport-addresses={cidr}", server_config().get("kube-proxy-arg") or [])
+        subnet = resource_body((HETZNER_TF / "main.tf").read_text(), "hcloud_network_subnet", "main")
+        self.assertEqual(re.search(r'ip_range\s*=\s*"([^"]+)"', subnet).group(1), cidr,
+                         "private_cidr is the Hetzner private subnet")
+        for name, ip in server_private_ips().items():
+            self.assertIn(ipaddress.ip_address(ip), ipaddress.ip_network(cidr), name)
 
 
 if __name__ == "__main__":

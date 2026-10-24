@@ -1046,7 +1046,7 @@ app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
+applying first; each entry must be a /24 or narrower). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
