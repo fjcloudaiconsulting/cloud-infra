@@ -53,6 +53,7 @@ spec:
               value: "INFO"
             - name: APP_URL
               value: "https://app.thebetterdecision.com"
+            # The app origin only (FE-01): the apex and www are marketing pages that never call the API.
             - name: BACKEND_CORS_ORIGINS
               value: "https://app.thebetterdecision.com"
             - name: COOKIE_SECURE

@@ -1,7 +1,7 @@
 # Ingress to tbd-prod is deny-by-default. The Cloudflare Tunnel (cloudflared namespace, INFRA-175; no Traefik on this
-# cluster) reaches the frontend, and the backend for /api, /health and /ready (the routes the app has always had);
-# the frontend reaches the backend for server-side fetches. The scheduler takes no traffic. Egress is open except
-# instance metadata (INFRA-43). Node-local traffic bypasses these policies (see data/networkpolicy.yaml); the data
+# cluster) reaches the frontend, and the backend for /api, /health and /ready (the routes the app has always had).
+# Nothing else reaches the backend (INF-01): the frontend makes no server-side backend calls since tbd TBD-624. The
+# scheduler takes no traffic. Egress is open except instance metadata (INFRA-43). Node-local traffic bypasses these policies (see data/networkpolicy.yaml); the data
 # policy admits this namespace to MySQL.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -51,9 +51,6 @@ spec:
           podSelector:
             matchLabels:
               app: cloudflared
-        - podSelector:
-            matchLabels:
-              app: frontend
       ports:
         - port: 8000
 ---

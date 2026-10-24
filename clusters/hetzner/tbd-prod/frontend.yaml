@@ -65,9 +65,6 @@ spec:
           env:
             - name: HOSTNAME
               value: 0.0.0.0
-            # Server-side (RSC) fetches reach the backend directly; browsers use relative URLs through the Cloudflare Tunnel.
-            - name: BACKEND_INTERNAL_URL
-              value: http://backend:8000
             # Access-log client IP, same rule and value as backend.yaml (INFRA-97). Trustworthy because the origin has no public port,
             # the Cloudflare Tunnel sets cf-connecting-ip (same-node host traffic bypasses NetworkPolicy, see data/networkpolicy.yaml). Images before the INFRA-97 tbd release ignore it.
             - name: CLIENT_IP_HEADER
