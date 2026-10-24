@@ -46,6 +46,8 @@ locals {
     ]
     ziftbook = [
       "/api/session",
+      "/api/admin/session",
+      "/api/admin/session/second-factor",
       "/api/sign-up",
       "/api/sign-up/complete",
       "/api/password-reset",
