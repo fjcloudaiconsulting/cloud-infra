@@ -211,6 +211,13 @@ resource "cloudflare_dns_record" "ziftbook_app" {
   proxied = true
 }
 
+# Ziftbook trusts cf-connecting-ip; overwrite_header would replace it with a pseudo IPv4 (ZIF-219). Read "off" 2026-10-24.
+resource "cloudflare_zone_setting" "ziftbook_pseudo_ipv4" {
+  zone_id    = data.cloudflare_zone.ziftbook.id
+  setting_id = "pseudo_ipv4"
+  value      = "off"
+}
+
 resource "cloudflare_zone_setting" "ziftbook_ssl_mode" {
   zone_id    = data.cloudflare_zone.ziftbook.id
   setting_id = "ssl_automatic_mode"
