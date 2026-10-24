@@ -492,8 +492,9 @@ kept equal. Account controls, the manual run and the rotation procedure: owner p
 `dev.thebetterdecision.com` needs a login (INFRA-117): Cloudflare Access, email one-time PIN, allow-list = the owner
 (`local.access_allow_emails` in `terraform/cloudflare/access.tf`), 24 h session. Only `GET /health` and `GET /robots.txt`
 are open, for the [post-deploy smoke](#post-deploy-smoke), plus what an MCP client calls without a browser
-(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included) and `/api/v1/oauth/*`. The consent
-page `/oauth/authorize` stays behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
+(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included), `/api/v1/oauth/register` and
+`/api/v1/oauth/token`. The consent page `/oauth/authorize` and the API calls it makes (`/api/v1/oauth/authorize`,
+`.../authorize/context`) stay behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
 is therefore not indexable. Every other path, `/api`
 included, needs the session cookie; the frontend and API share the host, so the browser carries it. Google SSO is off
 on staging, so there is no external callback to break. Staging mail links open only in a browser that has logged in.
@@ -511,7 +512,7 @@ MCP paths: `curl -s https://dev.thebetterdecision.com/.well-known/oauth-protecte
 JSON, `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://dev.thebetterdecision.com/mcp` answers 401 from the MCP
 server (not 302), `curl -s -d '' https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
 (not 302; `-d ''` sends `Content-Length: 0`, a bare `-X POST` sends no length and gets the body rule's 403), and
-`/api/v1/auth/me` still answers 302.
+`/api/v1/auth/me` and `/api/v1/oauth/authorize/context` still answer 302.
 **Lockout:** applications edited in the dashboard are drift that the next apply reverts; to open staging again, remove
 `cloudflare_zero_trust_access_application.tbd_staging` in a PR.
 

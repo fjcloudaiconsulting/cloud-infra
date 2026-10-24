@@ -227,5 +227,46 @@ class AuthRateLimitPaths(unittest.TestCase):
             self.assertLessEqual(len(rendered), self.EXPRESSION_MAX, zone)
 
 
+class StagingAccessBypass(unittest.TestCase):
+    """EDGE-06: on TBD staging, Access bypasses exactly what an MCP client calls without a browser."""
+
+    def bypass_paths(self, name):
+        text = (TF / "cloudflare/access.tf").read_text()
+        body = resource_body(text, "cloudflare_zero_trust_access_application", name)
+        m = re.search(r"for_each\s*=\s*toset\(\[(.*?)\]\)", body, re.S)
+        self.assertIsNotNone(m, f"{name}: for_each = toset([...]) not found")
+        self.assertRegex(body, r'domain\s*=\s*"\$\{local\.access_host\}\$\{each\.key\}"')
+        return [hcl_unquote(s) for s in re.findall(HCL_STRING, m.group(1))]
+
+    def test_mcp_bypass_is_the_exact_headless_endpoints(self):
+        mcp = self.bypass_paths("tbd_staging_mcp")
+        self.assertEqual(len(mcp), len(set(mcp)))
+        self.assertEqual(set(mcp), {
+            "/mcp",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-protected-resource",
+            "/api/v1/oauth/register",
+            "/api/v1/oauth/token",
+        })
+        for p in mcp:
+            self.assertNotIn("*", p)
+
+    def test_consent_and_session_paths_stay_behind_access(self):
+        paths = self.bypass_paths("tbd_staging_mcp") + self.bypass_paths("tbd_staging_smoke")
+
+        def bypassed(path):
+            # An application path covers its subpaths, and a trailing * all of them. A plain string prefix is wider
+            # than that, so a path this finds not bypassed is not bypassed by Access either.
+            return any(path.startswith(p.rstrip("*")) for p in paths)
+
+        for path in ("/mcp", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
+                     "/api/v1/oauth/register", "/api/v1/oauth/token", "/health", "/robots.txt"):
+            self.assertTrue(bypassed(path), path)
+        for path in ("/api/v1/oauth/authorize", "/api/v1/oauth/authorize/context", "/api/v1/oauth/",
+                     "/oauth/authorize", "/api/v1/auth/status", "/api/v1/auth/me", "/api/v1/auth/login", "/",
+                     "/_next/static/x.js"):
+            self.assertFalse(bypassed(path), path)
+
+
 if __name__ == "__main__":
     unittest.main()
