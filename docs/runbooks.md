@@ -780,7 +780,7 @@ once (`POST /api/v1/provisioning/contact-points`).
 
 ### Synthetic uptime
 
-Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health/dependencies` and
+Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health` (liveness, no database: the database probes are internal only, INF-09) and
 `https://app.ziftbook.com/api/healthz` (the backend's readiness path) from the outside, expecting 200, and replaces the
 Route 53 health check. Rule `ProdEndpointDown` (group `synthetic-uptime`, folder Platform) emails `owner-email` when
 `probe_success` averages under 0.5 over 6 minutes for 2 minutes (both probes failing). No data fires only when both checks report nothing; one check disappearing resolves its own series silently, then every 4 h.

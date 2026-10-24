@@ -96,6 +96,17 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
         self.assertEqual(route(rules, "x.thebetterdecision.com", "/api/v1/auth/login"), "http_status:404")
 
 
+    def test_database_probes_are_not_routed_on_the_public_hosts(self):
+        # INF-09: /ready and /health/dependencies query the database; kubelet and internal probes reach the pod.
+        rules = tunnel_rules()
+        for host, ns in (("app.thebetterdecision.com", "tbd-prod"), ("dev.thebetterdecision.com", "tbd-staging")):
+            backend = f"http://backend.{ns}.svc.cluster.local:8000"
+            for path in ("/health", "/api/v1/auth/login"):
+                self.assertEqual(route(rules, host, path), backend, (host, path))
+            for path in ("/ready", "/ready/", "/health/dependencies", "/health/dependencies/", "/health%2Fdependencies",
+                         "/health/", "/healthz"):
+                self.assertNotEqual(route(rules, host, path), backend, (host, path))
+
 class BodyLimit(unittest.TestCase):
     """BE-13: Cloudflare refuses a request to a TBD app host whose declared body is over the cap."""
 
