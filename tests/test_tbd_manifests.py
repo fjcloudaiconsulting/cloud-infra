@@ -384,6 +384,8 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
                         "--proxy-headers", "--forwarded-allow-ips", POD_CIDR,
                     ], where(f, d, c))
                     self.assertNotIn("command", c, where(f, d, c))
+                    # tbd images that read the trust list from the environment get the same value.
+                    self.assertEqual(env_value(c, "FORWARDED_ALLOW_IPS"), POD_CIDR, where(f, d, c))
         self.assertEqual(seen, {("tbd-prod", "backend"), ("tbd-staging", "backend"), ("tbd-staging", "mcp")})
 
     def test_no_tbd_container_sets_the_legacy_runtime_switch(self):

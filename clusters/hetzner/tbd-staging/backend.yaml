@@ -94,6 +94,10 @@ spec:
               value: "production"
             - name: CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # The same trust list for tbd images that read it from the environment (uvicorn and the rate limiter);
+            # keep it equal to --forwarded-allow-ips in args until args is dropped (INF-01).
+            - name: FORWARDED_ALLOW_IPS
+              value: 10.42.0.0/16
             - name: LOG_LEVEL
               value: "INFO"
             - name: APP_URL
