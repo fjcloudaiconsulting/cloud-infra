@@ -73,7 +73,8 @@ domains are attached by hand ([configuration-map.md](configuration-map.md#worker
 The tunnel is the only way in to the TBD workloads (INF-01). In `tbd-prod` and `tbd-staging` only `cloudflared` reaches the backend
 and MCP pods, and their uvicorn reads `X-Forwarded-For` and `X-Forwarded-Proto` from the pod network only. The TBD
 processes take the visitor's address from `CF-Connecting-IP` (`CLIENT_IP_HEADER`). `tests/test_tbd_manifests.py` and
-`tests/test_tbd_edge.py` hold these in place.
+`tests/test_tbd_edge.py` hold these in place. `cloudflared` itself reaches only cluster DNS, the pods and ports the
+tunnel routes to, and Cloudflare's edge; `tests/test_network_policies.py` keeps its egress in step with `tunnel.tf`.
 
 Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
 unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s
@@ -108,6 +109,9 @@ Three Hetzner CAX21 ARM64 servers in nbg1 run k3s HA (`terraform/hetzner`, host 
 The app namespaces enforce Pod Security restricted, `data` baseline. Every app namespace has a LimitRange with default memory limits, and its `default`
 ServiceAccount pulls from GHCR through `ghcr-pull`. Manifests:
 [`clusters/hetzner/namespaces/`](../clusters/hetzner/namespaces/).
+Their egress (`egress-no-imds` in each `networkpolicy.yaml`) reaches every pod and Service and the internet, except
+instance metadata and the node network: no app pod uses the Kubernetes API or a node address. A workload that
+needs one must get its own egress rule first.
 
 ## Data stores
 
@@ -118,9 +122,11 @@ All run in `data` on the Hetzner cluster as StatefulSets on local-path volumes, 
 | MySQL 8.4 | TBD production (`tbd`, users `tbd_app`, `tbd_backup`); TBD staging (`tbd_staging`, user `tbd_staging`, grants on its own database only, 20 connections at most) | buffer pool 128M, performance_schema off, binlog off |
 | Postgres 18 | Ziftbook staging (`ziftbook`) and production (`ziftbook_prod`); the two roles are shared and created by Ziftbook's pinned `bootstrap.sql`, run as a Job per database | shared_buffers 64MB, no parallel workers |
 
-A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts `tbd-prod`
-and `tbd-staging`, Postgres (Hetzner only since INFRA-181) `ziftbook-staging` and
-`ziftbook-prod`, and the backup and bootstrap pods reach their databases inside `data`.
+A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts the pods of `tbd-prod`
+and `tbd-staging` that hold a database URL (backend and scheduler, backend and MCP), Postgres (Hetzner only since
+INFRA-181) the backend and worker of `ziftbook-staging` and `ziftbook-prod`, and the backup and bootstrap pods reach
+their databases inside `data`. Frontends are not admitted. A new workload that connects needs its `app` label in that
+policy; `tests/test_network_policies.py` derives the list from the manifests.
 Database auth and the NetBird ACL complete the controls.
 Manifests and comments: [`clusters/hetzner/data/`](../clusters/hetzner/data/).
 
