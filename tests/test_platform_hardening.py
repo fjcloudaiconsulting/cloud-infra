@@ -1,4 +1,5 @@
-"""Fences on the platform layer: Flux's RBAC (clusters/hetzner/flux-system).
+"""Fences on the platform layer: Flux's RBAC and images (clusters/hetzner/flux-system) and the upgrade controller's
+images (clusters/hetzner/system-upgrade).
 
 Stdlib only, plus `kubectl kustomize` (or `kustomize build`) for the directories that carry kustomize patches: the
 render is what Flux applies, so these fences read it rather than the vendored upstream files. Without either tool the
@@ -11,10 +12,12 @@ import shutil
 import subprocess
 import unittest
 
-from test_tbd_manifests import CLUSTERS, _Parser
+from test_tbd_manifests import CLUSTERS, WORKLOAD_KINDS, _Parser, containers
 
 FLUX_NS = "flux-system"
 FLUX_CONTROLLERS = ("source-controller", "kustomize-controller")
+# repo:tag@sha256:<64 hex>: the tag for people, the digest for the kubelet.
+PINNED = re.compile(r"^[a-z0-9][a-z0-9./_-]*:[\w][\w.-]*@sha256:[0-9a-f]{64}$")
 
 
 # ---- helpers ------------------------------------------------------------------------------------------------------
@@ -77,6 +80,14 @@ class HelperSelfTest(unittest.TestCase):
         self.assertFalse(grants({"nonResourceURLs": ["/livez/ping"], "verbs": ["head"]}, "", "serviceaccounts/token",
                                 "create"))
 
+    def test_pinned(self):
+        digest = "sha256:" + "0" * 64
+        self.assertRegex(f"ghcr.io/fluxcd/source-controller:v1.9.6@{digest}", PINNED)
+        self.assertRegex(f"rancher/kubectl:v1.36.2@{digest}", PINNED)
+        for ref in ("rancher/kubectl:v1.36.2", f"rancher/kubectl@{digest}", f"rancher/kubectl:v1@{digest[:-1]}",
+                    f"rancher/kubectl:v1@sha256:{'0' * 64}x", f"rancher/kubectl:v1@sha512:{'0' * 64}"):
+            self.assertNotRegex(ref, PINNED)
+
     def test_parse_docs_skips_crds(self):
         text = "kind: CustomResourceDefinition\nspec:\n  x: [a, [b]]\n---\nkind: A\nmetadata:\n  name: a\n"
         self.assertEqual(parse_docs(text, "t"), [{"kind": "A", "metadata": {"name": "a"}}])
@@ -118,6 +129,40 @@ class FluxRbac(unittest.TestCase):
             for s in b.get("subjects") or []:
                 self.assertEqual(s.get("kind"), "ServiceAccount", f"{name_of(b)}: {s}")
                 self.assertIn((s.get("namespace"), s.get("name")), accounts, f"{name_of(b)}: {s} is not defined here")
+
+
+class PinnedImages(unittest.TestCase):
+    """K8S-02: the Flux controllers, the upgrade controller and the upgrade Jobs' kubectl run by tag and digest."""
+
+    def test_every_flux_image_is_pinned_by_digest(self):
+        pods = of_kind(render(FLUX_NS), *WORKLOAD_KINDS)
+        self.assertEqual(sorted(name_of(d) for d in pods), sorted(FLUX_CONTROLLERS))
+        for d in pods:
+            for c in containers(d):
+                self.assertRegex(c.get("image") or "", PINNED, f"{d['kind']}/{name_of(d)} container {c['name']}")
+
+    def test_flux_pins_follow_the_vendored_version(self):
+        # A regenerated gotk-components.yaml with new controller tags must move the images: entries in the same change,
+        # or the render would run the old controllers against the new CRDs.
+        text = (CLUSTERS / "hetzner/flux-system/gotk-components.yaml").read_text()
+        vendored = dict(re.findall(r"(?m)^\s+image: (ghcr\.io/fluxcd/[a-z-]+):(\S+)$", text))
+        self.assertEqual(set(vendored), {f"ghcr.io/fluxcd/{c}" for c in FLUX_CONTROLLERS})
+        for d in of_kind(render(FLUX_NS), *WORKLOAD_KINDS):
+            for c in containers(d):
+                repo, tag = c["image"].split("@")[0].rsplit(":", 1)
+                self.assertEqual(tag, vendored[repo], f"{name_of(d)}: images: tag differs from gotk-components.yaml")
+
+    def test_upgrade_controller_and_kubectl_images_are_pinned_by_digest(self):
+        docs = render("system-upgrade")
+        env = [d for d in of_kind(docs, "ConfigMap") if name_of(d) == "default-controller-env"]
+        self.assertEqual(len(env), 1)
+        # The drain container of every upgrade Job runs this image with the controller's ServiceAccount.
+        self.assertRegex(env[0]["data"]["SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE"], PINNED)
+        pods = of_kind(docs, *WORKLOAD_KINDS)
+        self.assertTrue(pods)
+        for d in pods:
+            for c in containers(d):
+                self.assertRegex(c.get("image") or "", PINNED, f"{d['kind']}/{name_of(d)} container {c['name']}")
 
 
 if __name__ == "__main__":

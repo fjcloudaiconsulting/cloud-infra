@@ -57,3 +57,13 @@ patches:
           - kind: ServiceAccount
             name: kustomize-controller
             namespace: flux-system
+# The controllers run cluster-wide (kustomize-controller as cluster-admin): pin both by digest (multi-arch index of
+# v1.9.6, K8S-02) without touching the generated file. Renovate ignores this directory: a Flux upgrade regenerates
+# gotk-components.yaml and moves tag and digest here in the same change (runbook "Hetzner cluster bootstrap", step 5).
+images:
+  - name: ghcr.io/fluxcd/source-controller
+    newTag: v1.9.6
+    digest: sha256:6a6693172589f8ff26123a231d5fa6ceb194a6efb4dc647cdf057c959f76a2e3
+  - name: ghcr.io/fluxcd/kustomize-controller
+    newTag: v1.9.6
+    digest: sha256:2ebeaa341da77d52b6abbbba5efcee0450d47f8b42f0e6f33b08f9020262d606
