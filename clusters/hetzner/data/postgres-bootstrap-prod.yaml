@@ -37,7 +37,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: fetch
-          image: curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
+          image: curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac
           env:
             - name: URL
               value: https://raw.githubusercontent.com/fjcloudaiconsulting/ziftbook/afcc222885e6df46e7dbc830d9a3b2fbbf72b504/backend/migrations/bootstrap.sql
