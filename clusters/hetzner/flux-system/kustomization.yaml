@@ -15,3 +15,64 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 256Mi
+  # RBAC trimmed to this install (K8S-05). Upstream lets the controllers create tokens for any ServiceAccount, which
+  # only workload identity (cloud-provider auth by ServiceAccount) uses; this cluster has none: the GitRepository is
+  # public and SOPS decrypts with the age key in a Secret. Both bindings also name controllers not installed here
+  # (helm, notification, image, source-watcher): only the two ServiceAccounts that exist stay.
+  # Patched here, so a regenerated gotk-components.yaml (`flux install --export`) keeps the trim. The `test` op fails
+  # the build if a regeneration moves the rule, rather than removing another one: fix the index then.
+  # tests/test_platform_hardening.py renders this directory and checks both.
+  - target:
+      kind: ClusterRole
+      name: crd-controller-flux-system
+    patch: |
+      - op: test
+        path: /rules/11
+        value:
+          apiGroups: [""]
+          resources: [serviceaccounts/token]
+          verbs: [create]
+      - op: remove
+        path: /rules/11
+  - target:
+      kind: ClusterRoleBinding
+      name: crd-controller-flux-system
+    patch: |
+      - op: replace
+        path: /subjects
+        value:
+          - kind: ServiceAccount
+            name: kustomize-controller
+            namespace: flux-system
+          - kind: ServiceAccount
+            name: source-controller
+            namespace: flux-system
+  - target:
+      kind: ClusterRoleBinding
+      name: cluster-reconciler-flux-system
+    patch: |
+      - op: replace
+        path: /subjects
+        value:
+          - kind: ServiceAccount
+            name: kustomize-controller
+            namespace: flux-system
+  # Upstream only warns at restricted; both controllers already meet it (non-root, no capabilities, RuntimeDefault
+  # seccomp, emptyDir volumes), so enforce it (K8S-09). tests/test_platform_hardening.py checks the rendered pods.
+  - patch: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: flux-system
+        labels:
+          pod-security.kubernetes.io/enforce: restricted
+# The controllers run cluster-wide (kustomize-controller as cluster-admin): pin both by digest (multi-arch index of
+# v1.9.6, K8S-02) without touching the generated file. Renovate ignores this directory: a Flux upgrade regenerates
+# gotk-components.yaml and moves tag and digest here in the same change (runbook "Hetzner cluster bootstrap", step 5).
+images:
+  - name: ghcr.io/fluxcd/source-controller
+    newTag: v1.9.6
+    digest: sha256:6a6693172589f8ff26123a231d5fa6ceb194a6efb4dc647cdf057c959f76a2e3
+  - name: ghcr.io/fluxcd/kustomize-controller
+    newTag: v1.9.6
+    digest: sha256:2ebeaa341da77d52b6abbbba5efcee0450d47f8b42f0e6f33b08f9020262d606

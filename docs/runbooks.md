@@ -1100,15 +1100,17 @@ release, or restore the etcd snapshot.
 ([Hetzner nodes](#hetzner-nodes-ansible-rebuild-break-glass)).
 
 **Minors** (Renovate waits for a tick on the Dependency Dashboard): read the release notes, one minor at a time, and
-change in the same PR the k3s-ansible pin (`ansible/requirements.yml`) and the kubectl image in
+change in the same PR the k3s-ansible pin (`ansible/requirements.yml`) and the kubectl image, tag and digest, in
 `system-upgrade/kustomization.yaml` (it must stay within one minor of the server). A rebuilt node installs
 `k3s_version` and is upgraded on join.
 
 **Supply chain.** `rancher/k3s-upgrade` is a mutable Docker Hub tag, pulled per version and run privileged as host
 root; a digest pin is impossible by design (the controller appends the tag), and the 7-day release age is the
 mitigation. The controller image is pinned by digest in `system-upgrade/kustomization.yaml`; a new controller tag
-means re-vendoring `crd.yaml` and `system-upgrade-controller.yaml` by hand. `rancher/kubectl` in that file is tag-only
-and bumped by hand with k3s minors: no Renovate manager sees it, so its patch releases are not tracked.
+means re-vendoring `crd.yaml` and `system-upgrade-controller.yaml` by hand. `rancher/kubectl` in that file is pinned
+by tag and digest (the multi-arch index: `docker buildx imagetools inspect rancher/kubectl:<tag>`, top-level `Digest`)
+and bumped by hand with k3s minors: no Renovate manager sees it, so its patch releases are not tracked. The controller
+reads it at start, so a change reaches the Jobs after the controller's next restart.
 
 ## Hetzner nodes: Ansible, rebuild, break-glass
 
@@ -1205,13 +1207,24 @@ Commit the file in a PR and merge (no kustomization lists it: Flux picks up ever
    No login-expiration change: it applies only to peers added by SSO login, not by setup key.
 
 **5. Flux (lead).** v2.9.6, source and kustomize controllers,
-applied once by hand, then Flux manages itself (the memory patch in `flux-system/kustomization.yaml` lands on its first
-apply). Not `apply -k`: the encrypted Secrets in the folder fail kubectl validation.
+applied once by hand, then Flux manages itself (the patches and digest pins in `flux-system/kustomization.yaml` land
+on its first apply, which restarts both controllers). Not `apply -k`: the encrypted Secrets in the folder fail kubectl
+validation.
 
 ```bash
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-components.yaml
 ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --all --timeout=5m
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
+```
+
+Upgrading Flux later (Renovate ignores `flux-system/`): regenerate the components, and in the same PR move `newTag`
+and `digest` of both `images:` entries in `flux-system/kustomization.yaml` (index digest, as for kubectl in
+[Upgrade k3s](#upgrade-k3s)). `tests/test_platform_hardening.py` fails while a tag differs from the generated file
+or a controller pod falls outside Pod Security restricted, which `flux-system` enforces (a rejected pod would stop
+Flux); a render error `testing value /rules/<n> failed` means the RBAC patch's rule moved: fix its index.
+
+```bash
+flux install --export --components=source-controller,kustomize-controller > clusters/hetzner/flux-system/gotk-components.yaml
 ```
 
 **6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
