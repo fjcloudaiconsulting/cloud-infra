@@ -82,6 +82,8 @@ spec:
       containers:
         - name: backend
           image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.302.0
+          # The image CMD with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
+          args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8000
           envFrom:

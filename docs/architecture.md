@@ -70,6 +70,11 @@ thebetterdecision.com apex is the Worker `tbd-landing`; their code and deploys l
 domains are attached by hand ([configuration-map.md](configuration-map.md#worker-and-snippet-access-infra-98)).
 `www.thebetterdecision.com` is a proxied record that a redirect rule in `terraform/cloudflare` sends to the apex (301).
 
+The tunnel is the only way in to the TBD workloads (INF-01). In `tbd-prod` and `tbd-staging` only `cloudflared` reaches the backend
+and MCP pods, and their uvicorn reads `X-Forwarded-For` and `X-Forwarded-Proto` from the pod network only. The TBD
+processes take the visitor's address from `CF-Connecting-IP` (`CLIENT_IP_HEADER`). `tests/test_tbd_manifests.py` and
+`tests/test_tbd_edge.py` hold these in place.
+
 Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
 unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s
 from one IP (per Cloudflare data center) to those paths gets a 429 from Cloudflare for 10 s, which caps the volume one
