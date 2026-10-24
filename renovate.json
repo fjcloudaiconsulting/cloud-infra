@@ -100,21 +100,29 @@
       "allowedVersions": "!/^v0\\.26\\.0$/"
     },
     {
-      "description": "k3s (INFRA-179): one grouped PR per release. separateMinorPatch, because v1.37.1 exists: without it Renovate offers only the minor and a v1.36.x patch never gets a branch. Minors need a dashboard tick (bump the k3s-ansible pin and the kubectl image patch in system-upgrade/kustomization.yaml with them).",
-      "matchPackageNames": ["k3s-io/k3s"],
+      "description": "k3s (INFRA-179): one grouped PR per release moves the Plans' version, k3s_version and the Plans' rancher/k3s-upgrade tag and digest together. separateMinorPatch, because v1.37.1 exists: without it Renovate offers only the minor and a v1.36.x patch never gets a branch. Minors need a dashboard tick (bump the k3s-ansible pin and the kubectl image patch in system-upgrade/kustomization.yaml with them).",
+      "matchPackageNames": ["k3s-io/k3s", "rancher/k3s-upgrade"],
       "groupName": "k3s",
       "separateMinorPatch": true,
       "minimumReleaseAge": "7 days"
     },
     {
-      "matchPackageNames": ["k3s-io/k3s"],
+      "matchPackageNames": ["k3s-io/k3s", "rancher/k3s-upgrade"],
       "matchUpdateTypes": ["major", "minor"],
       "dependencyDashboardApproval": true
     },
     {
-      "description": "The Plans leave rancher/k3s-upgrade untagged on purpose (the controller appends the version): a tag or digest pin would break that.",
+      "description": "The Plans pin rancher/k3s-upgrade as :<k3s version with - for +>@sha256:<index digest> (K8S-02); the kubernetes manager reads those lines and moves tag and digest in the k3s group above. Same scheme as k3s, so both resolve to the same release; rc and per-arch tags never match.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["rancher/k3s-upgrade"],
+      "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-k3s(?<build>\\d+)$",
+      "pinDigests": true
+    },
+    {
+      "description": "The k3s-upgrade digest moves only with a version: a digest-only update (the same tag pushed again) is never proposed.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["rancher/k3s-upgrade"],
+      "matchUpdateTypes": ["digest"],
       "enabled": false
     },
     {
