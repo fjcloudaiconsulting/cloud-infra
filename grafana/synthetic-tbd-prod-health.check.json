@@ -1,6 +1,6 @@
 {
   "job": "tbd-prod-health",
-  "target": "https://app.thebetterdecision.com/health/dependencies",
+  "target": "https://app.thebetterdecision.com/health",
   "frequency": 120000,
   "timeout": 10000,
   "enabled": true,

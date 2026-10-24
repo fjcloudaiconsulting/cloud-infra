@@ -89,7 +89,7 @@ pass closes it. The failure says which step failed:
 |---|---|---|
 | `never converged (live X, expected Y)` | The new backend never served: Flux did not apply, the image did not pull, the migration or the pod crashed. `live none` means the app was down | [Follow Flux and rollouts](#follow-flux-and-rollouts): `flux get kustomizations`, `kubectl -n <namespace> get pods,events` |
 | `frontend GET / returned N` (`/robots.txt` for `tbd-staging`) | The backend serves, the frontend does not | `kubectl -n <namespace> get pods -l app=frontend`, its logs |
-| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (Ziftbook: `/api/health/dependencies`) and the backend logs |
+| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (TBD: in the cluster only, e.g. `kubectl -n tbd-prod port-forward deploy/backend 8000`, INF-09; Ziftbook: `/api/health/dependencies`) and the backend logs |
 | `could not fetch ...` | The GitHub API did not return the app's smoke script at that tag | The tag exists in the app repo, then re-run |
 | `bad backend tag` | The manifest has no plain `vX.Y.Z` backend tag | The manifest |
 
@@ -780,7 +780,7 @@ once (`POST /api/v1/provisioning/contact-points`).
 
 ### Synthetic uptime
 
-Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health/dependencies` and
+Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health` (liveness, no database: the database probes are internal only, INF-09) and
 `https://app.ziftbook.com/api/healthz` (the backend's readiness path) from the outside, expecting 200, and replaces the
 Route 53 health check. Rule `ProdEndpointDown` (group `synthetic-uptime`, folder Platform) emails `owner-email` when
 `probe_success` averages under 0.5 over 6 minutes for 2 minutes (both probes failing). No data fires only when both checks report nothing; one check disappearing resolves its own series silently, then every 4 h.
