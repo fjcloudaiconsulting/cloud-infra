@@ -25,7 +25,9 @@ because a network attached after first boot is missing from cloud-init's netplan
 - `kubectl` on this machine. The k3s play checks it first: without it the collection silently skips fetching the
   admin kubeconfig, which the play reads the cluster CA from.
 - `ansible-galaxy collection install -r requirements.yml` (installs into the git-ignored `collections/`).
-- The deploy key at `~/.ssh/fjc-hetzner-deploy`.
+- The deploy key at `~/.ssh/fjc-hetzner-deploy`, with its public half next to it (`.pub`; `ssh-keygen -y -f
+  ~/.ssh/fjc-hetzner-deploy > ~/.ssh/fjc-hetzner-deploy.pub` recreates it). `node_base` reads it ([Root SSH
+  keys](#root-ssh-keys)).
 - `inventory.yaml` holds each server's primary IPv4 (they outlive server rebuilds). The first play refuses a
   `192.0.2.x` placeholder.
 
@@ -42,6 +44,28 @@ key into `.sops.yaml`, then `sops updatekeys ansible/secrets.sops.yaml` with the
 on a fresh cluster only (a live cluster's token cannot simply be swapped):
 `openssl rand -hex 32 | sed 's/^/k3s_token: /' | sops encrypt --filename-override ansible/secrets.sops.yaml > ansible/secrets.sops.yaml`
 from the repo root. Never print it.
+
+## Root SSH keys
+
+`node_base` makes root's `authorized_keys` on every node exactly the deploy keys: the public key next to
+`ansible_ssh_private_key_file` (`~/.ssh/fjc-hetzner-deploy.pub`) plus `deploy_ssh_extra_public_keys` in
+`group_vars/all.yml`. Any other key goes on the next run. The `hetzner` workspace variable `deploy_ssh_public_key`
+only seeds a new server. Before writing, the play stops if a key is not one line of `ssh-ed25519` or
+`sk-ssh-ed25519@openssh.com` (FIDO2), or if the key it connects with is not already accepted on that host.
+
+Read the change first, the first time and whenever the list changes: `ansible-playbook site.yml --check --diff`. The
+`authorized_keys` diff shows public keys only; every removed line must be a key you mean to drop. If root SSH is lost
+anyway, use the Hetzner console ([break-glass](../docs/runbooks.md#hetzner-nodes-ansible-rebuild-break-glass)).
+
+Rotate the deploy key (after a leak, also rotate the k3s token: root on a node can read it):
+
+1. `ssh-keygen -t ed25519 -f ~/.ssh/fjc-hetzner-deploy.new` (`-t ed25519-sk` for a FIDO2 key), add the content of
+   `~/.ssh/fjc-hetzner-deploy.new.pub` to `deploy_ssh_extra_public_keys`, merge, run `site.yml` (check first). Both
+   keys now work.
+2. Move the new pair over the old one (`mv ~/.ssh/fjc-hetzner-deploy.new ~/.ssh/fjc-hetzner-deploy`, the same for
+   `.pub`), empty `deploy_ssh_extra_public_keys`, set the workspace variable `deploy_ssh_public_key` to the new public
+   key (its apply replaces only the Hetzner key object, no server), merge, run `site.yml`: the old key is gone from
+   every node.
 
 ## Split brain: bootstrap versus join
 

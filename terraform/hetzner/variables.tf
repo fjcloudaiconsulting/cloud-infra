@@ -9,12 +9,12 @@ variable "ssh_allowed_cidrs" {
 }
 
 variable "deploy_ssh_public_key" {
-  description = "Public key Ansible uses to reach the nodes (ed25519). Set as a workspace variable."
+  description = "Public key Ansible uses to reach the nodes (ed25519, or ed25519 on a FIDO2 token). Set as a workspace variable."
   type        = string
 
   validation {
-    condition     = startswith(var.deploy_ssh_public_key, "ssh-ed25519 ")
-    error_message = "deploy_ssh_public_key must be an OpenSSH ed25519 public key (starts with \"ssh-ed25519 \")."
+    condition     = can(regex("^(ssh-ed25519|sk-ssh-ed25519@openssh\\.com) ", var.deploy_ssh_public_key))
+    error_message = "deploy_ssh_public_key must be an OpenSSH ed25519 public key (starts with \"ssh-ed25519 \" or \"sk-ssh-ed25519@openssh.com \")."
   }
 }
 

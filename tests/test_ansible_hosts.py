@@ -3,7 +3,12 @@
 Stdlib only so CI needs no installs: `python3 -m unittest discover -s tests`. The Ansible YAML is read with the subset
 parser in test_tbd_manifests.py, which fails loudly on anything it does not understand.
 """
+import base64
+import ipaddress
 import pathlib
+import re
+import struct
+import types
 import unittest
 
 from test_tbd_manifests import load_all
@@ -11,6 +16,7 @@ from test_tbd_manifests import load_all
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ANSIBLE = ROOT / "ansible"
 SITE = ANSIBLE / "site.yml"
+HETZNER_TF = ROOT / "terraform/hetzner"
 
 
 def all_vars():
@@ -44,6 +50,129 @@ def module_args(task, module):
         if key in task:
             return task[key]
     return None
+
+
+# ---- Terraform variable validations --------------------------------------------------------------------------------
+
+def _balanced_end(text, start, opener, closer):
+    """Index just past the `closer` that matches the `opener` at text[start] (HCL strings skipped)."""
+    depth, i, in_str = 0, start, False
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == opener:
+            depth += 1
+        elif c == closer:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise AssertionError(f"unbalanced {opener}{closer} from offset {start}")
+
+
+def tf_validation(name):
+    """The condition expression of `variable "<name>"`'s validation block in terraform/hetzner/variables.tf."""
+    text = (HETZNER_TF / "variables.tf").read_text()
+    m = re.search(rf'(?m)^variable "{re.escape(name)}" \{{', text)
+    if not m:
+        raise AssertionError(f"variable {name} not found")
+    body = text[m.end() - 1:_balanced_end(text, m.end() - 1, "{", "}")]
+    m = re.search(r"(?m)^\s*condition\s*=\s*", body)
+    if not m:
+        raise AssertionError(f"variable {name} has no validation condition")
+    # The expression runs to the end of the line once every bracket is closed.
+    i, depth, in_str = m.end(), 0, False
+    while i < len(body) and (body[i] != "\n" or depth or in_str):
+        c = body[i]
+        if in_str:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        i += 1
+    return body[m.end():i].strip()
+
+
+def _cidrnetmask(s):
+    if "/" not in s:
+        raise ValueError(f"{s!r} is not in CIDR notation")
+    net = ipaddress.ip_network(s, strict=False)
+    if net.version != 4:
+        raise ValueError("only IPv4 has a netmask")
+    return str(net.netmask)
+
+
+def _regex(pattern, s):
+    m = re.search(pattern, s)
+    if not m:
+        raise ValueError("pattern did not match")
+    return m.group(0)
+
+
+def _can(thunk):
+    try:
+        thunk()
+        return True
+    except (ValueError, TypeError, IndexError):
+        return False
+
+
+HCL_FUNCTIONS = {
+    "length": len, "alltrue": all, "can": _can, "cidrnetmask": _cidrnetmask, "regex": _regex,
+    "startswith": lambda s, p: s.startswith(p), "endswith": lambda s, p: s.endswith(p),
+    "split": lambda sep, s: s.split(sep), "tonumber": lambda s: float(s) if "." in s else int(s),
+    "true": True, "false": False,
+}
+
+
+def hcl_eval(expr, **variables):
+    """Evaluates a validation condition with `var.<name>` bound. It knows only what these conditions use (string
+    literals, `[for x in xs : ...]`, && || !, comparisons and the functions above) and fails on anything else, so a
+    new construct updates this fence instead of slipping past it."""
+    strings = []
+
+    def keep(m):
+        if "${" in m.group(1):
+            raise AssertionError("string templates are not supported")
+        strings.append(re.sub(r"\\(.)", r"\1", m.group(1)))
+        return f"__s{len(strings) - 1}"
+
+    py = re.sub(r'"((?:[^"\\]|\\.)*)"', keep, expr)
+    if re.search(r"[?%$]|\bfor\b(?![^\[]*\bin\b)", py):
+        raise AssertionError(f"unsupported HCL in {expr!r}")
+    while "[for " in py:
+        start = py.index("[for ")
+        end = _balanced_end(py, start, "[", "]")
+        m = re.fullmatch(r"\[for (\w+) in (.+?) : (.*)\]", py[start:end], re.S)
+        py = f"{py[:start]}[({m.group(3)}) for {m.group(1)} in ({m.group(2)})]{py[end:]}"
+    py = py.replace("can(", "can(lambda: ").replace("&&", " and ").replace("||", " or ")
+    py = re.sub(r"!(?!=)", " not ", py)
+    # One namespace as globals: lambdas (can) and comprehensions (for) resolve names there, not in eval's locals.
+    env = dict(HCL_FUNCTIONS, __builtins__={}, var=types.SimpleNamespace(**variables))
+    env.update({f"__s{i}": v for i, v in enumerate(strings)})
+    return bool(eval(py, env))  # noqa: S307 - the input is this repo's own variables.tf
+
+
+def ssh_key(key_type, comment="owner@laptop"):
+    """An OpenSSH public key line of `key_type` with a made-up 32-byte key (sk keys carry the usual "ssh:" app)."""
+    def s(b):
+        return struct.pack(">I", len(b)) + b
+    blob = s(key_type.encode()) + s(bytes(range(32)))
+    if key_type.startswith("sk-"):
+        blob += s(b"ssh:")
+    return f"{key_type} {base64.b64encode(blob).decode()}" + (f" {comment}" if comment else "")
 
 
 def kubeconfig_block(site_plays):
@@ -93,6 +222,62 @@ class AdminKubeconfig(unittest.TestCase):
                                      f"{p['name']}: task {t.get('name')!r} uses the fetched kubeconfig")
         for doc in ("docs/runbooks.md", "docs/configuration-map.md", "clusters/hetzner/data/RESTORE.md"):
             self.assertNotIn("fjc-hetzner.yaml", (ROOT / doc).read_text(), f"{doc} still uses the fetched kubeconfig")
+
+
+class RootSshKeys(unittest.TestCase):
+    """ANS-03: root's authorized_keys is exactly the listed deploy keys, written only after the keys are checked and
+    the connecting key is known to work; FIDO2 ed25519 keys are accepted."""
+
+    def tasks(self):
+        return load_all(ANSIBLE / "roles/node_base/tasks/main.yml")[0]
+
+    def test_exclusive_authorized_key_task_is_guarded(self):
+        tasks = self.tasks()
+        writes = [i for i, t in enumerate(tasks) if module_args(t, "ansible.posix.authorized_key")]
+        self.assertEqual(len(writes), 1, "one authorized_key task")
+        args = module_args(tasks[writes[0]], "ansible.posix.authorized_key")
+        self.assertEqual(args.get("user"), "root")
+        self.assertIs(args.get("exclusive"), True)
+        self.assertEqual(args.get("key"), "{{ node_base_root_keys | join('\n') }}")
+        self.assertNotIn("when", tasks[writes[0]])
+        before = tasks[:writes[0]]
+        collect = [module_args(t, "ansible.builtin.set_fact") for t in before
+                   if "node_base_root_keys" in (module_args(t, "ansible.builtin.set_fact") or {})]
+        self.assertEqual(len(collect), 1)
+        self.assertRegex(collect[0]["node_base_root_keys"],
+                         r"lookup\('ansible\.builtin\.file', \(ansible_ssh_private_key_file \| expanduser\) ~ '\.pub'\)\]"
+                         r" \+ deploy_ssh_extra_public_keys")
+        checks = [str(module_args(t, "ansible.builtin.assert")["that"]) for t in before
+                  if module_args(t, "ansible.builtin.assert")]
+        self.assertTrue(any("node_base_root_keys | length > 0" in c and
+                            "reject('match', node_base_ssh_key_pattern)" in c for c in checks),
+                        "an assert before the write refuses an empty list and malformed keys")
+        self.assertTrue(any("node_base_root_keys[0]" in c and "node_base_authorized_keys.content" in c for c in checks),
+                        "an assert before the write checks the connecting key is already authorized")
+        self.assertEqual(all_vars().get("deploy_ssh_extra_public_keys"), [])
+
+    def test_key_pattern_accepts_ed25519_and_fido2_ed25519_only(self):
+        pattern = load_all(ANSIBLE / "roles/node_base/vars/main.yml")[0]["node_base_ssh_key_pattern"]
+
+        def ok(key):  # Jinja's `match` test is re.match
+            return re.match(pattern, key) is not None
+
+        for key in (ssh_key("ssh-ed25519"), ssh_key("sk-ssh-ed25519@openssh.com"), ssh_key("ssh-ed25519", None),
+                    ssh_key("sk-ssh-ed25519@openssh.com", "yubikey 5 nano")):
+            self.assertTrue(ok(key), key)
+        ed = ssh_key("ssh-ed25519")
+        for key in ("", "ssh-ed25519", ssh_key("ssh-rsa"), ssh_key("ecdsa-sha2-nistp256"),
+                    ssh_key("sk-ecdsa-sha2-nistp256@openssh.com"),
+                    "sk-ssh-ed25519@openssh.com " + ed.split()[1],  # type and blob disagree
+                    f'command="/bin/sh" {ed}', f"{ed}\n{ssh_key('ssh-rsa')}", "https://github.com/someone.keys"):
+            self.assertFalse(ok(key), key)
+
+    def test_terraform_accepts_both_key_types(self):
+        cond = tf_validation("deploy_ssh_public_key")
+        for key in (ssh_key("ssh-ed25519"), ssh_key("sk-ssh-ed25519@openssh.com")):
+            self.assertTrue(hcl_eval(cond, deploy_ssh_public_key=key), key)
+        for key in (ssh_key("ssh-rsa"), ssh_key("ecdsa-sha2-nistp256"), "", "ssh-ed25519"):
+            self.assertFalse(hcl_eval(cond, deploy_ssh_public_key=key), key)
 
 
 if __name__ == "__main__":
