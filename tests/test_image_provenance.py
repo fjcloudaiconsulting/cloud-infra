@@ -42,14 +42,16 @@ def git(d, *a):
 
 def run(base_files, head_files, *, att_ref="refs/heads/main", att_commit=TAG_COMMIT,
         tags=(("tbd", "v1.0.0"), ("ziftbook", "v1.0.0")), api_fail=False):
-    """base_files/head_files: {name: image ref} written under clusters/ in the base and head commits."""
+    """base_files/head_files: {path: image ref, or a whole file when it holds a newline} under clusters/ in the base
+    and head commits."""
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d) / "r"
         (d / "clusters").mkdir(parents=True)
         git(d, "init", "-q")
         for files, msg in ((base_files, "base"), (head_files, "head")):
             for n, r in files.items():
-                (d / "clusters" / n).write_text(f"image: {r}\n")
+                (d / "clusters" / n).parent.mkdir(parents=True, exist_ok=True)
+                (d / "clusters" / n).write_text(r if "\n" in r else f"image: {r}\n")
             git(d, "add", "clusters")
             git(d, "commit", "-q", "-m", msg)
             if msg == "base":
@@ -130,6 +132,67 @@ class Provenance(unittest.TestCase):
         r, log = run({"a.yaml": legacy}, {"a.yaml": legacy, "b.yaml": "other: 1"})
         self.assertEqual((r.returncode, log), (0, ""))
         self.assertIn("no added app image refs", r.stdout)
+
+
+def deployment(image, ns="tbd-staging"):
+    return (f"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend\n  namespace: {ns}\nspec:\n"
+            f"  template:\n    spec:\n      containers:\n        - name: backend\n          image: {image}\n")
+
+
+class CanonicalForm(unittest.TestCase):
+    """GHA-03: shapes kustomize renders as an app image that the diff grep above does not see. Each one passes the
+    check without manifest_fence.py, and with it fails before any lookup."""
+
+    def assertFails(self, head, needle):
+        base = {"hetzner/tbd-staging/backend.yaml": deployment(ref(digest=""))}
+        r, log = run(base, {**base, **head})
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(needle, r.stderr)
+        self.assertEqual(log, "")
+
+    def test_escaped_ref_fails(self):
+        self.assertFails({"hetzner/tbd-staging/backend.yaml": deployment(
+            '"ghcr.io\\/fjcloudaiconsulting/tbd/backend:v1.1.0"')}, "escape in a quoted `image` value")
+
+    def test_foreign_registry_in_an_app_namespace_fails(self):
+        self.assertFails({"hetzner/tbd-staging/backend.yaml": deployment("registry.example/tbd/backend:v1.1.0")},
+                         "image in tbd-staging must come from ghcr.io/fjcloudaiconsulting/tbd/")
+
+    def test_kustomize_image_override_fails(self):
+        self.assertFails({"hetzner/tbd-staging/kustomization.yaml":
+                          "resources:\n  - backend.yaml\nimages:\n  - name: .*/backend\n"
+                          "    newName: registry.example/tbd/backend\n"},
+                         "kustomization key `images` outside flux-system and system-upgrade")
+
+    def test_flux_image_override_outside_flux_system_fails(self):
+        self.assertFails({"hetzner/tbd-staging/sync.yaml":
+                          "apiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: x\n"
+                          "spec:\n  path: ./clusters/hetzner/tbd-staging\n  images:\n"
+                          "    - name: .*/backend\n      newName: registry.example/x\n"},
+                         "Flux objects live under flux-system")
+
+    def test_override_in_a_vendored_dir_needs_a_digest(self):
+        pinned = "images:\n  - name: rancher/system-upgrade-controller\n    newTag: v0.20.2\n"
+        base = {"a.yaml": "other: 1"}
+        r, log = run(base, {"hetzner/system-upgrade/kustomization.yaml": pinned + f"    digest: sha256:{D1}\n"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no added app image refs", r.stdout)
+        r, log = run(base, {"hetzner/system-upgrade/kustomization.yaml": pinned})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("images entry without `digest: sha256:<64 hex>`", r.stderr)
+
+    def test_repo_clusters_pass(self):
+        # guard: the committed tree passes the fence this check runs first.
+        r = subprocess.run(["python3", "-I", str(SCRIPT.parent / "manifest_fence.py"), "clusters"], capture_output=True,
+                           text=True, cwd=SCRIPT.parent.parent.parent)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_renovate_bump_in_a_manifest_passes(self):
+        # guard: the staging automerge shape, a Deployment whose image moves to :vX.Y.Z@sha256:<digest>.
+        r, log = run({"hetzner/tbd-staging/backend.yaml": deployment(ref("v0.9.0", ""))},
+                     {"hetzner/tbd-staging/backend.yaml": deployment(ref())})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("verified tbd/backend v1.0.0", r.stdout)
 
 
 if __name__ == "__main__":

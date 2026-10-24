@@ -220,6 +220,58 @@ class SopsSecrets(unittest.TestCase):
                  ".ansible/collections/b/y.sops.yaml": "k3s_token: hunter2\n"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_non_canonical_secret_shapes_fail(self):
+        # GHA-03: each renders as a real Secret (or a plaintext credential) and passed the text match before
+        # manifest_fence.py.
+        pw = "stringData:\n  pw: hunter2\n"
+        cases = {
+            "tag": (SECRET_HEAD.replace("kind: Secret", "kind: !!str Secret") + pw, "YAML tag"),
+            "escape": (SECRET_HEAD.replace("kind: Secret", 'kind: "Secr\\x65t"') + pw, "escape in a quoted `kind`"),
+            "flow": ("{apiVersion: v1, kind: Secret, metadata: {name: s}, stringData: {pw: hunter2}}\n",
+                     "flow collection holds `kind`"),
+            "list": ("apiVersion: v1\nkind: List\nitems:\n  - kind: Secret\n    apiVersion: v1\n"
+                     "    stringData:\n      pw: hunter2\n", "kind List"),
+            "block": (SECRET_HEAD.replace("kind: Secret", "kind: |-\n  Secret") + pw, "`kind` value must be a scalar"),
+            "alias": ("apiVersion: v1\nx: &k Secret\nkind: *k\n" + pw, "YAML alias"),
+            "quoted key": (SECRET_HEAD.replace("kind: Secret", "'kind': Secret") + pw, "quoted key"),
+            "line separator": (SECRET_HEAD.replace("\n", "\u2028") + pw, "U+2028"),
+            "env credential": ("apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n"
+                               "        - env:\n            - name: DATABASE_URL\n"
+                               "              value: postgresql://app:hunter2@db:5432/app\n",
+                               "password in a URL"),
+        }
+        for name, (body, needle) in cases.items():
+            with self.subTest(name):
+                self.assertFails({"app/deploy.yaml": body}, needle)
+
+    def test_url_with_a_password_placeholder_passes(self):
+        # guard: Kubernetes expands $(VAR) from a Secret-backed env var; nothing literal is committed.
+        r = run({"app/deploy.yaml": "env:\n  - name: DATABASE_URL\n    value: postgresql://app:$(DB_PASSWORD)@db/app\n"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_indented_secret_document_fails(self):
+        # fence: the value check reads data/stringData at column 0; an indented document would skip it.
+        body = "".join("  " + l + "\n" for l in (SECRET_HEAD + "stringData:\n  pw: hunter2\n").splitlines())
+        self.assertFails({"x.secret.yaml": body + "---\n" + SOPS_TAIL}, "does not start at column 0")
+
+    def test_ansible_sops_vars_are_fenced(self):
+        # fence: the YAML rules cover the Ansible vars files too (a carriage return is a YAML line break).
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "ansible").mkdir()
+            pathlib.Path(d, "ansible/x.sops.yaml").write_text(
+                "k3s_token: ENC[AES256_GCM,data:eA==,type:str]\rplain: hunter2\n" + SOPS_TAIL)
+            r = subprocess.run(["python3", str(CHECK), str(pathlib.Path(d, "ansible"))], capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("U+000D", r.stdout)
+
+    def test_ansible_tree_fences_only_sops_files(self):
+        # guard: playbooks may use Ansible's own tags (!unsafe, !vault); only *.sops.yaml are read as SOPS files.
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "ansible").mkdir()
+            pathlib.Path(d, "ansible/site.yml").write_text("- hosts: all\n  vars:\n    x: !unsafe '{{ y }}'\n")
+            r = subprocess.run(["python3", str(CHECK), str(pathlib.Path(d, "ansible"))], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
     def test_empty_value_left_by_sops_passes(self):
         # guard (inverse defect): sops leaves "" unencrypted; that is not a leak.
         r = run({"x.secret.yaml": SECRET_HEAD

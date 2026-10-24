@@ -5,11 +5,15 @@ Rules: a Secret lives in its own *.secret.yaml file, that file carries SOPS
 metadata with a MAC, and every data/stringData value is an ENC[...] string
 (or empty, which sops leaves as is). Kustomize secretGenerator is not allowed.
 A *.sops.yaml file (Ansible vars) carries SOPS metadata and every value is ENC[...].
-Stdlib only, line-based: it understands the layout `sops encrypt` writes.
+Stdlib only, line-based: it understands the layout `sops encrypt` writes. manifest_fence.py first refuses any file
+outside that layout (GHA-03): every file under a manifest root, and the *.sops.yaml files under a root named ansible.
 """
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import manifest_fence  # noqa: E402
 
 # YAML (quoted, commented, or nested in a List) or JSON.
 KIND_SECRET = re.compile(r"""^\s*kind:\s*["']?Secret["']?\s*(#.*)?$|"kind"\s*:\s*"Secret\"""", re.M)
@@ -36,16 +40,24 @@ def sops_file_problems(text):
 
 
 def problems(path):
-    text = path.read_text()
+    text = path.read_bytes().decode("utf-8", "replace")  # manifest_fence reports a file that is not UTF-8
     if path.name.lower().endswith((".sops.yaml", ".sops.yml")):
         return sops_file_problems(text)
     out = []
+    _, docs = manifest_fence.scan(text)
     if re.search(r"^\s*secretGenerator:", text, re.M):
         out.append("secretGenerator writes plaintext; use a *.secret.yaml file")
     if not path.name.lower().endswith(".secret.yaml"):
-        if KIND_SECRET.search(text):
+        # The scanner also sees `- kind: Secret` and a kind written in another case.
+        if KIND_SECRET.search(text) or any(
+            e.path[-1:] == ("kind",) and e.style in manifest_fence.SCALAR and e.text.lower() == "secret"
+            for d in docs for e in d.entries
+        ):
             out.append("Secret outside a *.secret.yaml file; move it and run `sops encrypt -i`")
         return out
+    if any(d.root_col for d in docs):
+        # The value check below reads data/stringData at column 0.
+        out.append("a document that does not start at column 0")
     if not re.search(r"^sops:", text, re.M) or not re.search(r"^\s+mac: ENC\[", text, re.M):
         out.append("no SOPS metadata; run `sops encrypt -i`")
     block = None
@@ -64,6 +76,10 @@ def problems(path):
 
 def main(roots):
     failed = False
+    for root in roots:
+        for path, p in manifest_fence.problems(root, manifests=pathlib.Path(root).name != "ansible"):
+            print(f"::error file={path}::{path}: {p}")
+            failed = True
     files = sorted(
         p
         for root in roots
