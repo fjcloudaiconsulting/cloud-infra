@@ -100,8 +100,10 @@ spec:
     matchLabels:
       app: cloudflared
 ---
-# No ingress. Egress: DNS and the origin Services inside the cluster (each app namespace's own NetworkPolicy decides
-# whether cloudflared may reach it), and Cloudflare's edge.
+# No ingress. Egress: cluster DNS, the origin pods the tunnel routes to (terraform/cloudflare/tunnel.tf) on their own
+# ports only, and Cloudflare's edge. Each app namespace's own NetworkPolicy also decides whether cloudflared may reach
+# it. A new tunnel route needs its rule here in the same change, or it answers 502: tests/test_network_policies.py
+# checks that the two match. Ports are the pods' ports (the Services keep targetPort = port).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -111,8 +113,76 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   egress:
+    # Cluster DNS (CoreDNS): the origin Service names and the edge hostnames.
     - to:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The frontends: each host's catch-all route.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tbd-prod
+          podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tbd-staging
+          podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ziftbook-prod
+          podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ziftbook-staging
+          podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 3000
+    # The TBD backends: /api and /health, and on staging the OAuth discovery documents.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tbd-prod
+          podSelector:
+            matchLabels:
+              app: backend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tbd-staging
+          podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 8000
+    # TBD staging MCP: /mcp.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tbd-staging
+          podSelector:
+            matchLabels:
+              app: mcp
+      ports:
+        - protocol: TCP
+          port: 8001
     # Tunnel connections (QUIC, HTTP/2 fallback): region1 and region2.v2.argotunnel.com, per Cloudflare's "Tunnel with
     # firewall" page (checked 2026-10-12). IPv4 only: the cluster is single-stack.
     - to:

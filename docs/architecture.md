@@ -73,7 +73,8 @@ domains are attached by hand ([configuration-map.md](configuration-map.md#worker
 The tunnel is the only way in to the TBD workloads (INF-01). In `tbd-prod` and `tbd-staging` only `cloudflared` reaches the backend
 and MCP pods, and their uvicorn reads `X-Forwarded-For` and `X-Forwarded-Proto` from the pod network only. The TBD
 processes take the visitor's address from `CF-Connecting-IP` (`CLIENT_IP_HEADER`). `tests/test_tbd_manifests.py` and
-`tests/test_tbd_edge.py` hold these in place.
+`tests/test_tbd_edge.py` hold these in place. `cloudflared` itself reaches only cluster DNS, the pods and ports the
+tunnel routes to, and Cloudflare's edge; `tests/test_network_policies.py` keeps its egress in step with `tunnel.tf`.
 
 Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
 unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s

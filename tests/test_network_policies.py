@@ -1,15 +1,15 @@
-"""Fences on the NetworkPolicies between namespaces: which pods reach the database servers in `data` (K8S-04) and
-what the app namespaces may reach outside the pod network (K8S-07).
+"""Fences on the NetworkPolicies between namespaces: which pods reach the database servers in `data` (K8S-04), what
+the app namespaces may reach outside the pod network (K8S-07), and which pods and ports cloudflared reaches (EDGE-07).
 
 Stdlib only: `python3 -m unittest discover -s tests`. Manifests are read with test_tbd_manifests' parser, Terraform
 with test_tbd_edge's helpers. The sets the policies must admit are derived from the workload manifests and the
-Terraform, so a new database client or a renumbered network fails here until its policy follows.
+Terraform, so a new database client, tunnel route or renumbered network fails here until its policy follows.
 """
 import ipaddress
 import re
 import unittest
 
-from test_tbd_edge import TF, resource_body
+from test_tbd_edge import TF, resource_body, tunnel_rules
 from test_tbd_manifests import POD_CIDR, containers, manifests, workloads
 
 APP_NAMESPACES = ("tbd-prod", "tbd-staging", "ziftbook-prod", "ziftbook-staging")
@@ -20,6 +20,8 @@ SERVER = {"tbd": "mysql", "ziftbook": "postgres"}
 # Env names and Secret keys that carry a database URL: DATABASE_URL, ZIF_DATABASE_URL, ZIF_MIGRATE_DATABASE_URL,
 # database-url, migrate-database-url.
 DB_URL = re.compile(r"database[-_]url", re.I)
+# The only form a tunnel origin takes in terraform/cloudflare/tunnel.tf.
+TUNNEL_SERVICE = re.compile(r"^http://([a-z0-9-]+)\.([a-z0-9-]+)\.svc\.cluster\.local:(\d+)$")
 
 
 # ---- helpers ------------------------------------------------------------------------------------------------------
@@ -126,6 +128,87 @@ def hetzner_network():
     return ipaddress.ip_network(m.group(1)), nodes
 
 
+def tunnel_origins():
+    """(namespace, Service, port) of every in-cluster origin the tunnel routes to; http_status rules are skipped."""
+    out = set()
+    for r in tunnel_rules():
+        if r["service"].startswith("http_status:"):
+            continue
+        m = TUNNEL_SERVICE.match(r["service"])
+        if not m:
+            raise AssertionError(f"tunnel service is not http://<svc>.<ns>.svc.cluster.local:<port>: {r['service']}")
+        out.add((m.group(2), m.group(1), int(m.group(3))))
+    if not out:
+        raise AssertionError("no tunnel origins found")
+    return out
+
+
+def service_backends(namespace, name, port):
+    """For a Service port: the Service selector, and (pod labels, container port, protocol) per workload it selects."""
+    svcs = [d for _, d in manifests(namespace) if d.get("kind") == "Service" and d["metadata"]["name"] == name]
+    if len(svcs) != 1:
+        raise AssertionError(f"want one Service {namespace}/{name}, found {len(svcs)}")
+    spec = svcs[0]["spec"]
+    sp = [p for p in spec.get("ports") or [] if p.get("port") == port]
+    if len(sp) != 1:
+        raise AssertionError(f"Service {namespace}/{name} has no port {port}")
+    target, proto = sp[0].get("targetPort", port), sp[0].get("protocol", "TCP")
+    out = []
+    for _, d in workloads(namespace):
+        labels = pod_labels(d)
+        if not selects({"matchLabels": spec["selector"]}, labels):
+            continue
+        cport = target
+        if isinstance(target, str):  # a named port: the container port of that name
+            cport = next(p["containerPort"] for c in containers(d) for p in c.get("ports") or []
+                         if p.get("name") == target)
+        out.append((labels, cport, proto))
+    if not out:
+        raise AssertionError(f"Service {namespace}/{name} selects no workload")
+    return spec["selector"], out
+
+
+def cluster_dns():
+    """The CoreDNS pod labels, from the kube-system PodDisruptionBudget that guards them."""
+    pdbs = [d for _, d in manifests("kube-system") if d.get("kind") == "PodDisruptionBudget"
+            and d["metadata"]["name"] == "coredns"]
+    if len(pdbs) != 1:
+        raise AssertionError("no coredns PodDisruptionBudget in kube-system")
+    return pdbs[0]["spec"]["selector"]["matchLabels"]
+
+
+def egress_allows(spec, namespace, labels, port, protocol):
+    """Whether an egress policy lets its pods open (port, protocol) to a pod with `labels` in `namespace`: Kubernetes
+    semantics, where a rule without `to` or `ports` allows every destination or port."""
+    for rule in spec.get("egress") or []:
+        ports = rule.get("ports")
+        if ports and not any(p.get("port") == port and p.get("protocol", "TCP") == protocol for p in ports):
+            continue
+        peers = rule.get("to")
+        if not peers:
+            return True
+        for peer in peers:
+            if "ipBlock" in peer:
+                continue
+            ns_ok = selects(peer.get("namespaceSelector") or {}, {NS_LABEL: namespace}) \
+                if "namespaceSelector" in peer else namespace == "cloudflared"
+            if ns_ok and selects(peer.get("podSelector") or {}, labels):
+                return True
+    return False
+
+
+def in_cluster_destinations(spec):
+    """(peer, port, protocol) for every in-cluster peer of an egress policy, one per port (None: every port)."""
+    out = []
+    for rule in spec.get("egress") or []:
+        for peer in rule.get("to") or []:
+            if "ipBlock" in peer:
+                continue
+            for p in rule.get("ports") or [{}]:
+                out.append((peer, p.get("port"), p.get("protocol", "TCP")))
+    return out
+
+
 # ---- tests --------------------------------------------------------------------------------------------------------
 
 class DatabaseClientsOnly(unittest.TestCase):
@@ -199,6 +282,44 @@ class AppEgressSkipsTheNodes(unittest.TestCase):
                             if cidr.overlaps(target):
                                 self.assertTrue(any(target.subnet_of(e) for e in excepted),
                                                 f"{ns}: ipBlock {cidr} does not except {target}")
+
+
+class TunnelReachesItsOriginsOnly(unittest.TestCase):
+    """EDGE-07: cloudflared reaches cluster DNS and exactly the pods and ports the tunnel config routes to, plus
+    Cloudflare's edge; no egress rule leaves the destination or the port open."""
+
+    def cloudflared(self):
+        return policies("cloudflared")["cloudflared"]
+
+    def test_every_egress_rule_names_its_ports_and_its_pods(self):
+        for rule in self.cloudflared()["egress"]:
+            with self.subTest(rule=rule):
+                self.assertTrue(rule.get("to"), "rule without `to` allows every destination")
+                self.assertTrue(rule.get("ports"), "rule without `ports` allows every port")
+                for peer in rule["to"]:
+                    if "ipBlock" in peer:
+                        continue
+                    named_namespace(peer)
+                    self.assertTrue(peer.get("podSelector"), "peer without a podSelector admits every pod")
+
+    def test_every_tunnel_origin_is_reachable(self):
+        spec = self.cloudflared()
+        for ns, name, port in sorted(tunnel_origins()):
+            _, backends = service_backends(ns, name, port)
+            for labels, cport, proto in backends:
+                with self.subTest(origin=f"{name}.{ns}:{port}", pod=labels):
+                    self.assertTrue(egress_allows(spec, ns, labels, cport, proto))
+        for proto in ("UDP", "TCP"):
+            self.assertTrue(egress_allows(spec, "kube-system", cluster_dns(), 53, proto), f"DNS over {proto}")
+
+    def test_in_cluster_egress_is_exactly_dns_and_the_tunnel_origins(self):
+        want = {("kube-system", frozenset(cluster_dns().items()), 53, proto) for proto in ("UDP", "TCP")}
+        for ns, name, port in tunnel_origins():
+            selector, backends = service_backends(ns, name, port)
+            want |= {(ns, frozenset(selector.items()), cport, proto) for _, cport, proto in backends}
+        got = {(named_namespace(peer), frozenset(((peer.get("podSelector") or {}).get("matchLabels") or {}).items()),
+                p, pr) for peer, p, pr in in_cluster_destinations(self.cloudflared())}
+        self.assertEqual(got, want)
 
 
 if __name__ == "__main__":
