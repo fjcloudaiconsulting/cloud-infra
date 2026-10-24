@@ -219,6 +219,11 @@ name is pinned in an AWS trust policy: never rename it.
 
 The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
 
+A speculative plan runs with the workspace's own credentials. `tests/test_terraform_fences.py` keeps every stack to
+the providers and provider arguments listed in that file and refuses `external` and `http` data sources, remote
+state, provisioners, remote modules, override files and file reads outside the repository. A new provider or
+provider argument is a change to those lists in the PR that needs it.
+
 Never set `TFC_AWS_RUN_ROLE_ARN` on `tbd-backups`: it would give unapproved PR plans the apply role. The IAM documents are
 in [`aws/bootstrap/`](../aws/bootstrap/); root creates the roles once and a workspace never manages its
 own role.
