@@ -515,5 +515,17 @@ class PinnedDownloads(unittest.TestCase):
                          r"# renovate: datasource=github-releases depName=k3s-io/k3s\nk3s_version: v\S+\n")
 
 
+class HostKeysChecked(unittest.TestCase):
+    """ANS-09: bootstrap and rebuild check a new host key against the Hetzner console before the first run."""
+
+    def test_bootstrap_and_rebuild_check_the_fingerprint(self):
+        readme = ANSIBLE / "README.md"
+        self.assertIn("SSH HOST KEY", md_section(readme, "First bootstrap"))
+        rebuild = md_section(readme, "Rebuilding one node")
+        for line in [x for x in rebuild.splitlines() if "ssh-keygen -R" in x]:
+            self.assertIn("checking it against the console", line)
+        self.assertEqual(rebuild.count("ssh-keygen -R"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

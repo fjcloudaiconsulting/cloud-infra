@@ -139,7 +139,11 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
 
 1. `terraform/hetzner` applied; the volume `fjc-db` is attached to db-1.
 2. The primary IPv4s in `inventory.yaml` match `terraform/hetzner`.
-3. `ssh -i ~/.ssh/fjc-hetzner-deploy root@<ip> true` for each host, to accept the host keys.
+3. Accept each host key only after checking it (this first run sends the k3s token). In the Hetzner Cloud Console,
+   open the server's Console: at first boot cloud-init prints its fingerprints under `BEGIN SSH HOST KEY
+   FINGERPRINTS`. Then `ssh -i ~/.ssh/fjc-hetzner-deploy root@<ip> true` and answer `yes` only if the `ED25519`
+   fingerprint it shows is the console's. No fingerprint on the console any more: Rescue > Reset root password, log
+   in there, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, then `passwd -l root`.
 4. From `main` at the merged SHA:
 
    ```sh
@@ -218,7 +222,8 @@ rejoins as a stale member, and the rebuilt node then hits a node-password confli
 2. On the OLD node: `systemctl disable --now k3s && /usr/local/bin/k3s-killall.sh`.
 3. From a working node: `k3s kubectl delete node <name>`.
 4. Replace the server in TFC.
-5. `ssh-keygen -R <public ip>`, accept the new host key, then `ansible-playbook site.yml --limit <name>` (never with
+5. `ssh-keygen -R <public ip>`, accept the new host key only after checking it against the console ([First
+   bootstrap](#first-bootstrap) step 3), then `ansible-playbook site.yml --limit <name>` (never with
    `k3s_bootstrap`). The rebuilt node has no etcd data, so the quorum guard lets it run alone; it joins a live peer.
 
 If that run fails after k3s started on the new node, the node now has etcd data: a plain rerun skips k3s on it and
@@ -253,7 +258,8 @@ goes away.
    `umount /var/lib/rancher/k3s/storage` (`findmnt /var/lib/rancher/k3s/storage` prints nothing).
 4. `k3s kubectl delete node db-1` from a working node.
 5. Replace the server in TFC (the attachment follows the new server).
-6. `ssh-keygen -R <public ip>`, then `ansible-playbook site.yml --limit db-1`. The play finds the volume, mounts it by
+6. `ssh-keygen -R <public ip>`, accept the new host key only after checking it against the console ([First
+   bootstrap](#first-bootstrap) step 3), then `ansible-playbook site.yml --limit db-1`. The play finds the volume, mounts it by
    its filesystem UUID and installs the k3s mount guard before k3s is installed.
 7. Scale the StatefulSets back up; the local-path volumes are pinned to node `db-1` and come back with their data.
 
