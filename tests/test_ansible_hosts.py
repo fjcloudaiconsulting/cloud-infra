@@ -42,6 +42,15 @@ def server_private_ips():
     return {name: h["private_ip"] for name, h in hosts.items()}
 
 
+def md_section(path, heading):
+    """The text under a `## heading` of a Markdown file, up to the next `## ` heading."""
+    text = path.read_text()
+    m = re.search(rf"(?m)^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.S)
+    if not m:
+        raise AssertionError(f"{path.name}: no section '## {heading}'")
+    return m.group(1)
+
+
 def plays(path):
     """The plays of a playbook (its one YAML document)."""
     return load_all(path)[0]
@@ -429,6 +438,31 @@ class ApiAuditLog(unittest.TestCase):
         for who in (self.ADMIN, self.OWNER, self.FLUX, self.KUBELET):
             for verb in ("get", "list", "watch", "create", "update", "patch", "delete"):
                 self.assertIn(audit_level(pol, who["user"], verb, "secrets", "", who["groups"]), ("None", "Metadata"))
+
+
+class K3sTokenRotation(unittest.TestCase):
+    """ANS-05: a live rotation procedure for the k3s token, and the leaked-key procedures point at it."""
+
+    def test_readme_has_a_live_rotation_procedure(self):
+        sec = md_section(ANSIBLE / "README.md", "Rotate the k3s token (live)")
+        for needle in ("k3s token rotate", "etcd-snapshot save", "sops encrypt --filename-override",
+                       "-e k3s_reconfigure=true"):
+            self.assertIn(needle, sec)
+        # The token travels only through pipes: every decrypt feeds another command, never the terminal.
+        decrypts = [line for line in sec.splitlines() if "sops decrypt" in line]
+        self.assertTrue(decrypts)
+        self.assertTrue(all(line.rstrip().endswith("\\") or "|" in line for line in decrypts), decrypts)
+
+    def test_old_claim_is_gone(self):
+        readme = (ANSIBLE / "README.md").read_text()
+        self.assertNotIn("cannot simply be swapped", readme)
+        self.assertNotIn("fresh cluster only", readme)
+
+    def test_leaked_key_rows_rotate_the_token(self):
+        rows = {line.split("|")[1].strip(): line for line in (ROOT / "docs/configuration-map.md").read_text().splitlines()
+                if line.startswith("| ")}
+        for item in ("Ansible age key (INFRA-64)", "SOPS age private key", "Deploy SSH key (INFRA-64)"):
+            self.assertIn("rotate-the-k3s-token-live", rows.get(item, ""), item)
 
 
 if __name__ == "__main__":

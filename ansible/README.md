@@ -40,10 +40,49 @@ The collection handles the token in task arguments. The `k3s_server` role runs w
 `secrets.sops.yaml` holds `k3s_token`, encrypted to two age keys (`.sops.yaml`): the owner key and the Ansible key
 (`~/.config/sops/age/ansible-hetzner.txt` on the operator laptop, which decrypts only `ansible/`). INFRA-180 adds a CI
 recipient. It is decrypted lazily, only when a k3s task needs it. A lost Ansible key: make a new one, swap its public
-key into `.sops.yaml`, then `sops updatekeys ansible/secrets.sops.yaml` with the owner key. To rotate the token itself,
-on a fresh cluster only (a live cluster's token cannot simply be swapped):
+key into `.sops.yaml`, then `sops updatekeys ansible/secrets.sops.yaml` with the owner key. A leaked one (Ansible or
+owner key) also needs [the token rotated](#rotate-the-k3s-token-live): `updatekeys` keeps the same data key, and git
+history keeps the old ciphertext. The token for a new cluster:
 `openssl rand -hex 32 | sed 's/^/k3s_token: /' | sops encrypt --filename-override ansible/secrets.sops.yaml > ansible/secrets.sops.yaml`
 from the repo root. Never print it.
+
+## Rotate the k3s token (live)
+
+`k3s token rotate` replaces the server token on a running cluster (k3s added it in 2023; step 1 checks the running
+version has it). Run it after a lost or leaked age key that decrypts `ansible/` (the Ansible key, or the owner key,
+which is also the in-cluster Flux key), a leaked deploy SSH key, a node disk, backup or etcd snapshot out of your
+hands, or any cluster-admin incident. It does not change the cluster CA or its keys: if a rogue server may have
+joined or the bootstrap data was read, that is a CA rotation (`k3s certificate rotate-ca`), not this.
+
+From the repo root on a new branch, with `SOPS_AGE_KEY_FILE` set as above. Nothing below prints the token.
+
+1. Every server Ready, nothing cordoned, no other k3s or reboot run going. `N1=<node-1 public IPv4>`, then
+   `ssh root@$N1 'k3s token rotate --help >/dev/null && echo supported'` and
+   `ssh root@$N1 k3s etcd-snapshot save --name pre-token-rotate`. Snapshots from before the rotation need the old
+   token to restore; git history keeps it.
+2. The new token, into the SOPS file (through a temp file, so a failed encrypt leaves the old one):
+
+   ```sh
+   F=ansible/secrets.sops.yaml
+   openssl rand -hex 32 | sed 's/^/k3s_token: /' \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.new" && mv "$F.new" "$F"
+   grep -c 'k3s_token: ENC\[AES256' "$F"   # 1
+   ```
+
+3. Rotate on node-1: the new token goes over ssh stdin, the old one is the server's own token file. The new value is
+   in that command's arguments on node-1 while it runs.
+
+   ```sh
+   sops decrypt --extract '["k3s_token"]' "$F" \
+     | ssh root@$N1 'T=$(cat); [ -n "$T" ] && K3S_TOKEN=$(cat /var/lib/rancher/k3s/server/token) k3s token rotate --new-token "$T"'
+   ```
+
+4. Right away, from `ansible/` on the same branch: `ansible-playbook site.yml -e k3s_reconfigure=true`. It writes the
+   new token into each server's `config.yaml` and restarts the servers one at a time behind the quorum guard. Until
+   this run reaches a server, that server must not restart: with the old token it cannot read the cluster's bootstrap
+   data and does not start (rerun this step to fix it).
+5. PR the new `secrets.sops.yaml` with the `PLAY RECAP` and merge it straight away: until then `main` still has the old
+   token, so run nothing k3s-related from `main`.
 
 ## Root SSH keys
 
@@ -57,7 +96,8 @@ Read the change first, the first time and whenever the list changes: `ansible-pl
 `authorized_keys` diff shows public keys only; every removed line must be a key you mean to drop. If root SSH is lost
 anyway, use the Hetzner console ([break-glass](../docs/runbooks.md#hetzner-nodes-ansible-rebuild-break-glass)).
 
-Rotate the deploy key (after a leak, also rotate the k3s token: root on a node can read it):
+Rotate the deploy key (after a leak, also [rotate the k3s token](#rotate-the-k3s-token-live): root on a node can read
+it):
 
 1. `ssh-keygen -t ed25519 -f ~/.ssh/fjc-hetzner-deploy.new` (`-t ed25519-sk` for a FIDO2 key), add the content of
    `~/.ssh/fjc-hetzner-deploy.new.pub` to `deploy_ssh_extra_public_keys`, merge, run `site.yml` (check first). Both
