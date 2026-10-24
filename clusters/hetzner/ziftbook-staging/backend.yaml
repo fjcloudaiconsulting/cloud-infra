@@ -85,6 +85,14 @@ spec:
                   name: ziftbook-totp
                   key: key
                   optional: true
+            # Pepper for the rate-limit keys (ZB-25): the email or IP in each key is stored as its HMAC under it, so the
+            # rate_limits table holds no addresses. One value per environment, the worker's too; changing it restarts every
+            # counter once (docs/runbooks.md "Ziftbook rate-limit key"). Not optional: the Secret is in git.
+            - name: ZIF_RATE_LIMIT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-rate-limit
+                  key: rate-limit-key
             # Stripe sandbox keys (ZIF-158, docs/runbooks.md "Ziftbook Stripe"). optional: unset turns payments off, the
             # app runs without them. The webhook route checks its own signature with the webhook secret.
             - name: ZIF_STRIPE_SECRET_KEY
