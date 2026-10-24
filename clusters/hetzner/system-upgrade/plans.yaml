@@ -8,7 +8,7 @@ metadata:
   namespace: system-upgrade
 spec:
   # renovate: datasource=github-releases depName=k3s-io/k3s
-  version: v1.36.5+k3s1
+  version: v1.37.1+k3s1
   serviceAccountName: system-upgrade
   concurrency: 1
   postCompleteDelay: 2m
@@ -54,7 +54,7 @@ metadata:
   namespace: system-upgrade
 spec:
   # renovate: datasource=github-releases depName=k3s-io/k3s
-  version: v1.36.5+k3s1
+  version: v1.37.1+k3s1
   serviceAccountName: system-upgrade
   concurrency: 1
   postCompleteDelay: 2m

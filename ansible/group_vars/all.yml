@@ -2,7 +2,7 @@
 # The k3s release is pinned here; upgrading is a deliberate change of this line.
 # Bootstrap pin only: the Plans in clusters/hetzner/system-upgrade/plans.yaml win once the cluster runs.
 # renovate: datasource=github-releases depName=k3s-io/k3s
-k3s_version: v1.36.5+k3s1
+k3s_version: v1.37.1+k3s1
 
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.
