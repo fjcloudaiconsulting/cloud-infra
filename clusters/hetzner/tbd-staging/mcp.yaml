@@ -6,7 +6,8 @@
 # equal the backend's, or no agent token verifies). JWT_SECRET_KEY is its own (Secret tbd-mcp): the config validator
 # needs one, MCP never signs with it. No REDIS_URL: since v0.295.0 (INFRA-122) nothing reads it. The FEATURE_* and
 # BILLING_UI_ENABLED floors match backend.yaml, so tools see the same gates as the app. APP_URL must equal the
-# backend's (OAuth issuer and resource metadata URL).
+# backend's (OAuth issuer and resource metadata URL). CLIENT_IP_HEADER as in backend.yaml: the per-IP ceiling on
+# failed auth then counts each visitor, not the Cloudflare address that connects (INF-02).
 # Memory: request 96Mi, limit 256Mi (the scheduler, a comparable non-HTTP import of the app, works at ~120Mi).
 # DB pool 1+1, the minimum (the rate limiter's own engine adds a fixed 2+5): MCP opens at most 9 connections as MySQL
 # user tbd_staging, whose MAX_USER_CONNECTIONS is 20; with the backend's 15+7 the worst case is 31.
@@ -52,6 +53,8 @@ spec:
       containers:
         - name: mcp
           image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.302.0
+          # The image CMD (tbd backend/Dockerfile.mcp) with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
+          args: [uvicorn, "app.mcp_main:app", --host, 0.0.0.0, --port, "8001", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8001
           envFrom:
@@ -62,6 +65,10 @@ spec:
               value: "production"
             - name: CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # The same trust list for tbd images that read it from the environment (uvicorn and the rate limiter);
+            # keep it equal to --forwarded-allow-ips in args until args is dropped (INF-01).
+            - name: FORWARDED_ALLOW_IPS
+              value: 10.42.0.0/16
             - name: LOG_LEVEL
               value: "INFO"
             - name: APP_URL

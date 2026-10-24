@@ -10,6 +10,10 @@
 # PFV_RUNTIME is deliberately unset. CLIENT_IP_HEADER=cf-connecting-ip: Cloudflare overwrites that
 # header, and the origin is reachable only through the Cloudflare Tunnel (no public port, no Traefik; same-node host traffic bypasses NetworkPolicy, see data/networkpolicy.yaml), so
 # get_client_ip reads the visitor from it (INFRA-83). frontend.yaml sets the same value (INFRA-97).
+# args repeats the image CMD (tbd backend/Dockerfile) with uvicorn's --forwarded-allow-ips narrowed from every private
+# range to the pod network (k3s's default cluster CIDR): only cloudflared pods reach this port (networkpolicy.yaml), and
+# uvicorn reads X-Forwarded-For and X-Forwarded-Proto from them only (INF-01). A tbd release that changes that CMD
+# needs the same change here, in tbd-staging/backend.yaml and in tbd-staging/mcp.yaml.
 apiVersion: v1
 kind: Service
 metadata:
@@ -105,6 +109,7 @@ spec:
       containers:
         - name: backend
           image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.302.0
+          args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8000
           envFrom:
@@ -115,12 +120,17 @@ spec:
               value: "production"
             - name: CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # The same trust list for tbd images that read it from the environment (uvicorn and the rate limiter);
+            # keep it equal to --forwarded-allow-ips in args until args is dropped (INF-01).
+            - name: FORWARDED_ALLOW_IPS
+              value: 10.42.0.0/16
             - name: LOG_LEVEL
               value: "INFO"
             - name: APP_URL
               value: "https://app.thebetterdecision.com"
+            # The app origin only (FE-01): the apex and www are marketing pages that never call the API.
             - name: BACKEND_CORS_ORIGINS
-              value: "https://app.thebetterdecision.com,https://thebetterdecision.com,https://www.thebetterdecision.com"
+              value: "https://app.thebetterdecision.com"
             - name: COOKIE_SECURE
               value: "true"
             - name: MAILGUN_DOMAIN
