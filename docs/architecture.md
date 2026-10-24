@@ -118,9 +118,11 @@ All run in `data` on the Hetzner cluster as StatefulSets on local-path volumes, 
 | MySQL 8.4 | TBD production (`tbd`, users `tbd_app`, `tbd_backup`); TBD staging (`tbd_staging`, user `tbd_staging`, grants on its own database only, 20 connections at most) | buffer pool 128M, performance_schema off, binlog off |
 | Postgres 18 | Ziftbook staging (`ziftbook`) and production (`ziftbook_prod`); the two roles are shared and created by Ziftbook's pinned `bootstrap.sql`, run as a Job per database | shared_buffers 64MB, no parallel workers |
 
-A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts `tbd-prod`
-and `tbd-staging`, Postgres (Hetzner only since INFRA-181) `ziftbook-staging` and
-`ziftbook-prod`, and the backup and bootstrap pods reach their databases inside `data`.
+A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts the pods of `tbd-prod`
+and `tbd-staging` that hold a database URL (backend and scheduler, backend and MCP), Postgres (Hetzner only since
+INFRA-181) the backend and worker of `ziftbook-staging` and `ziftbook-prod`, and the backup and bootstrap pods reach
+their databases inside `data`. Frontends are not admitted. A new workload that connects needs its `app` label in that
+policy; `tests/test_network_policies.py` derives the list from the manifests.
 Database auth and the NetBird ACL complete the controls.
 Manifests and comments: [`clusters/hetzner/data/`](../clusters/hetzner/data/).
 

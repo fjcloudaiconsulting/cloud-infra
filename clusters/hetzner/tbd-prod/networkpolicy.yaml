@@ -2,7 +2,7 @@
 # cluster) reaches the frontend, and the backend for /api and /health (the tunnel routes; /ready stays internal, INF-09).
 # Nothing else reaches the backend (INF-01): the frontend makes no server-side backend calls since tbd TBD-624. The
 # scheduler takes no traffic. Egress is open except instance metadata (INFRA-43). Node-local traffic bypasses these policies (see data/networkpolicy.yaml); the data
-# policy admits this namespace to MySQL.
+# policy admits the backend and the scheduler to MySQL.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

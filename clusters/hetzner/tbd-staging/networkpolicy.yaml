@@ -1,7 +1,7 @@
 # Ingress to tbd-staging is deny-by-default. The only way in is the Cloudflare Tunnel (cloudflared namespace, INFRA-173;
 # no Traefik on this cluster), to the frontend, the backend and MCP; the frontend makes no backend calls (INF-01). Egress
 # is open except instance metadata.
-# data/networkpolicy.yaml admits this namespace to MySQL only. Node-local traffic bypasses these policies.
+# data/networkpolicy.yaml admits the backend and MCP to MySQL only. Node-local traffic bypasses these policies.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
