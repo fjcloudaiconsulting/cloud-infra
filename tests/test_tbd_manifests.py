@@ -252,6 +252,15 @@ def workloads(namespace):
     return [(f, d) for f, d in manifests(namespace) if d.get("kind") in WORKLOAD_KINDS]
 
 
+def served(namespace):
+    """The workloads a Service of their namespace selects: the ones the tunnel can reach (not the scheduler)."""
+    selectors = [(d["spec"].get("selector") or {}) for _, d in manifests(namespace) if d.get("kind") == "Service"]
+    for f, d in workloads(namespace):
+        labels = (d["spec"].get("template") or {}).get("metadata", {}).get("labels") or {}
+        if any(sel and all(labels.get(k) == v for k, v in sel.items()) for sel in selectors):
+            yield f, d
+
+
 def containers(doc, init=True):
     spec = pod_spec(doc)
     return (spec.get("initContainers") or [] if init else []) + (spec.get("containers") or [])
@@ -362,12 +371,7 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
         modules = {"backend": ("app.main:app", "8000"), "mcp": ("app.mcp_main:app", "8001")}
         seen = set()
         for ns in TBD_NAMESPACES:
-            services = {tuple(sorted((d["spec"].get("selector") or {}).items()))
-                        for _, d in manifests(ns) if d.get("kind") == "Service"}
-            for f, d in workloads(ns):
-                labels = tuple(sorted((d["spec"]["template"]["metadata"].get("labels") or {}).items()))
-                if labels not in services:
-                    continue  # nothing routes to it (the scheduler)
+            for f, d in served(ns):
                 for c in containers(d, init=False):
                     img = tbd_image(c)
                     if img not in modules:
@@ -388,6 +392,24 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
                 for c in containers(d):
                     with self.assertRaises(KeyError, msg=where(f, d, c)):
                         env_value(c, "PFV_RUNTIME")
+
+
+class VisitorAddressFromCloudflare(unittest.TestCase):
+    """INF-02: every TBD process the tunnel reaches (backend, MCP, frontend) keys its per-IP limits and logs on
+    CF-Connecting-IP, never on the Cloudflare address that connects to it."""
+
+    def test_every_tunnel_facing_tbd_container_sets_client_ip_header(self):
+        seen = set()
+        for ns in TBD_NAMESPACES:
+            for f, d in served(ns):
+                for c in containers(d, init=False):
+                    if tbd_image(c) is None:
+                        continue
+                    seen.add((ns, tbd_image(c)))
+                    env = {e.get("name"): e.get("value") for e in c.get("env") or []}
+                    self.assertEqual(env.get("CLIENT_IP_HEADER"), "cf-connecting-ip", where(f, d, c))
+        self.assertTrue({("tbd-prod", "backend"), ("tbd-prod", "frontend"), ("tbd-staging", "backend"),
+                         ("tbd-staging", "frontend"), ("tbd-staging", "mcp")} <= seen, seen)
 
 
 if __name__ == "__main__":
