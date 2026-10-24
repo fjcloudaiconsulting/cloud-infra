@@ -15,3 +15,45 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 256Mi
+  # RBAC trimmed to this install (K8S-05). Upstream lets the controllers create tokens for any ServiceAccount, which
+  # only workload identity (cloud-provider auth by ServiceAccount) uses; this cluster has none: the GitRepository is
+  # public and SOPS decrypts with the age key in a Secret. Both bindings also name controllers not installed here
+  # (helm, notification, image, source-watcher): only the two ServiceAccounts that exist stay.
+  # Patched here, so a regenerated gotk-components.yaml (`flux install --export`) keeps the trim. The `test` op fails
+  # the build if a regeneration moves the rule, rather than removing another one: fix the index then.
+  # tests/test_platform_hardening.py renders this directory and checks both.
+  - target:
+      kind: ClusterRole
+      name: crd-controller-flux-system
+    patch: |
+      - op: test
+        path: /rules/11
+        value:
+          apiGroups: [""]
+          resources: [serviceaccounts/token]
+          verbs: [create]
+      - op: remove
+        path: /rules/11
+  - target:
+      kind: ClusterRoleBinding
+      name: crd-controller-flux-system
+    patch: |
+      - op: replace
+        path: /subjects
+        value:
+          - kind: ServiceAccount
+            name: kustomize-controller
+            namespace: flux-system
+          - kind: ServiceAccount
+            name: source-controller
+            namespace: flux-system
+  - target:
+      kind: ClusterRoleBinding
+      name: cluster-reconciler-flux-system
+    patch: |
+      - op: replace
+        path: /subjects
+        value:
+          - kind: ServiceAccount
+            name: kustomize-controller
+            namespace: flux-system
