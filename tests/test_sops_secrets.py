@@ -282,6 +282,42 @@ class SopsSecrets(unittest.TestCase):
             with self.subTest(name):
                 self.assertFails(files, needle)
 
+    def test_paths_and_credentials_in_their_exact_form(self):
+        # GHA-03 second review: each layout passed the fence before this change.
+        secret = SECRET_HEAD + "stringData:\n  pw: hunter2\n"
+        url = "postgresql://app:hunter2@db/app"
+        cases = {
+            # 1: a path list entry is a plain or quoted one-line scalar, nothing else.
+            "block resource": ({"app/kustomization.yaml": "resources:\n  - |-\n    s.txt\n", "app/s.txt": secret},
+                               "write `resources` as a block list of one-line paths"),
+            "multi-line resource": ({"app/kustomization.yaml": "resources:\n  - 's.\n    txt'\n"},
+                                    "write `resources` as a block list of one-line paths"),
+            "nested resource": ({"app/kustomization.yaml": "resources:\n  -\n    path: s.txt\n", "app/s.txt": secret},
+                                "write `resources` as a block list of one-line paths"),
+            "block generator file": ({"app/kustomization.yaml": "configMapGenerator:\n  - name: c\n    files:\n"
+                                      "      - >-\n        app.ini\n", "app/app.ini": url + "\n"},
+                                     "write `files` as a block list of one-line paths"),
+            # 2: only a whole value in the full sops format is skipped, not ENC[...] inside a value.
+            "fake ENC": ({"x.secret.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\n  annotations:\n"
+                          "    note: postgresql://app:ENC[hunter2]@db/app\n---\n" + SECRET_HEAD
+                          + "stringData:\n    k: ENC[AES256_GCM,data:eA==,type:str]\n" + SOPS_TAIL},
+                         "line 6: password in a URL"),
+            # 3: an empty user name.
+            "empty user": ({"app/deploy.yaml": "env:\n  - name: R\n    value: redis://:hunter2@cache:6379\n"},
+                           "password in a URL"),
+        }
+        for name, (files, needle) in cases.items():
+            with self.subTest(name):
+                self.assertFails(files, needle)
+
+    def test_sops_values_in_the_full_format_pass(self):
+        # guard: what sops writes, mac included, in a manifest and an Ansible vars file.
+        enc = "ENC[AES256_GCM,data:aHVudGVy,iv:aXZpdml2aXZpdml2,tag:dGFndGFndGFndGFn,type:str]"
+        tail = SOPS_TAIL.replace("ENC[AES256_GCM,data:bWFj,iv:aXY=,tag:dGFn,type:str]", enc)
+        r = run({"x.secret.yaml": SECRET_HEAD + f"stringData:\n    url: {enc}\n" + tail,
+                 "ansible/x.sops.yaml": f"k3s_token: {enc}\n" + tail})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_generator_sources_inside_the_tree_pass(self):
         # guard: the shapes observability/ uses (files: [key=]path), with clean sources.
         r = run({"app/kustomization.yaml": "configMapGenerator:\n  - name: c\n    files:\n      - a.sh\n      - k=b.conf\n",

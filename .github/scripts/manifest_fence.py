@@ -14,13 +14,14 @@ runs this fence first and fails closed on anything else instead of guessing:
 - no `kind: List` or other `*List` kind (kustomize unwraps their items);
 - kustomization files: only resources and configMapGenerator, plus patches and images in the vendored tier-0
   directories (EXEMPT), where every images entry carries a sha256 digest; each resource is a directory or a
-  MANIFEST_SUFFIXES file inside the tree (the files the checks read), each configMapGenerator files/envs entry a file
-  inside the tree;
+  MANIFEST_SUFFIXES file inside the tree (the files the checks read), each configMapGenerator files/envs/env entry a
+  file inside the tree, and every such entry a plain or quoted one-line scalar;
 - Flux objects (`*.toolkit.fluxcd.io`) only under flux-system;
 - app namespaces (<app>-prod, <app>-staging): every image is ghcr.io/fjcloudaiconsulting/<app>/..., and a document
   that runs an image in one lives in that namespace's directory;
-- no `scheme://user:password@host` with a literal password, in any manifest or configMapGenerator source; only an
-  ENC[...] value or an exact `$(VAR)`/`${VAR}` placeholder password passes;
+- no `scheme://[user]:password@host` with a literal password, in any manifest, configMapGenerator source or SOPS
+  file; only an exact `$(VAR)`/`${VAR}` placeholder password passes, and in a SOPS file an entry whose whole value is
+  a sops ENC[AES256_GCM,...] value is not read;
 - no symlinks.
 
 Stdlib only: CI runs the runner's python3 with no installs. As a script: manifest_fence.py [root...] (default
@@ -46,9 +47,9 @@ WATCHED = {"kind", "image", "name", "namespace", "newName", "newTag", "digest", 
 SAME_LINE = WATCHED - {"value"}
 SCALAR = ("plain", "single", "double")
 BAD_CHAR = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ufeff]")
-CREDENTIAL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@'\"]+:([^\s/@'\"]+)@")
+CREDENTIAL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@'\"]*:([^\s/@'\"]+)@")  # the user may be empty
 PLACEHOLDER = re.compile(r"\$\([A-Za-z_][A-Za-z0-9_]*\)|\$\{[A-Za-z_][A-Za-z0-9_]*\}")
-SOPS_VALUE = re.compile(r"ENC\[[^\]]*\]")
+SOPS_VALUE = re.compile(r"ENC\[AES256_GCM,data:[A-Za-z0-9+/=]*,iv:[A-Za-z0-9+/=]+,tag:[A-Za-z0-9+/=]+,type:[a-z]+\]")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 KEY = re.compile(r"(.*?)[ \t]*:(?:[ \t]|$)")
 BLOCK_HEADER = re.compile(r"[|>][1-9+-]{0,2}(?:[ \t]+#.*)?")
@@ -246,6 +247,8 @@ def scan(text):
         parent = stack[-1] if stack and not dashes else None
         stack.extend((d, n, True) for d in dashes)
         if not rest or rest.startswith("#"):
+            if dashes:  # `-` alone: the entry's node follows on deeper lines
+                docs[-1].entries.append(Entry(n, tuple(s[1] for s in stack), "empty", None))
             continue
         if rest[0] in "?:" and rest[1:2] in ("", " ", "\t"):
             problems.append((n, "explicit `?`/`:` key"))
@@ -305,12 +308,19 @@ def _inside(root, p):
         return False
 
 
-def _credentials(text, sops=False):
-    """Line numbers holding a URL with a literal password: only an exact $(VAR) or ${VAR} placeholder passes, and in
-    a SOPS file an ENC[...] value."""
+def _credentials(text, docs=None):
+    """Line numbers holding a URL with a literal password: only an exact $(VAR) or ${VAR} placeholder passes. docs
+    (a SOPS file's): an entry whose whole value is a sops ENC[...] value is left out of its line."""
+    enc = collections.defaultdict(list)
+    for doc in docs or ():
+        for e in doc.entries:
+            if e.style in SCALAR and SOPS_VALUE.fullmatch(e.text):
+                enc[e.line].append(e.text)
     out = []
     for n, line in enumerate(text.split("\n"), 1):
-        line = SOPS_VALUE.sub("", line) if sops else line
+        for value in enc.get(n, ()):
+            i = line.rfind(value)
+            line = line[:i] + line[i + len(value):]
         if any(not PLACEHOLDER.fullmatch(m.group(1)) for m in CREDENTIAL.finditer(line)):
             out.append(n)
     return out
@@ -324,11 +334,18 @@ def _kustomization(root, path, docs, exempt):
             if len(e.path) == 1 and e.path[0] not in allowed:
                 where = "" if exempt else f" outside {' and '.join(EXEMPT)}"
                 out.append(f"line {e.line}: kustomization key `{e.path[0]}`{where}: it can rewrite what the checks read")
-            # Lists of paths are read one entry per line, so a flow list would hide them.
-            listed = e.path[:1] == ("resources",) or (e.path[:1] == ("configMapGenerator",) and len(e.path) >= 3
-                                                       and e.path[2] in ("files", "envs", "env"))
-            if listed and e.style == "flow":
-                out.append(f"line {e.line}: write `{e.path[-1]}` as a block list")
+            # Paths are read one entry per line: a block list (env: one path) of plain or quoted one-line scalars.
+            if e.path[:1] == ("resources",):
+                name, depth = "resources", 2
+            elif e.path[:1] == ("configMapGenerator",) and e.path[2:3] in (("files",), ("envs",), ("env",)):
+                name, depth = e.path[2], 3 if e.path[2] == "env" else 4
+            else:
+                name = None
+            if name and not (
+                    (len(e.path) == depth - 1 and e.style == "empty" and name != "env")
+                    or (len(e.path) == depth and isinstance(e.path[-1], int) == (name != "env") and e.style in SCALAR)):
+                out.append(f"line {e.line}: write `{name}` as a block list of one-line paths")
+                continue
             if len(e.path) == 2 and e.path[0] == "resources" and e.style in SCALAR:
                 target = path.parent / e.text
                 if "://" in e.text or not _inside(root, target) or not target.exists():
@@ -365,7 +382,7 @@ def _manifest_rules(root, path, text, docs):
     dirs = rel.parts[:-1]
     dir_ns = {d for d in dirs if APP_NS.fullmatch(d)}
     out = [f"line {n}: password in a URL: keep it in a SOPS Secret"
-           for n in _credentials(text, sops=path.name.lower().endswith(".secret.yaml"))]
+           for n in _credentials(text, docs if path.name.lower().endswith(".secret.yaml") else None)]
     if path.name in KUSTOMIZATIONS:
         out += _kustomization(root, path, docs, not dir_ns and any(d in EXEMPT for d in dirs))
     for doc in docs:
@@ -419,6 +436,8 @@ def problems(root, manifests=True):
         out += [(p, f"line {n}: {msg}") for n, msg in errs]
         if manifests:
             out += [(p, msg) for msg in _manifest_rules(root, p, text, docs)]
+        else:
+            out += [(p, f"line {n}: password in a URL: keep it encrypted") for n in _credentials(text, docs)]
     return out
 
 
