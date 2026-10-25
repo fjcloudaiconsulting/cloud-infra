@@ -1,5 +1,6 @@
 """Fences on the CI and Renovate inputs (GHA-09): third-party images and actions wait 7 days after a release before
-Renovate proposes them, the org's own images and actions do not wait.
+Renovate proposes them, the org's own images and actions do not wait, and every `pip install` in a workflow installs
+only hash-pinned requirements that Renovate keeps updated.
 
 Stdlib only so CI needs no installs: `python3 -m unittest discover -s tests`. renovate.json's packageRules are evaluated
 the way Renovate resolves the two options that matter here (minimumReleaseAge, minimumReleaseAgeBehaviour): rules
@@ -11,6 +12,7 @@ neither option; it cannot be read offline.
 import json
 import pathlib
 import re
+import shlex
 import unittest
 
 from test_tbd_manifests import load_all
@@ -44,6 +46,16 @@ MATCHERS = {
 AGE_KEYS = ("minimumReleaseAge", "minimumReleaseAgeBehaviour")
 IMAGE_LINE = re.compile(r"""^\s*-?\s*image:\s*['"]?([^\s'"#]+)""")
 USES_LINE = re.compile(r"""^\s*(?:-\s+)?uses:\s*['"]?([^\s'"#@]+)@\S+""")
+
+# Renovate's pip_requirements default managerFilePatterns (lib/modules/manager/pip_requirements/index.ts).
+PIP_REQUIREMENTS = r"/(^|/)[\w-]*requirements([-._]\w+)?\.(txt|pip)$/"
+# The python3 each runner label ships (actions/runner-images); the requirements are resolved for it.
+RUNNER_PYTHON = {"ubuntu-26.04": "3.14"}
+PIP_VALUE_OPTIONS = {"-r", "--requirement", "-c", "--constraint", "--only-binary", "--no-binary", "-i", "--index-url",
+                     "--extra-index-url", "-f", "--find-links", "-t", "--target", "--prefix", "--root", "--cache-dir"}
+# One pinned package per logical line (extras and markers allowed), followed by at least one sha256.
+REQUIREMENT = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[^\]]+\])?==[^\s;]+(\s*;[^-]+)?(\s+--hash=sha256:[0-9a-f]{64})+$")
 
 
 # ---- Renovate rule evaluation -------------------------------------------------------------------------------------
@@ -162,6 +174,54 @@ def action_dep(rel, name, dep_type, update_type):
             "depName": name, "updateType": update_type, "fileName": rel}
 
 
+def pip_installs():
+    """[(where, runs-on, working directory, argv after `install`)] for every `pip install` in a workflow `run:`."""
+    out = []
+    for f in sorted(WORKFLOWS.glob("*.y*ml")):
+        (doc,) = load_all(f)
+        top = ((doc.get("defaults") or {}).get("run") or {}).get("working-directory")
+        for job_id, job in (doc.get("jobs") or {}).items():
+            job_wd = ((job.get("defaults") or {}).get("run") or {}).get("working-directory", top)
+            for i, step in enumerate(job.get("steps") or []):
+                wd = step.get("working-directory", job_wd) or "."
+                for line in str(step.get("run") or "").replace("\\\n", " ").splitlines():
+                    if not re.search(r"\bpip3?\b", line):
+                        continue
+                    argv = shlex.split(line, comments=True)
+                    for j, word in enumerate(argv[:-1]):
+                        if re.search(r"(^|/)pip3?$", word) and argv[j + 1] == "install":
+                            where = f"{f.relative_to(ROOT)} {job_id} step {step.get('name', i)}"
+                            out.append((where, job.get("runs-on"), wd, argv[j + 2:]))
+    return out
+
+
+def requirement_files(argv):
+    """The -r files of a pip install argv, and any positional argument (a package given on the command line)."""
+    files, positional, i = [], [], 0
+    while i < len(argv):
+        word = argv[i]
+        if word in ("-r", "--requirement"):
+            files.append(argv[i + 1])
+        elif word.startswith("--requirement="):
+            files.append(word.split("=", 1)[1])
+        elif not word.startswith("-"):
+            positional.append(word)
+        if word in PIP_VALUE_OPTIONS:
+            i += 1
+        i += 1
+    return files, positional
+
+
+def requirement_lines(path):
+    """The logical lines of a requirements file (continuations joined), without comments and blank lines."""
+    out = []
+    for line in path.read_text().replace("\\\n", " ").splitlines():
+        line = re.sub(r"(^|\s)#.*$", "", line).strip()
+        if line:
+            out.append(line)
+    return out
+
+
 # ---- tests --------------------------------------------------------------------------------------------------------
 
 class EvaluatorSelfTest(unittest.TestCase):
@@ -193,6 +253,16 @@ class EvaluatorSelfTest(unittest.TestCase):
         self.assertEqual(registry("grafana/alloy"), "docker.io")
         self.assertEqual(registry("postgres"), "docker.io")
         self.assertEqual(registry("mirror.gcr.io/cloudflare/cloudflared"), "mirror.gcr.io")
+
+    def test_pip_argv_and_requirement_lines(self):
+        argv = shlex.split('--quiet --require-hashes --only-binary :all: -r a.txt --requirement=b.txt "x==1"')
+        self.assertEqual(requirement_files(argv), (["a.txt", "b.txt"], ["x==1"]))
+        self.assertEqual(requirement_files(["-c", "c.txt", "--index-url", "https://i", "-r", "r.txt"]), (["r.txt"], []))
+        h = "--hash=sha256:" + "0" * 64
+        self.assertRegex(f"a-b.c==1.0 {h} {h}", REQUIREMENT)
+        self.assertRegex(f'x[y]==2 ; python_version < "3.15" {h}', REQUIREMENT)
+        for bad in ("a==1", f"a>=1 {h}", f"-e . {h}", f"--index-url https://x {h}", f"a==1 --hash=md5:{'0' * 32}"):
+            self.assertNotRegex(bad, REQUIREMENT)
 
 
 class RenovateReleaseAge(unittest.TestCase):
@@ -272,6 +342,66 @@ class RenovateReleaseAge(unittest.TestCase):
             if "minimumReleaseAgeBehaviour" in rule:
                 self.assertIn(rule["minimumReleaseAgeBehaviour"], BEHAVIOURS, i)
 
+
+class PipInstallsArePinnedByHash(unittest.TestCase):
+    def setUp(self):
+        self.installs = pip_installs()
+        # (where, runs-on, requirements file name as written, path) for every -r file of every install.
+        self.files = [(where, runs_on, name, ROOT / wd / name)
+                      for where, runs_on, wd, argv in self.installs for name in requirement_files(argv)[0]]
+
+    def test_every_pip_install_requires_hashes_from_a_file(self):
+        self.assertTrue(self.installs, "no pip install found: the parser lost them")
+        for where, _, wd, argv in self.installs:
+            with self.subTest(where):
+                files, positional = requirement_files(argv)
+                self.assertIn("--require-hashes", argv)
+                # Wheels only: an sdist build runs its own code and fetches build dependencies without hashes.
+                self.assertIn(":all:", [argv[k + 1] for k, w in enumerate(argv[:-1]) if w == "--only-binary"])
+                self.assertEqual(positional, [], "a package named on the command line is not hash-checked")
+                self.assertTrue(files)
+                for name in files:
+                    self.assertTrue((ROOT / wd / name).is_file(), f"{wd}/{name}")
+
+    def test_every_requirement_is_pinned_and_hashed(self):
+        self.assertTrue(self.files)
+        for _, _, _, path in self.files:
+            lines = requirement_lines(path) if path.is_file() else []
+            self.assertTrue(lines, path)
+            for line in lines:
+                with self.subTest(file=path.relative_to(ROOT).as_posix(), line=line[:60]):
+                    # Also refuses options (-r, -e, --index-url): every line is one pinned, hashed package.
+                    self.assertRegex(line, REQUIREMENT)
+
+    def test_requirements_resolve_for_the_runner_and_say_how_to_regenerate(self):
+        self.assertTrue(self.files)
+        for where, runs_on, name, path in self.files:
+            with self.subTest(where=where, file=name):
+                header = path.read_text().splitlines()[:2] if path.is_file() else []
+                self.assertEqual(header[:1], ["# This file was autogenerated by uv via the following command:"])
+                cmd = shlex.split(header[1].lstrip("# "))
+                self.assertEqual(cmd[:3], ["uv", "pip", "compile"])
+                self.assertIn("--generate-hashes", cmd)
+                self.assertEqual(cmd[cmd.index("-o") + 1], name)
+                self.assertTrue((path.parent / cmd[3]).is_file(), f"source file {cmd[3]}")
+                self.assertIn(runs_on, RUNNER_PYTHON, "a new runner label: check its python3 and regenerate")
+                self.assertEqual(cmd[cmd.index("--python-version") + 1], RUNNER_PYTHON[runs_on])
+
+    def test_renovate_updates_the_pins_after_the_same_wait(self):
+        self.assertTrue(self.files)
+        config = renovate()
+        patterns = (config.get("pip_requirements") or {}).get("managerFilePatterns") or [PIP_REQUIREMENTS]
+        ignored = [_pattern(g) for g in config.get("ignorePaths", [])]
+        for _, _, _, path in self.files:
+            rel = path.relative_to(ROOT).as_posix()
+            with self.subTest(file=rel):
+                self.assertTrue(any(_pattern(p).search(rel) for p in patterns), patterns)
+                self.assertFalse([g for g in ignored if g.search(rel)])
+                for line in requirement_lines(path) if path.is_file() else []:
+                    package = re.split(r"[\[=]", line, maxsplit=1)[0]
+                    dep = {"datasource": "pypi", "manager": "pip_requirements", "packageName": package,
+                           "depName": package, "updateType": "minor", "fileName": rel}
+                    self.assertEqual(release_age(config, dep), (WAIT, "timestamp-required"), package)
 
 if __name__ == "__main__":
     unittest.main()
