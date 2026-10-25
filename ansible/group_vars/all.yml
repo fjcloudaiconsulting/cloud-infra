@@ -44,6 +44,8 @@ k3s_node_labels: []
 k3s_node_taints: []
 # The API audit policy (files/k3s-audit-policy.yaml), installed by site.yml before k3s is configured.
 k3s_audit_policy_file: /etc/rancher/k3s/audit-policy.yaml
+# The Pod Security admission defaults (files/k3s-pod-security.yaml), installed the same way.
+k3s_psa_config_file: /etc/rancher/k3s/pod-security.yaml
 # Merged last over the collection's generated config, so cluster-init and server below are what k3s gets.
 server_config_yaml: |
   node-name: {{ inventory_hostname }}
@@ -64,6 +66,8 @@ server_config_yaml: |
     - "audit-log-maxage=30"
     - "audit-log-maxbackup=4"
     - "audit-log-maxsize=100"
+    # Pod Security for namespaces without their own labels (README.md, "Pod Security defaults").
+    - "admission-control-config-file={{ k3s_psa_config_file }}"
   tls-san: {{ groups['server'] | map('extract', hostvars, 'private_ip') | list | to_json }}
   node-label: {{ k3s_node_labels | to_json }}
   node-taint: {{ k3s_node_taints | to_json }}

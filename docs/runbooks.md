@@ -1042,8 +1042,9 @@ Host config and k3s live in `ansible/`, run by hand from that directory; the pro
 [`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
 updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
 (db-1)", which also shows what the mount guard does. Who did what on the API: "API audit log" there (each server
-keeps its own log; it starts after a `-e k3s_reconfigure=true` run). For a tunnel hostname, see [Add a public hostname for an
-app](#add-a-public-hostname-for-an-app).
+keeps its own log; it starts after a `-e k3s_reconfigure=true` run). The cluster's Pod Security defaults for namespaces
+without their own labels: "Pod Security defaults" there (they too start after that run; do its dry-run check first).
+For a tunnel hostname, see [Add a public hostname for an app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
