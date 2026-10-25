@@ -144,9 +144,13 @@ def codeowners_rules(text):
 
 
 def owners_of(rules, path):
-    """Owners of a repo path by the last matching rule (anchored patterns only: `/dir/` or `/file`)."""
+    """Owners of a repo path by the last matching rule (anchored patterns only: `/dir/` or `/file`, or `**/name`)."""
     found = []
     for pattern, owners in rules:
+        name = pattern[3:] if pattern.startswith("**/") else None
+        if name and "/" not in name and "*" not in name:
+            found = owners if path.rsplit("/", 1)[-1] == name else found
+            continue
         if not pattern.startswith("/") or "*" in pattern:
             raise ValueError(f"use an anchored literal pattern here: {pattern}")
         p = pattern[1:]
@@ -165,6 +169,13 @@ class CodeOwners(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"{path} no longer exists: update TIER0 and CODEOWNERS")
                 probe = path + "x" if path.endswith("/") else path
                 self.assertEqual(owners_of(rules, probe), ["@flamarion"])
+
+    def test_sourceignore_is_owned_in_every_directory(self):
+        rules = codeowners_rules((ROOT / ".github/CODEOWNERS").read_text())
+        for path in (".sourceignore", "clusters/hetzner/data/.sourceignore", "docs/.sourceignore"):
+            with self.subTest(path):
+                self.assertEqual(owners_of(rules, path), ["@flamarion"])
+        self.assertEqual(owners_of(rules, "docs/x.sourceignore"), [])
 
     def test_parser_rejects_what_github_ignores(self):
         for line in ("!/x/ @flamarion", "/x/[ab] @flamarion", "/x/", "/x/ flamarion"):

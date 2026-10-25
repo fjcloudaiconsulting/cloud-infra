@@ -85,7 +85,7 @@ def main(roots):
         for root in roots
         for p in pathlib.Path(root).rglob("*")
         # The files manifest_fence.py reads, and the only ones it lets a kustomization render.
-        if (p.suffix.lower() in manifest_fence.MANIFEST_SUFFIXES or p.name in manifest_fence.KUSTOMIZATIONS)
+        if (p.name.lower().endswith(manifest_fence.MANIFEST_SUFFIXES) or p.name in manifest_fence.KUSTOMIZATIONS)
         # Third-party collections installed (git-ignored) by ansible-galaxy and ansible-lint at the root only.
         and p.relative_to(root).parts[0] not in ("collections", ".ansible")
     )
