@@ -9,15 +9,18 @@ runs this fence first and fails closed on anything else instead of guessing:
 - YAML: no tags, anchors, aliases, merge keys, directives, explicit `?` keys or quoted keys, nothing after `---`;
   quoted scalars and flow collections (`[...]`, `{...}`) close on their own line, and a flow collection holds no
   WATCHED key, escape, tag, anchor or alias;
-- WATCHED keys: no backslash escape in a double-quoted value; except `value`, the value sits on the key's own line
-  (no block scalar, no flow collection, no value on the next line);
+- no backslash escape in a double-quoted scalar; for WATCHED keys except `value`, the value sits on the key's own
+  line (no block scalar, no flow collection, no value on the next line);
 - no `kind: List` or other `*List` kind (kustomize unwraps their items);
 - kustomization files: only resources and configMapGenerator, plus patches and images in the vendored tier-0
-  directories (EXEMPT), where every images entry carries a sha256 digest; each resource is a path inside the tree;
+  directories (EXEMPT), where every images entry carries a sha256 digest; each resource is a directory or a
+  MANIFEST_SUFFIXES file inside the tree (the files the checks read), each configMapGenerator files/envs entry a file
+  inside the tree;
 - Flux objects (`*.toolkit.fluxcd.io`) only under flux-system;
 - app namespaces (<app>-prod, <app>-staging): every image is ghcr.io/fjcloudaiconsulting/<app>/..., and a document
   that runs an image in one lives in that namespace's directory;
-- no `scheme://user:password@host` with a literal password outside a *.secret.yaml file;
+- no `scheme://user:password@host` with a literal password, in any manifest or configMapGenerator source; only an
+  ENC[...] value or an exact `$(VAR)`/`${VAR}` placeholder password passes;
 - no symlinks.
 
 Stdlib only: CI runs the runner's python3 with no installs. As a script: manifest_fence.py [root...] (default
@@ -34,6 +37,7 @@ APP_NS = re.compile(r"[a-z0-9][a-z0-9-]*-(?:prod|staging)")
 # Vendored from upstream and patched in their kustomization.yaml (code-owned, see .github/CODEOWNERS).
 EXEMPT = ("flux-system", "system-upgrade")
 KUSTOMIZATIONS = ("kustomization.yaml", "kustomization.yml", "Kustomization")
+MANIFEST_SUFFIXES = (".yaml", ".yml", ".json")
 KUSTOMIZATION_KEYS = {"apiVersion", "kind", "resources", "configMapGenerator"}
 EXEMPT_KUSTOMIZATION_KEYS = KUSTOMIZATION_KEYS | {"patches", "images"}
 # Keys whose values the checks read: the kind of an object, image refs and kustomize's image fields, the namespace,
@@ -43,6 +47,8 @@ SAME_LINE = WATCHED - {"value"}
 SCALAR = ("plain", "single", "double")
 BAD_CHAR = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ufeff]")
 CREDENTIAL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@'\"]+:([^\s/@'\"]+)@")
+PLACEHOLDER = re.compile(r"\$\([A-Za-z_][A-Za-z0-9_]*\)|\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+SOPS_VALUE = re.compile(r"ENC\[[^\]]*\]")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 KEY = re.compile(r"(.*?)[ \t]*:(?:[ \t]|$)")
 BLOCK_HEADER = re.compile(r"[|>][1-9+-]{0,2}(?:[ \t]+#.*)?")
@@ -159,6 +165,10 @@ def scan(text):
     plain = None  # deeper lines continue a plain scalar
     quote = None  # (quote, key) of a quoted scalar that continues on the next line (vendored CRDs wrap them)
 
+    def escape(n, key):
+        # Any escape: a watched value, and also a credential or a ref spelled with \x40 or \/ in any other value.
+        problems.append((n, f"escape in a quoted `{key}` value" if key in WATCHED else "escape in a quoted value"))
+
     def node(n, path, raw, key, next_line):
         nonlocal quote
         style, value, problem = _node(raw)
@@ -166,12 +176,11 @@ def scan(text):
             problems.append((n, problem))
         if style == "open":
             quote, style = (value[0], key), "multi-line"
-            if value[1] and key in WATCHED:
-                problems.append((n, f"escape in a quoted `{key}` value"))
+            if value[1]:
+                escape(n, key)
             value = None
         if style == "double-escaped":
-            if key in WATCHED:
-                problems.append((n, f"escape in a quoted `{key}` value"))
+            escape(n, key)
             style = "double"
         if key in SAME_LINE and (next_line or style in ("block", "flow", "multi-line")):
             problems.append((n, f"`{key}` value must be a scalar on the key's line"))
@@ -189,8 +198,8 @@ def scan(text):
             if col == 0 and content[:3] in ("---", "..."):
                 problems.append((n, "document marker inside a quoted scalar"))
             end, escaped = _close(line, quote[0])
-            if escaped and quote[1] in WATCHED:
-                problems.append((n, f"escape in a quoted `{quote[1]}` value"))
+            if escaped:
+                escape(n, quote[1])
             if end is None:
                 continue
             tail = line[end:].strip(" \t")
@@ -296,6 +305,17 @@ def _inside(root, p):
         return False
 
 
+def _credentials(text, sops=False):
+    """Line numbers holding a URL with a literal password: only an exact $(VAR) or ${VAR} placeholder passes, and in
+    a SOPS file an ENC[...] value."""
+    out = []
+    for n, line in enumerate(text.split("\n"), 1):
+        line = SOPS_VALUE.sub("", line) if sops else line
+        if any(not PLACEHOLDER.fullmatch(m.group(1)) for m in CREDENTIAL.finditer(line)):
+            out.append(n)
+    return out
+
+
 def _kustomization(root, path, docs, exempt):
     out, allowed = [], EXEMPT_KUSTOMIZATION_KEYS if exempt else KUSTOMIZATION_KEYS
     for doc in docs:
@@ -304,10 +324,32 @@ def _kustomization(root, path, docs, exempt):
             if len(e.path) == 1 and e.path[0] not in allowed:
                 where = "" if exempt else f" outside {' and '.join(EXEMPT)}"
                 out.append(f"line {e.line}: kustomization key `{e.path[0]}`{where}: it can rewrite what the checks read")
+            # Lists of paths are read one entry per line, so a flow list would hide them.
+            listed = e.path[:1] == ("resources",) or (e.path[:1] == ("configMapGenerator",) and len(e.path) >= 3
+                                                       and e.path[2] in ("files", "envs", "env"))
+            if listed and e.style == "flow":
+                out.append(f"line {e.line}: write `{e.path[-1]}` as a block list")
             if len(e.path) == 2 and e.path[0] == "resources" and e.style in SCALAR:
                 target = path.parent / e.text
                 if "://" in e.text or not _inside(root, target) or not target.exists():
                     out.append(f"line {e.line}: resource {e.text} is not a path inside {root}")
+                elif not target.is_dir() and target.suffix.lower() not in MANIFEST_SUFFIXES:
+                    # kustomize renders any file it is given; the checks read only these.
+                    out.append(f"line {e.line}: resource {e.text} is neither a directory nor a "
+                               f"{'/'.join(MANIFEST_SUFFIXES)} file")
+            generator = e.path[:1] == ("configMapGenerator",) and e.style in SCALAR
+            if generator and ((len(e.path) == 4 and e.path[2] in ("files", "envs")) or e.path[2:] == ("env",)):
+                source = e.text.split("=", 1)[-1] if e.path[2] == "files" else e.text  # files: [key=]path
+                target = path.parent / source
+                if "://" in source or not _inside(root, target) or not target.is_file():
+                    out.append(f"line {e.line}: generator source {source} is not a file inside {root}")
+                    continue
+                text, why = read(target)
+                if why:
+                    out.append(f"line {e.line}: generator source {source}: {why}")
+                    continue
+                out += [f"line {e.line}: generator source {source} line {n}: password in a URL: keep it in a SOPS "
+                        "Secret" for n in _credentials(text)]
             if len(e.path) >= 2 and e.path[0] == "images":
                 fields = images.setdefault(e.path[1], {})
                 if len(e.path) == 3 and e.style in SCALAR:
@@ -322,11 +364,8 @@ def _manifest_rules(root, path, text, docs):
     rel = path.relative_to(root)
     dirs = rel.parts[:-1]
     dir_ns = {d for d in dirs if APP_NS.fullmatch(d)}
-    out = []
-    if not path.name.lower().endswith(".secret.yaml"):
-        for n, line in enumerate(text.split("\n"), 1):
-            if any(not m.group(1).startswith("$") for m in CREDENTIAL.finditer(line)):
-                out.append(f"line {n}: password in a URL: keep it in a SOPS Secret")
+    out = [f"line {n}: password in a URL: keep it in a SOPS Secret"
+           for n in _credentials(text, sops=path.name.lower().endswith(".secret.yaml"))]
     if path.name in KUSTOMIZATIONS:
         out += _kustomization(root, path, docs, not dir_ns and any(d in EXEMPT for d in dirs))
     for doc in docs:
@@ -368,7 +407,7 @@ def problems(root, manifests=True):
         if not p.is_file():
             continue
         if manifests:
-            if p.suffix.lower() not in (".yaml", ".yml", ".json") and p.name not in KUSTOMIZATIONS:
+            if p.suffix.lower() not in MANIFEST_SUFFIXES and p.name not in KUSTOMIZATIONS:
                 continue
         elif not p.name.lower().endswith((".sops.yaml", ".sops.yml")):
             continue

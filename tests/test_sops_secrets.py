@@ -244,9 +244,54 @@ class SopsSecrets(unittest.TestCase):
             with self.subTest(name):
                 self.assertFails({"app/deploy.yaml": body}, needle)
 
+    def test_fence_reads_everything_kustomize_renders(self):
+        # GHA-03 review: each layout passed the fence's first version.
+        secret = SECRET_HEAD + "stringData:\n  pw: hunter2\n"
+        url = "postgresql://app:hunter2@db/app"
+        cm = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\n  annotations:\n    note: " + url + "\n---\n"
+        gen = "configMapGenerator:\n  - name: c\n    {}:\n      - {}\n"
+        cases = {
+            # 1: a resource the checks never read.
+            "resource": ({"app/kustomization.yaml": "resources:\n  - s.txt\n", "app/s.txt": secret},
+                         "neither a directory nor a .yaml/.yml/.json file"),
+            # 1: the SOPS check reads extension-less Kustomization files like the fence.
+            "Kustomization": ({"app/Kustomization": "secretGenerator:\n  - name: s\n    literals:\n      - pw=x\n"},
+                              "app/Kustomization: secretGenerator writes plaintext"),
+            # 2: only an exact $(VAR) or ${VAR} is a placeholder.
+            "placeholder": ({"app/deploy.yaml": "env:\n  - name: U\n    value: postgresql://app:$hunter2@db/app\n"},
+                            "password in a URL"),
+            # 3: an escape in any double-quoted value.
+            "escape": ({"app/deploy.yaml": 'args:\n  - "postgresql://app:hunter2\\x40db/app"\n'},
+                       "escape in a quoted value"),
+            # 4: a *.secret.yaml is checked too; only ENC[...] values are skipped.
+            "secret file": ({"x.secret.yaml": cm + SECRET_HEAD + "stringData:\n    k: ENC[AES256_GCM,data:eA==,type:str]\n"
+                             + SOPS_TAIL}, "password in a URL"),
+            # 5: configMapGenerator sources, in every form, and inside the tree.
+            "generator file": ({"app/kustomization.yaml": gen.format("files", "app.ini"), "app/app.ini": url + "\n"},
+                               "generator source app.ini line 1: password in a URL"),
+            "generator key=file": ({"app/kustomization.yaml": gen.format("files", "k=app.ini"),
+                                    "app/app.ini": url + "\n"}, "generator source app.ini line 1"),
+            "generator env": ({"app/kustomization.yaml": gen.format("envs", "app.env"), "app/app.env": "U=" + url + "\n"},
+                              "generator source app.env line 1"),
+            "generator outside": ({"app/kustomization.yaml": gen.format("files", "../../x.ini")},
+                                  "generator source ../../x.ini is not a file inside"),
+            "generator flow": ({"app/kustomization.yaml": "configMapGenerator:\n  - name: c\n    files: [app.ini]\n",
+                                "app/app.ini": url + "\n"}, "write `files` as a block list"),
+        }
+        for name, (files, needle) in cases.items():
+            with self.subTest(name):
+                self.assertFails(files, needle)
+
+    def test_generator_sources_inside_the_tree_pass(self):
+        # guard: the shapes observability/ uses (files: [key=]path), with clean sources.
+        r = run({"app/kustomization.yaml": "configMapGenerator:\n  - name: c\n    files:\n      - a.sh\n      - k=b.conf\n",
+                 "app/a.sh": "#!/bin/sh\necho ok\n", "app/b.conf": "url = https://example.invalid/x\n"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_url_with_a_password_placeholder_passes(self):
         # guard: Kubernetes expands $(VAR) from a Secret-backed env var; nothing literal is committed.
-        r = run({"app/deploy.yaml": "env:\n  - name: DATABASE_URL\n    value: postgresql://app:$(DB_PASSWORD)@db/app\n"})
+        r = run({"app/deploy.yaml": "env:\n  - name: DATABASE_URL\n    value: postgresql://app:$(DB_PASSWORD)@db/app\n"
+                 "  - name: CACHE_URL\n    value: redis://app:${CACHE_PASSWORD}@cache\n"})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_indented_secret_document_fails(self):
