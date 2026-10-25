@@ -1,0 +1,69 @@
+{
+  "title": "node-reboot",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "node-reboot-overdue",
+      "title": "NodeRebootOverdue",
+      "folderUID": "platform",
+      "ruleGroup": "node-reboot",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 3600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "(time() - max by (instance) (max_over_time(node_boot_time_seconds{job=\"node\"}[1h]))) / 86400",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    35
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "KeepLast",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "node"
+      },
+      "annotations": {
+        "summary": "{{ $labels.instance }} last booted {{ printf \"%.0f\" $values.A.Value }} days ago, over 35: the monthly rolling reboot is overdue, and updates installed since that boot are not running. Run ansible/reboot.yml (ansible/README.md, Rolling reboot); the alert resolves once the node is back.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#drain-or-lose-an-app-node"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
+    }
+  ]
+}
