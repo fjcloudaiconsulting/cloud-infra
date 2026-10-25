@@ -47,6 +47,28 @@ Swap the namespace for `tbd-staging`, `ziftbook-staging` or `data` (StatefulSets
 release reaches the cluster only through a PR that changes an image tag under `clusters/`; there is no image
 automation.
 
+After a change to the `data` NetworkPolicies (`clusters/hetzner/data/networkpolicy.yaml`), run what they govern
+instead of waiting for the night. kube-router enforces a policy as soon as Flux applies it (open connections are
+kept); a wrong egress rule shows only as a failed backup, the stale-backup alert the next morning, or a bootstrap Job
+that fails on its next run.
+
+```bash
+# Backup (one more set in the bucket, as any manual run): "ok: <set>" four times, "uploaded" twelve, no "!!".
+kubectl -n data create job --from=cronjob/db-backup db-backup-manual
+kubectl -n data wait --for=condition=complete job/db-backup-manual --timeout=30m
+kubectl -n data logs job/db-backup-manual --all-containers | grep -E '^(ok|uploaded|!!)'
+kubectl -n data delete job db-backup-manual
+# Staging's bootstrap Job (idempotent; production's has the same egress policy): Flux recreates it, expect Complete.
+kubectl -n data delete job ziftbook-bootstrap && flux reconcile kustomization flux-system --with-source
+kubectl -n data wait --for=condition=complete job/ziftbook-bootstrap --timeout=15m
+# The apps still hold their database sessions: a count per login.
+kubectl -n data exec mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -NB -e "SHOW PROCESSLIST"' | cut -f2 | sort | uniq -c
+kubectl -n data exec postgres-0 -- psql -U postgres -XAtc 'SELECT usename, count(*) FROM pg_stat_activity WHERE usename IS NOT NULL GROUP BY 1'
+# Back out: hold Flux and drop the three egress policies (egress is open again); resume once the revert is on main.
+flux suspend kustomization flux-system
+kubectl -n data delete networkpolicy default-deny-egress db-backup ziftbook-bootstrap
+```
+
 ## Promote a TBD release (staging, then production)
 
 A TBD release reaches `tbd-staging` by itself (INFRA-91): Renovate pushes `renovate/tbd-staging-tbd-staging-images`,

@@ -1,4 +1,4 @@
-# Ingress to `data` is deny-by-default; egress stays open (bootstrap fetches from GitHub, backups go to S3).
+# Ingress to `data` is deny-by-default, and so is egress (K8S-06: the egress policies are at the end of this file).
 # kube-router accepts anything from the node itself first (kubelet probes, but also hostNetwork pods
 # such as netbird and host processes), so that path is guarded by DB auth and the NetBird ACL, not here.
 # From the app namespaces only the pods that hold a database URL are admitted, by `app` label: the migrate init
@@ -93,3 +93,115 @@ spec:
               batch.kubernetes.io/job-name: ziftbook-prod-bootstrap
       ports:
         - port: 5432
+---
+# Egress (K8S-06): a pod here opens no connection that a policy below does not allow; tests/test_data_egress.py checks
+# that every pod template is covered and what each one reaches. The servers get no egress rule at all: kube-router
+# passes the replies of a connection it admitted (conntrack ESTABLISHED) whatever egress allows, and neither looks up
+# its clients' names (the mysql image sets skip-name-resolve; Postgres's pg_hba matches addresses only). A new pod here
+# (an exporter, a one-off client) has no network until it gets a rule; for SQL by hand use `kubectl exec` into the
+# server pod, as the runbooks do.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: data
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+# The nightly dumps (db-backup.yaml, and a run created from the CronJob by hand): cluster DNS, the two servers, and the
+# bucket's S3 endpoint over HTTPS. The uploader signs with static keys (Secret backup-s3): no STS, no instance metadata.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-backup
+  namespace: data
+spec:
+  podSelector:
+    matchLabels:
+      app: db-backup
+  policyTypes: [Egress]
+  egress:
+    # Cluster DNS (CoreDNS): the server Service names and the S3 endpoint.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Ports are the pods' ports (the Services keep targetPort = port).
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - protocol: TCP
+          port: 3306
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # S3 has no address range that stays put in git, so HTTPS goes to any public address. The excepted ranges hold the
+    # node network (the Kubernetes API and the kubelets), the pod and Service ranges, NetBird's range (100.64.0.0/10)
+    # and instance metadata (link-local). IPv4 only: the cluster is single-stack.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# The Ziftbook role bootstrap Jobs (postgres-bootstrap.yaml, postgres-bootstrap-prod.yaml): cluster DNS, Postgres, and
+# HTTPS for the fetch init container's pinned bootstrap.sql (raw.githubusercontent.com, checked against its sha256).
+# The label is set by the Job controller, as in the postgres policy above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ziftbook-bootstrap
+  namespace: data
+spec:
+  podSelector:
+    matchExpressions:
+      - key: batch.kubernetes.io/job-name
+        operator: In
+        values: [ziftbook-bootstrap, ziftbook-prod-bootstrap]
+  policyTypes: [Egress]
+  egress:
+    # Cluster DNS (CoreDNS): the postgres Service name and GitHub's raw host.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Public addresses only, as in db-backup above.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]
+      ports:
+        - protocol: TCP
+          port: 443
