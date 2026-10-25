@@ -353,7 +353,7 @@ def _kustomization(root, path, docs, exempt):
                 target = path.parent / e.text
                 if "://" in e.text or not _inside(root, target) or not target.exists():
                     out.append(f"line {e.line}: resource {e.text} is not a path inside {root}")
-                elif not target.is_dir() and target.suffix.lower() not in MANIFEST_SUFFIXES:
+                elif not target.is_dir() and not target.name.lower().endswith(MANIFEST_SUFFIXES):
                     # kustomize renders any file it is given; the checks read only these.
                     out.append(f"line {e.line}: resource {e.text} is neither a directory nor a "
                                f"{'/'.join(MANIFEST_SUFFIXES)} file")
@@ -442,7 +442,8 @@ def problems(root, manifests=True):
         if not p.is_file():
             continue
         if manifests:
-            if p.suffix.lower() not in MANIFEST_SUFFIXES and p.name not in KUSTOMIZATIONS:
+            # By name, not Path.suffix: a file named ".yaml" has no suffix to Python, but Flux reads it.
+            if not p.name.lower().endswith(MANIFEST_SUFFIXES) and p.name not in KUSTOMIZATIONS:
                 continue
         elif not p.name.lower().endswith((".sops.yaml", ".sops.yml")):
             continue

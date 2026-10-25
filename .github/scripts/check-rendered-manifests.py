@@ -8,7 +8,8 @@ style, an escape, a List, a generator, an image override or a patch has already 
 Render (offline; nothing is decrypted, so SOPS Secrets stay encrypted, and that is what is checked):
 - what: from each <root>/<cluster>/flux-system/ (the bootstrap entry), every Flux Kustomization's spec.path, then the
   paths of the Kustomizations each render holds in turn; the source must be the repo's own GitRepository;
-- each render from a fresh copy of the root with regular files only (a source artifact holds no symlinks);
+- each render from a fresh copy of the root with regular files only (a source artifact holds no symlinks); a name
+  under the root that starts with a dot fails, since source-controller leaves some of those out (.sops.yaml, ...);
 - a directory without a kustomization file gets the one kustomize-controller generates (fluxcd/pkg/kustomize,
   scanManifests): every *.yaml and *.yml file below it, and each subdirectory that holds a kustomization file as one
   entry that is not descended into;
@@ -392,7 +393,7 @@ def generate(d):
                     found.append(c)
                 else:
                     walk(c)
-            elif c.suffix in (".yaml", ".yml"):  # Go's filepath.Ext: case-sensitive, and not .json
+            elif c.name.endswith((".yaml", ".yml")):  # Go's filepath.Ext: ".yaml" itself, case-sensitive, no .json
                 found.append(c)
 
     walk(d)
@@ -592,7 +593,9 @@ def check(root, exempt=None):
     exempt = (tag_only() | AWAITING_DIGEST) if exempt is None else exempt
     if not root.is_dir():
         return [f"{root}: no such directory"]
-    out = remote_entries(root)
+    out = [f"{root.name}/{p.relative_to(root).as_posix()}: a name that starts with a dot, which source-controller may "
+           "leave out of what Flux applies (.sops.yaml, .flux.yaml, ...): rename it" for p in sorted(root.rglob(".*"))]
+    out += remote_entries(root)
     if out:
         return out
     entries = sorted(d.relative_to(root) / "flux-system" for d in root.iterdir() if (d / "flux-system").is_dir())

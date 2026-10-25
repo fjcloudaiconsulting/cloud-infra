@@ -325,6 +325,43 @@ class RendersWhatFluxApplies(Base):
         out = problems(files)
         self.assertEqual(sorted(re.findall(r"Secret (\w):", " ".join(out))), ["a", "b", "e"], out)
 
+    def test_generated_kustomization_reads_files_named_dot_yaml(self):
+        # Go's filepath.Ext(".yaml") is ".yaml", so Flux lists such a file; Python's Path(".yaml").suffix is "".
+        with tempfile.TemporaryDirectory() as t:
+            d = pathlib.Path(t)
+            for name in (".json", ".yaml", ".yml", "x.YAML"):
+                (d / name).write_text("{}\n")
+            rc.generate(d)
+            self.assertEqual(json.loads((d / "kustomization.yaml").read_text())["resources"], ["./.yaml", "./.yml"])
+
+    def test_names_that_start_with_a_dot_fail(self):
+        # source-controller leaves some dot-named files out of the artifact (.sops.yaml, .flux.yaml, ...).
+        for name in ("c/app/.yaml", "c/app/.flux.yaml", "c/.hidden/s.yaml", "c/app/.sourceignore"):
+            with self.subTest(name):
+                self.assertFails({name: secret("stringData:\n  k: plaintext\n"), "c/app/d.yaml": deployment(PINNED)},
+                                 f"clusters/{name.split('/.')[0]}/.")
+
+    def test_text_checks_read_files_named_dot_yaml(self):
+        plain = secret("stringData:\n  k: plaintext\n")
+        scripts = ROOT / ".github/scripts"
+        with Tree({"c/app/.yaml": plain, "c/app/.yml": "kind: !!str Secret\n"}) as root:
+            sops = subprocess.run([sys.executable, str(scripts / "check-sops-secrets.py"), str(root)],
+                                  capture_output=True, text=True)
+            fence = [f"{p.name}: {m}" for p, m in rc.manifest_fence.problems(root)]
+        self.assertIn("app/.yaml: Secret outside a *.secret.yaml file", sops.stdout.replace(str(root) + "/c/", ""))
+        self.assertIn(".yml: line 1: YAML tag", fence)
+        layout = {"p/tbd-prod/a.yaml": "image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.1.0\n",
+                  "p/tbd-prod/.yaml": "image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.2.0\n",
+                  "p/tbd-staging/a.yaml": "image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.1.0\n"}
+        with tempfile.TemporaryDirectory() as t:
+            for name, body in layout.items():
+                (pathlib.Path(t, name)).parent.mkdir(parents=True, exist_ok=True)
+                pathlib.Path(t, name).write_text(body)
+            tags = subprocess.run([sys.executable, "-I", str(scripts / "check-prod-tags.py"), t], capture_output=True,
+                                  text=True)
+        self.assertEqual(tags.returncode, 1, tags.stdout + tags.stderr)
+        self.assertIn("v0.2.0", tags.stdout + tags.stderr)
+
     def test_symlinks_are_left_out(self):
         # A source artifact holds no symlinks, so Flux never applies one; the text fence refuses them anyway.
         with Tree({"c/app/d.yaml": deployment(PINNED)}) as root:
