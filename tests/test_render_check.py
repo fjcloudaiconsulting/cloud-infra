@@ -152,6 +152,31 @@ class BypassShapesFail(Base):
                                           "    metadata:\n      name: s\n    stringData:\n      k: v\n"},
                          "Secret s: no sops metadata")
 
+    def test_items_of_any_kind_are_what_flux_applies(self):
+        # Flux applies the items of any document with an items list (Unstructured.IsList), not the document itself.
+        wrapper = ("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: w\nitems:\n  - apiVersion: v1\n    kind: Secret\n"
+                   "    metadata:\n      name: s\n    stringData:\n      k: plaintext\n")
+        out = self.assertFails({"c/app/w.yaml": wrapper}, "c/app/w.yaml: Secret s: no sops metadata")
+        self.assertTrue(any("ConfigMap w: a top-level items list" in p for p in out), out)
+        nested = wrapper.replace("    stringData:\n", "    items: []\n    stringData:\n")  # applied as written
+        self.assertFails({"c/app/w.yaml": nested.replace("kind: ConfigMap", "kind: SecretList")},
+                         "Secret s: a top-level items list")
+        out = self.assertFails({"c/app/w.yaml": wrapper.replace("kind: ConfigMap", "kind: SecretList")},
+                               "Secret s: no sops metadata")
+        self.assertFalse(any("a top-level items list" in p for p in out), out)  # a *List kind may carry items
+
+    def test_items_reach_the_flux_queue(self):
+        ks = textwrap.indent(SYNC.format(path="./clusters/c/more", extra="").split("---\n")[1], "    ")
+        ks = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: w\nitems:\n  - " + ks.lstrip()
+        ks = ks.replace("  name: flux-system\n      namespace", "  name: more\n      namespace", 1)
+        self.assertFails({"c/apps/w.yaml": ks, "c/more/s.yaml": secret("stringData:\n  k: plaintext\n")},
+                         "c/more/s.yaml: Secret s: no sops metadata", path="./clusters/c/apps")
+
+    def test_text_fence_refuses_top_level_items(self):
+        with Tree({"c/app/w.yaml": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: w\nitems: []\n"}) as root:
+            out = [m for _, m in rc.manifest_fence.problems(root)]
+        self.assertIn("line 5: top-level `items`: write each object as its own document", out)
+
     def test_secret_generator(self):
         out = self.assertFails({"c/gen/kustomization.yaml": "secretGenerator:\n  - name: s\n    literals:\n"
                                                             "      - password=plaintext\n"}, "no sops metadata")

@@ -19,7 +19,8 @@ Render (offline; nothing is decrypted, so SOPS Secrets stay encrypted, and that 
 - a Kustomization spec field that changes the render (images, patches, postBuild, targetNamespace, ...) fails: the
   check does not emulate it.
 
-On every rendered object, List items included:
+On every object Flux applies: each rendered document, or, for a document with an `items` list, those items in its
+place (ssautil.ReadObjects, whatever the kind; a kind other than *List that carries one fails):
 - a Secret carries sops metadata with a MAC, and every data and stringData value is an ENC[...] value or empty;
 - every image of a container, init container or ephemeral container (wherever a pod spec sits) and of a Plan's
   prepare and upgrade steps is a valid reference from REGISTRIES, pinned by @sha256; in an app namespace it comes
@@ -339,13 +340,14 @@ def parse(text):
     return docs
 
 
-def objects(docs):
-    """Every object, the items of a List (any *List kind with items) expanded."""
-    for d in docs:
-        if isinstance(d, dict) and isinstance(d.get("kind"), str) and d["kind"].endswith("List") and "items" in d:
-            yield from objects(d["items"] if isinstance(d["items"], list) else [d["items"]])
-        else:
-            yield d
+def has_items(obj):
+    """Unstructured.IsList: a top-level `items` list, whatever the kind."""
+    return isinstance(obj, dict) and isinstance(obj.get("items"), list)
+
+
+def objects(doc):
+    """What Flux applies for one rendered document: its items, one level down and as written, or the document."""
+    return list(doc["items"]) if has_items(doc) else [doc]
 
 
 # ---- Render ----------------------------------------------------------------------------------------------------------
@@ -450,13 +452,16 @@ def render(root, rel, base):
         err = r.stderr.strip().replace(os.path.realpath(base) + os.sep, "").replace(str(base) + os.sep, "")
         raise RenderError(f"{where}: kustomize build failed: {err}")
     out = []
-    for obj in objects(parse(r.stdout)):
-        meta = obj.get("metadata") if isinstance(obj, dict) and isinstance(obj.get("metadata"), dict) else {}
+    for doc in parse(r.stdout):
+        meta = doc.get("metadata") if isinstance(doc, dict) and isinstance(doc.get("metadata"), dict) else {}
         annotations = meta.get("annotations") if isinstance(meta.get("annotations"), dict) else {}
         origin = annotations.get("config.kubernetes.io/origin")
         m = re.search(r"^(?:path|configuredIn): (.+)$", origin if isinstance(origin, str) else "", re.M)
         f = posixpath.normpath(posixpath.join("render", m.group(1))) if m else ""
-        out.append((f[len(root.name) + 1:] if f.startswith(root.name + "/") else None, obj))
+        f = f[len(root.name) + 1:] if f.startswith(root.name + "/") else None
+        if has_items(doc) and not str(doc.get("kind")).endswith("List"):
+            out.append((f, doc))  # refused in object_problems
+        out += [(f, obj) for obj in objects(doc)]  # items take the origin kustomize gave their document
     return out
 
 
@@ -571,6 +576,9 @@ def image_problems(origin, obj, exempt):
 def object_problems(origin, obj, exempt):
     if not isinstance(obj, dict):
         return [f"{origin}: a rendered document is not a mapping"]
+    if has_items(obj):
+        return [f"{origin or '(no origin)'}: {_name(obj)}: a top-level items list, which Flux applies in place of the "
+                "object: write each item as its own document"]
     out = []
     if isinstance(obj.get("kind"), str) and obj["kind"].lower() == "secret":
         out += secret_problems(obj)

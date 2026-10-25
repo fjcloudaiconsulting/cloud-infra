@@ -12,7 +12,7 @@ runs this fence first and fails closed on anything else instead of guessing:
 - no backslash escape in a double-quoted scalar; for WATCHED keys except `value`, the value sits on the key's own
   line (no block scalar, no flow collection, no value on the next line);
 - every document is a block mapping, its apiVersion and kind one-line scalars;
-- no `kind: List` or other `*List` kind (kustomize unwraps their items);
+- no `kind: List` or other `*List` kind, and no top-level `items` (kustomize or Flux applies the items instead);
 - kustomization files: only resources and configMapGenerator, plus patches and images in the vendored tier-0
   directories (EXEMPT, exactly <root>/<cluster>/<dir>/), where every images entry carries a sha256 digest; each
   resource is a directory or a MANIFEST_SUFFIXES file inside the tree (the files the checks read), each
@@ -402,6 +402,8 @@ def _manifest_rules(root, path, text, docs):
     if path.name in KUSTOMIZATIONS:
         out += _kustomization(root, path, docs, vendored in EXEMPT)
     for doc in docs:
+        out += [f"line {e.line}: top-level `items`: write each object as its own document" for e in doc.entries
+                if e.path == ("items",)]
         top = {e.path[0]: e for e in doc.entries if len(e.path) == 1 and e.style in SCALAR}
         api = top.get("apiVersion")
         if api and ".toolkit.fluxcd.io/" in api.text and vendored != "flux-system":
