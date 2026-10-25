@@ -133,44 +133,159 @@ kubectl -n "$NS" exec "$POD" -- sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
   gzip -dc /tmp/dump.sql.gz | mysql --binary-mode -uroot tbd && echo restored'
 ```
 
-**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). `psql` runs backslash meta-commands
-(`\!` runs a shell command) and, as superuser, `COPY ... FROM/TO PROGRAM`, so it would execute code a
-crafted set carries (DATA-01). Scan both files first and abort if either is refused. Load the scanner
-into the pod (its single quotes do not survive a nested `sh -c`):
+**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). `psql` acts on a backslash meta-command
+anywhere in a line (`\!` runs a shell command), and as superuser can reach the server's files
+(`COPY ... FROM/TO PROGRAM` or a path, `lo_import`, `pg_read_file`) and load code (`CREATE EXTENSION`,
+untrusted languages). The scan below is a guard against statements a `pg_dump`/`pg_dumpall` backup
+should never contain, not a guarantee, so still choose a set from before the incident (step 1).
+Custom-format dumps restored by a non-superuser role are planned to replace it (#272).
+Scan the grants and the dump, each in its own mode, and abort if either is refused. Load the scanner
+into the pod (its quotes do not survive a nested `sh -c`):
 
 ```bash
 kubectl -n "$NS" exec -i "$POD" -- sh -c 'cat >/tmp/scan.awk' <<'AWK'
 # BEGIN pg-restore-scan — tests/test_restore_runbook.py extracts and exercises this program.
-# Refuse a gunzipped Postgres backup that carries anything psql would act on beyond what pg_dump and
-# pg_dumpall 18 emit. Lines inside a COPY ... FROM stdin data block are opaque data (psql does not
-# interpret them), so they are skipped; everything else is checked. Exit non-zero on the first refusal.
-function refuse(why) { print "SCAN REFUSED (" why "): " $0 > "/dev/stderr"; exit 1 }
-# A COPY ... FROM stdin data block runs until a line that is exactly \. — its rows are data, not SQL.
-!in_copy && /^COPY .* FROM stdin;[ \t]*$/ { in_copy = 1; next }
-in_copy && /^\\\.[ \t]*$/ { in_copy = 0; next }
-in_copy { next }
-# Outside a data block a leading backslash is a client meta-command: allow only the three 18 emits.
-/^\\/ { if ($0 ~ /^\\(connect|restrict|unrestrict)([ \t]|$)/) next; refuse("client meta-command") }
-# COPY ... FROM/TO PROGRAM runs a shell as the server; pg_dump never writes it.
-/FROM PROGRAM/ || /TO PROGRAM/ { refuse("COPY ... PROGRAM") }
-# The only legitimate SUPERUSER line is the postgres role restoring itself (pg_dumpall --globals-only).
-/^ALTER ROLE postgres WITH SUPERUSER / { next }
-{ t = $0; gsub(/NOSUPERUSER/, "", t); if (t ~ /SUPERUSER/) refuse("SUPERUSER grant") }
-/^ALTER ROLE postgres([ \t]|$)/ { refuse("ALTER ROLE postgres") }
+# A guard, not a guarantee: it refuses a gunzipped Postgres backup that carries anything psql would
+# act on beyond what pg_dump/pg_dumpall 18 emit for these databases. Select the scan with -v scan=grants
+# (pg_dumpall --globals-only: a fixed allowlist of line shapes) or -v scan=dump (pg_dump --create: a
+# quote-aware lexer). Custom-format dumps restored by a non-superuser role are planned to replace it
+# (#272). Exit non-zero on the first refusal.
+function refuse(why) { printf "SCAN REFUSED (%s): %s\n", why, $0 > "/dev/stderr"; bad = 1; exit 1 }
+function refusel(why, ln) { printf "SCAN REFUSED (%s): %s\n", why, ln > "/dev/stderr"; bad = 1; exit 1 }
+
+# ---- grants: an allowlist over pg_dumpall --globals-only (18) --------------------------------------
+# Role/identifier: an unquoted name or a double-quoted identifier.
+function roleok(s) { return (s ~ /^("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)$/) }
+function alter_with_ok(line,   name, attrs, n, i, a, tok) {
+  # ALTER ROLE <role> WITH <attrs>; — attrs are a fixed keyword vocabulary; SUPERUSER only for postgres.
+  if (!match(line, /^ALTER ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) WITH /)) return 0
+  name = substr(line, 1, RLENGTH); sub(/^ALTER ROLE /, "", name); sub(/ WITH $/, "", name)
+  attrs = substr(line, RLENGTH + 1)
+  if (attrs !~ /;[ \t]*$/) return 0
+  gsub(/'[^']*'/, "", attrs)                        # drop the SCRAM password / VALID UNTIL literal
+  gsub(/;[ \t]*$/, "", attrs)
+  n = split(attrs, a, /[ \t]+/)
+  for (i = 1; i <= n; i++) {
+    tok = a[i]
+    if (tok == "") continue
+    if (tok == "SUPERUSER") { if (name != "postgres") return 0; continue }
+    if (tok ~ /^(NOSUPERUSER|INHERIT|NOINHERIT|CREATEROLE|NOCREATEROLE|CREATEDB|NOCREATEDB|LOGIN|NOLOGIN|REPLICATION|NOREPLICATION|BYPASSRLS|NOBYPASSRLS|PASSWORD|NULL|CONNECTION|LIMIT|VALID|UNTIL)$/) continue
+    if (tok ~ /^[0-9]+$/) continue                  # CONNECTION LIMIT n
+    return 0
+  }
+  return 1
+}
+function grants_line_ok(line) {
+  if (line ~ /^[ \t]*$/) return 1
+  if (line ~ /^--/) return 1
+  if (line ~ /^\\(un)?restrict[ \t]+[^ \t]+[ \t]*$/) return 1
+  if (line ~ /^SET [A-Za-z_][A-Za-z0-9_]* = [^;]*;[ \t]*$/) return 1
+  if (line ~ /^CREATE ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*);[ \t]*$/) return 1
+  if (line ~ /^ALTER ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) SET [A-Za-z_]+ (TO|=) [^;]*;[ \t]*$/) return 1
+  if (line ~ /^GRANT ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) TO ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) WITH INHERIT (TRUE|FALSE)( SET (TRUE|FALSE))?( ADMIN (TRUE|FALSE))?( GRANTED BY ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*))?;[ \t]*$/) return 1
+  if (alter_with_ok(line)) return 1
+  return 0
+}
+
+# ---- dump: a quote-aware lexer over pg_dump --create ----------------------------------------------
+# State persists across lines: 0 code, sq '…', dq "…", dollar $tag$…$tag$, bc /*…*/ (nested), copy data.
+function dump_line(line,   i, n, c, c2, rest, t, trimmed) {
+  if (st == "copy") { if (line == "\\.") { st = 0 } ; return }   # data rows are opaque to psql
+  if (st == 0) {
+    trimmed = line; sub(/^[ \t]+/, "", trimmed)
+    if (trimmed ~ /^\\/) {                                       # a whole-line meta-command
+      if (trimmed ~ /^\\(connect|restrict|unrestrict)([ \t]|$)/) return
+      refusel("backslash meta-command in SQL", line)
+    }
+    if (trimmed ~ /^COPY[ \t]/) {                                # a COPY header at a statement boundary
+      if (trimmed ~ /^COPY[ \t]+.*[ \t]FROM[ \t]+stdin;[ \t]*$/ && trimmed !~ /PROGRAM/) { st = "copy"; return }
+      refusel("unexpected COPY form (only FROM stdin is written by pg_dump)", line)
+    }
+  }
+  n = length(line); i = 1
+  while (i <= n) {
+    c = substr(line, i, 1); c2 = substr(line, i, 2)
+    if (st == "bc") {
+      if (c2 == "*/") { bcd--; i += 2; if (bcd == 0) st = 0; continue }
+      if (c2 == "/*") { bcd++; i += 2; continue }
+      i++; continue
+    }
+    if (st == "sq") {
+      if (c == "'") { if (substr(line, i + 1, 1) == "'") { i += 2; continue } st = 0; i++; continue }
+      i++; continue
+    }
+    if (st == "dq") {
+      if (c == "\"") { if (substr(line, i + 1, 1) == "\"") { i += 2; continue } st = 0; i++; continue }
+      i++; continue
+    }
+    if (st == "dollar") {
+      if (substr(line, i, length(dtag) + 2) == "$" dtag "$") { i += length(dtag) + 2; st = 0; continue }
+      i++; continue
+    }
+    # st == 0 (code)
+    if (c2 == "--") { return }                                   # line comment to EOL
+    if (c2 == "/*") { st = "bc"; bcd = 1; i += 2; continue }
+    if (c == "'") { st = "sq"; i++; continue }
+    if (c == "\"") { st = "dq"; i++; continue }
+    if (c == "$") {
+      t = dollar_tag(line, i)
+      if (t != "\037") { dtag = t; st = "dollar"; i += length(t) + 2; continue }
+      code = code "$"; i++; continue
+    }
+    if (c == "\\") { refusel("backslash meta-command in SQL", line) }   # any other backslash in code
+    code = code c; i++
+  }
+  code = code "\n"
+}
+# Return the dollar-quote tag opening at position i ("" for $$), or "\037" if this $ is not a tag open.
+function dollar_tag(line, i,   j, ch, tag) {
+  j = i + 1; tag = ""
+  if (substr(line, j, 1) == "$") return ""
+  if (substr(line, j, 1) ~ /[A-Za-z_]/) {
+    while (substr(line, j, 1) ~ /[A-Za-z0-9_]/) { tag = tag substr(line, j, 1); j++ }
+    if (substr(line, j, 1) == "$") return tag
+  }
+  return "\037"
+}
+function dump_finish(   norm, t) {
+  norm = tolower(code); gsub(/[ \t\n]+/, " ", norm)
+  if (norm ~ /from program/ || norm ~ /to program/) refusel("COPY ... PROGRAM", "(dump)")
+  if (norm ~ /alter system/) refusel("ALTER SYSTEM", "(dump)")
+  if (norm ~ /lo_import|lo_export/) refusel("large-object file access", "(dump)")
+  if (norm ~ /pg_read_file|pg_read_binary_file|pg_ls_dir/) refusel("server-side file read", "(dump)")
+  if (norm ~ /create language/) refusel("CREATE LANGUAGE", "(dump)")
+  if (norm ~ /language plpython|language plperlu|plpython3u|plpythonu|untrusted/) refusel("untrusted procedural language", "(dump)")
+  if (norm ~ /dblink/) refusel("dblink", "(dump)")
+  # CREATE EXTENSION only for the extensions these databases legitimately use (btree_gist).
+  t = norm
+  gsub(/create extension if not exists btree_gist|create extension btree_gist/, "", t)
+  if (t ~ /create extension/) refusel("CREATE EXTENSION other than btree_gist", "(dump)")
+  # SUPERUSER / ALTER ROLE postgres: allowed only on the canonical postgres self line.
+  t = norm; gsub(/nosuperuser/, "", t); gsub(/alter role postgres with superuser/, "", t)
+  if (t ~ /superuser/) refusel("SUPERUSER grant", "(dump)")
+  t = norm; gsub(/alter role postgres with superuser/, "", t)
+  if (t ~ /alter role postgres/) refusel("ALTER ROLE postgres", "(dump)")
+}
+
+BEGIN { if (scan != "grants" && scan != "dump") { print "scan must be grants or dump" > "/dev/stderr"; exit 2 } }
+scan == "grants" { if (!grants_line_ok($0)) refuse("line not in the globals allowlist"); next }
+scan == "dump"   { dump_line($0) }
+END { if (scan == "dump" && !bad) dump_finish() }
 # END pg-restore-scan
 AWK
 kubectl -n "$NS" exec "$POD" -- sh -c '
-  for k in grants dump; do
-    gzip -dc "/tmp/$k.sql.gz" | awk -f /tmp/scan.awk || { echo "!! refused /tmp/$k.sql.gz; do not replay" >&2; exit 1; }
-  done' && echo "scan passed"
+  gzip -dc /tmp/grants.sql.gz | awk -v scan=grants -f /tmp/scan.awk || { echo "!! refused grants; do not replay" >&2; exit 1; }
+  gzip -dc /tmp/dump.sql.gz   | awk -v scan=dump   -f /tmp/scan.awk || { echo "!! refused dump; do not replay"   >&2; exit 1; }
+' && echo "scan passed"
 ```
 
-Replay only after `scan passed`. The globals recreate every role, so `role "postgres" already
-exists` is the one expected error; the dump carries its own `CREATE DATABASE`.
+Replay only after `scan passed`. `postgres` already exists on the target, so its `CREATE ROLE` line is
+dropped before replay and every statement runs under `ON_ERROR_STOP`, which stops on the first real
+error. The dump carries its own `CREATE DATABASE`.
 
 ```bash
 kubectl -n "$NS" exec "$POD" -- sh -c '
-  gzip -dc /tmp/grants.sql.gz | psql -U postgres -Xq 2>&1 | grep -E "ERROR|FATAL" | grep -v "role \"postgres\" already exists"
+  gzip -dc /tmp/grants.sql.gz | grep -v "^CREATE ROLE postgres;$" | psql -U postgres -Xq -v ON_ERROR_STOP=1 -d postgres &&
   gzip -dc /tmp/dump.sql.gz | psql -U postgres -Xq -v ON_ERROR_STOP=1 -d postgres >/dev/null && echo restored'
 ```
 

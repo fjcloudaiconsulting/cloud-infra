@@ -8,8 +8,9 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 Database restores are
 [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
 set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
-runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql`, so backup
-content cannot run commands during recovery.
+runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
+against commands a backup should never carry; custom-format dumps restored by a non-superuser role
+are planned to replace the scan (#272).
 
 ## Follow Flux and rollouts
 
