@@ -44,12 +44,25 @@ PROVIDER_ARGS = {
     "hetznercloud/hcloud": set(),
     "netbirdio/netbird": set(),
 }
+# The data sources each provider may read, from today's tree. A plan reads every one with the workspace's
+# credentials, so a new one is a reviewed change here. No ephemeral resources are in use (they open at plan time too).
+DATA_SOURCES = {
+    "hashicorp/aws": {"aws_caller_identity", "aws_iam_policy_document"},
+    "hashicorp/tfe": {"tfe_workspace"},
+    "cloudflare/cloudflare": {"cloudflare_account_api_token_permission_groups_list", "cloudflare_zone",
+                              "cloudflare_zero_trust_tunnel_cloudflared_token"},
+    "hetznercloud/hcloud": set(),
+    "netbirdio/netbird": {"netbird_peer"},
+}
 
 HEREDOC = re.compile(r"<<-?([A-Za-z_][A-Za-z0-9_-]*)[ \t]*\r?\n")
 LABEL = r'(?:"[^"\n]*"|[A-Za-z_][A-Za-z0-9_-]*)'
-# HCL accepts a block label quoted or bare (`data external x {`), so both count.
-BLOCK = re.compile(rf'(?<![\w.\-"])(resource|data|ephemeral|action|provider|module|provisioner)'
-                   rf'((?:[ \t]+{LABEL})+)[ \t]*\{{')
+KEYWORDS = r"(resource|data|ephemeral|action|provider|module|provisioner)"
+# HCL accepts a block label quoted or bare (`data external x {`), and a quoted label needs no space before it
+# (`resource"x""y"{`); a bare one does.
+BLOCK = re.compile(rf'(?<![\w.\-"]){KEYWORDS}((?:[ \t]*"[^"\n]*"|[ \t]+[A-Za-z_][A-Za-z0-9_-]*)+)[ \t]*\{{')
+# A keyword in code followed by a label-like token: a block header, or something this scan cannot read.
+HEADER_LIKE = re.compile(rf'(?<![\w.\-"]){KEYWORDS}(?![\w-])[ \t]*(?=["A-Za-z_])')
 PLAIN = r'"[^"\\$%\n]*"'  # a string literal with no escape, interpolation or directive
 # Functions that read a local file at plan time; each takes a literal "${path.module}/..." path inside the repo.
 FILE_FUNCS = re.compile(r"(?<![\w.:-])(templatefile|file[a-z0-9]*)[ \t]*\(")
@@ -209,16 +222,23 @@ def scan(files, root=ROOT):
             problems.append(f"{path}: JSON-syntax configuration; write it as .tf so these fences can read it")
             continue
         text, code = lex(src)
-        d = by_dir.setdefault(str(pathlib.PurePosixPath(path).parent), {"providers": [], "uses": [], "blocks": []})
+        d = by_dir.setdefault(str(pathlib.PurePosixPath(path).parent),
+                              {"providers": [], "uses": [], "blocks": [], "reads": []})
         d["providers"] += required_providers(path, text, code, problems)
         file_reads(path, text, root, problems)
+        starts = {m.start() for m in BLOCK.finditer(text)}
+        for m in HEADER_LIKE.finditer(text):
+            if code[m.start()] and m.start() not in starts:
+                line = text[m.start():].split("\n", 1)[0]
+                problems.append(f"{path}: {line.strip()!r} reads like a {m.group(1)} block header this scan cannot "
+                                "parse; write it as `<keyword> \"label\" ... {`")
         for kind, labels, start, end in blocks(text, code):
             first = labels[0] if labels else ""
             if kind == "data" and first in ("external", "http"):
                 problems.append(f'{path}: data "{first}": no external or http data sources (they run at plan time)')
-            if kind == "data" and first == "terraform_remote_state":
-                problems.append(f'{path}: data "terraform_remote_state": no remote state reads; pass values in '
-                                "through variables")
+            if kind == "data" and first in ("terraform_remote_state", "tfe_outputs"):
+                problems.append(f'{path}: data "{first}": no remote state or workspace output reads; pass values '
+                                "in through variables")
             if kind == "provisioner":
                 problems.append(f'{path}: provisioner "{first}": no provisioners (local-exec and remote-exec run '
                                 "commands with the run's environment)")
@@ -241,6 +261,8 @@ def scan(files, root=ROOT):
                         problems.append(f'{path}: {kind} "{first}": unknown built-in type')
                 else:
                     d["uses"].append((prefix, f'{kind} "{first}"'))
+                    if kind in ("data", "ephemeral"):
+                        d["reads"].append((path, kind, first, prefix))
         for m in re.finditer(r"(?<![\w.-])provider[ \t]*=[ \t]*([A-Za-z_][A-Za-z0-9_-]*)", text):
             d["uses"].append((m.group(1), f"provider = {m.group(1)}"))
         for m in re.finditer(r"provider::([A-Za-z_][A-Za-z0-9_-]*)::", text):
@@ -260,6 +282,11 @@ def scan(files, root=ROOT):
             source = resolve.get(name, f"hashicorp/{name}")
             if source not in PROVIDER_ALLOWLIST:
                 problems.append(f"{directory}: {what} uses provider {name!r} ({source}), not in the allowlist")
+        for path, kind, rtype, prefix in d["reads"]:
+            source = resolve.get(prefix, f"hashicorp/{prefix}")
+            if rtype not in DATA_SOURCES.get(source, set()) or kind == "ephemeral":
+                problems.append(f'{path}: {kind} "{rtype}" is not in DATA_SOURCES; a new plan-time read is a '
+                                "reviewed change there")
         for path, name, args in d["blocks"]:
             allowed = PROVIDER_ARGS.get(resolve.get(name, f"hashicorp/{name}"), set()) | {"alias"}
             for arg in args:
@@ -300,7 +327,7 @@ class PlanTimeCode(unittest.TestCase):
         files = tree()
         self.assertGreaterEqual(len({pathlib.PurePosixPath(p).parts[1] for p in files if p.startswith("terraform/")}),
                                 5)
-        headers = sum(len(re.findall(r'(?m)^(?:resource|data|provider) "', s)) for s in files.values())
+        headers = sum(len(re.findall(r'(?m)^(?:resource|data|provider)\s*"', s)) for s in files.values())
         seen = sum(k in ("resource", "data", "provider") for s in files.values() for k, *_ in blocks(*lex(s)))
         self.assertEqual(seen, headers)
         reads = sum(len(FILE_FUNCS.findall(s)) for s in files.values())
@@ -329,7 +356,36 @@ class PlanTimeCode(unittest.TestCase):
 
     def test_remote_state_fails(self):
         self.assertFlags(stack('data "terraform_remote_state" "other" {\n  backend = "remote"\n}\n'),
-                         "no remote state reads")
+                         "no remote state or workspace output reads")
+        tfe = AWS.replace("aws", "tfe")
+        self.assertFlags(stack('data "tfe_outputs" "other" {\n  workspace = "x"\n}\n', tfe),
+                         "no remote state or workspace output reads")
+
+    def test_data_sources_beyond_todays_fail(self):
+        for main, versions in (('data "aws_s3_object" "x" {\n  bucket = "b"\n  key = "k"\n}\n', AWS),
+                               ('data "aws_ssm_parameter" "x" {\n  name = "n"\n}\n', AWS),
+                               ('data "tfe_outputs" "x" {\n  workspace = "w"\n}\n', AWS.replace("aws", "tfe")),
+                               ('data "netbird_group" "x" {\n  name = "g"\n}\n', None),
+                               ('ephemeral "aws_secretsmanager_secret_version" "x" {\n  secret_id = "s"\n}\n', AWS)):
+            with self.subTest(main):
+                self.assertFlags(stack(main, versions), "is not in DATA_SOURCES")
+        # guard: a listed read passes.
+        self.assertEqual(scan(stack('data "aws_caller_identity" "me" {}\n', AWS)), [])
+
+    def test_data_source_list_is_what_the_stacks_read(self):
+        # guard: DATA_SOURCES names nothing the tree has stopped reading.
+        read = {k for s in tree().values() for kind, (k, *_), *_ in blocks(*lex(s)) if kind == "data"}
+        self.assertEqual(read, set().union(*DATA_SOURCES.values()))
+
+    def test_unspaced_and_unreadable_headers_fail(self):
+        self.assertFlags(stack('data"external""x"{\n  program = ["env"]\n}\n'), "no external or http data sources")
+        self.assertFlags(stack('resource"null_resource""x"{}\n'), "not in the allowlist")
+        self.assertFlags(stack('data "external"\n"x" {\n  program = ["env"]\n}\n'), "this scan cannot parse")
+        self.assertFlags(stack('data external.x {\n}\n'), "this scan cannot parse")
+        # guard: references, attributes and words in strings are not headers.
+        main = ('resource "netbird_group" "g" {\n  name = "data source"\n  peers = [data.netbird_peer.p.id]\n'
+                '  provider = netbird\n}\ndata "netbird_peer" "p" {\n  name = module.x\n}\n')
+        self.assertEqual(scan(stack(main)), [])
 
     def test_exec_provisioners_fail(self):
         for kind in ("local-exec", "remote-exec"):
