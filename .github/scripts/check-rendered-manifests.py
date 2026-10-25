@@ -18,7 +18,8 @@ Render (offline; nothing is decrypted, so SOPS Secrets stay encrypted, and that 
 - no network: proxies point nowhere and git may use no transport, so a remote base or resource fails the render;
   kustomization files are read for remote entries first, for a clear message;
 - a Kustomization spec field that changes the render (images, patches, postBuild, targetNamespace, ...) fails: the
-  check does not emulate it.
+  check does not emulate it; nor does it follow what changes the files Flux reads: a .sourceignore anywhere in the
+  repo, or a GitRepository's ignore, include, sparseCheckout or recurseSubmodules, fails.
 
 On every object Flux applies: each rendered document, or, for a document with an `items` list, those items in its
 place (ssautil.ReadObjects, whatever the kind; a kind other than *List that carries one fails):
@@ -65,6 +66,8 @@ AWAITING_DIGEST = {
 FLUX_SPEC = {"interval", "retryInterval", "timeout", "path", "prune", "sourceRef", "decryption", "dependsOn", "wait",
              "healthChecks", "healthCheckExprs", "force", "suspend", "serviceAccountName", "deletionPolicy",
              "kubeConfig", "commonMetadata"}
+# GitRepository spec fields that change which files the artifact holds.
+SOURCE_FILES = ("ignore", "include", "sparseCheckout", "recurseSubmodules")
 POD_LISTS = ("containers", "initContainers", "ephemeralContainers")
 COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
 DOMAIN = r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?::[0-9]+)?|localhost(?::[0-9]+)?"
@@ -581,6 +584,10 @@ def object_problems(origin, obj, exempt):
         return [f"{origin or '(no origin)'}: {_name(obj)}: a top-level items list, which Flux applies in place of the "
                 "object: write each item as its own document"]
     out = []
+    if obj.get("kind") == "GitRepository" and str(obj.get("apiVersion", "")).startswith("source.toolkit.fluxcd.io/"):
+        spec = obj.get("spec") if isinstance(obj.get("spec"), dict) else {}
+        out += [f"spec.{f} changes which files Flux reads, and this check does not follow it" for f in SOURCE_FILES
+                if spec.get(f)]
     if isinstance(obj.get("kind"), str) and obj["kind"].lower() == "secret":
         out += secret_problems(obj)
     out += image_problems(origin, obj, exempt)
@@ -595,6 +602,11 @@ def check(root, exempt=None):
         return [f"{root}: no such directory"]
     out = [f"{root.name}/{p.relative_to(root).as_posix()}: a name that starts with a dot, which source-controller may "
            "leave out of what Flux applies (.sops.yaml, .flux.yaml, ...): rename it" for p in sorted(root.rglob(".*"))]
+    for d, dirs, files in os.walk(root.parent):  # source-controller reads one in every directory of the repo
+        dirs[:] = sorted(x for x in dirs if x != ".git")
+        if ".sourceignore" in files:
+            rel = (pathlib.Path(d) / ".sourceignore").relative_to(root.parent).as_posix()
+            out.append(f"{rel}: its rules change which files Flux reads, and this check does not follow them: remove it")
     out += remote_entries(root)
     if out:
         return out
@@ -606,10 +618,13 @@ def check(root, exempt=None):
         queue, seen = [], set()
         try:
             for e in entries:
-                found = flux_kustomizations(render(root, e, next(bases)))
+                rendered = render(root, e, next(bases))
+                found = flux_kustomizations(rendered)
                 if not found:
                     out.append(f"{root.name}/{e.as_posix()}: no Flux Kustomization")
                 queue += found
+                for origin, obj in rendered:  # applied at bootstrap too
+                    out += [p for p in object_problems(origin, obj, exempt) if p not in out]
             while queue:
                 rel, why = flux_path(queue.pop(0), root)
                 if why and why not in out:

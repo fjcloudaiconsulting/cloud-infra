@@ -304,6 +304,26 @@ class BypassShapesFail(Base):
                 self.assertFails({"c/flux-system/gotk-sync.yaml": sync.replace(old, new)},
                                  "its source is not this repository")
 
+    def test_sourceignore_anywhere_in_the_repo(self):
+        # source-controller leaves what a .sourceignore matches out of the artifact: hiding a kustomization.yaml would
+        # make Flux apply the raw files beside it.
+        for where in (".sourceignore", "docs/.sourceignore"):
+            with self.subTest(where):
+                with Tree({"c/app/d.yaml": deployment(PINNED)}) as root:
+                    (root.parent / where).parent.mkdir(exist_ok=True)
+                    (root.parent / where).write_text("/clusters/c/app/kustomization.yaml\n")
+                    out = rc.check(root, exempt=set())
+                self.assertTrue(any(p.startswith(f"{where}: its rules change which files Flux reads") for p in out), out)
+
+    def test_gitrepository_fields_that_change_the_files(self):
+        url = "  url: https://github.com/example/repo\n"
+        for extra in ("  ignore: |\n    /clusters/c/app/kustomization.yaml\n", "  recurseSubmodules: true\n",
+                      "  sparseCheckout:\n    - clusters\n", "  include:\n    - repository:\n        name: other\n"):
+            with self.subTest(extra):
+                sync = SYNC.format(path="./clusters/c", extra="").replace(url, url + extra)
+                self.assertFails({"c/flux-system/gotk-sync.yaml": sync},
+                                 f"GitRepository flux-system/flux-system: spec.{extra.split(':')[0].strip()} changes")
+
     def test_flux_path_outside_the_root(self):
         self.assertFails({}, "is not a directory under clusters/", path="./elsewhere")
 
