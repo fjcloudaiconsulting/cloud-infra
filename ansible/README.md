@@ -184,6 +184,39 @@ three:
 
 The log stays on the node; nothing ships it (or the SSH journal) elsewhere yet, so a root intruder can delete it.
 
+## Pod Security defaults
+
+The API server applies Pod Security defaults from [`files/k3s-pod-security.yaml`](files/k3s-pod-security.yaml),
+installed on every run as `/etc/rancher/k3s/pod-security.yaml`: enforce `baseline`, warn and audit `restricted`, for
+any namespace without a `pod-security.kubernetes.io/<mode>` label of its own for that mode. A namespace label always
+wins, so the namespaces under `clusters/hetzner/` keep the enforce level they set; the enforce default reaches
+`default`, `kube-public`, `kube-node-lease`, `flux-system` while its kustomization does not label it, and any namespace
+made by hand. Only `kube-system` is exempt: k3s's add-ons and the local-path helper pods (hostPath) run there. Warn and
+audit at `restricted` add apply warnings and audit annotations where a namespace sets only an enforce label; they
+refuse nothing.
+
+Like the audit policy, it takes effect on a `-e k3s_reconfigure=true` run (each server restarts in turn; one run
+covers both). Before that run, list the namespaces and have the API server name the pods `baseline` would refuse in
+each one without an enforce label (a dry run, nothing changes):
+
+    kubectl get ns -L pod-security.kubernetes.io/enforce,pod-security.kubernetes.io/warn,pod-security.kubernetes.io/audit
+    for ns in $(kubectl get ns -o json | jq -r '.items[] | select(.metadata.labels["pod-security.kubernetes.io/enforce"] == null) | .metadata.name' | grep -vx kube-system); do
+      kubectl label --dry-run=server ns "$ns" pod-security.kubernetes.io/enforce=baseline
+    done
+
+Expect only `namespace/<ns> labeled` lines. `Warning: existing pods in namespace "<ns>" violate ...` names pods the
+default would refuse once they are recreated: give that namespace its own enforce label in git first, then run. After
+the run, `grep -c admission-control-config-file /etc/rancher/k3s/config.yaml` prints 1 on each server, and a
+host-network pod in `default` is refused (a dry run again):
+
+    kubectl -n default run psa-check --image=busybox --restart=Never --dry-run=server \
+      --overrides='{"apiVersion":"v1","spec":{"hostNetwork":true}}'   # Forbidden: violates PodSecurity "baseline:latest"
+
+To back out, remove the `admission-control-config-file` line in `group_vars/all.yml` and run with
+`-e k3s_reconfigure=true` again. If a server's API server does not come back, the run stops there and the quorum
+guard refuses the next run: on that server delete the line from `/etc/rancher/k3s/config.yaml` and
+`systemctl restart k3s` (`journalctl -u k3s` shows why it failed), then fix git.
+
 ## Rolling reboot
 
 unattended-upgrades installs kernel updates but never reboots (`node_base`), so a node runs the old kernel until it is
