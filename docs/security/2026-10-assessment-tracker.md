@@ -5,7 +5,8 @@ the pull request that addresses it and what is left to do. Agents with Jira acce
 the Jira issues. Every agent working on this effort keeps it current, so the next one starts from the real state and
 nobody needs a live conversation to catch up.
 
-Last updated: 2026-10-25 by the cloud-infra security session, after opening the fix PRs (none merged yet).
+Last updated: 2026-10-25 by the cloud-infra security session, after recording every finding in Jira (none merged
+yet).
 
 ## Disclosure note
 
@@ -20,17 +21,23 @@ cross-references them.
 
 ## Current state
 
-- **Open for owner review:** the fix PRs #286, #287, #290, #295, #296, #297, #298, #299 and #300, plus the
-  Postgres follow-up PR (number added when it opens). None is merged. Each PR description states what merging does
-  in production and how to check it.
+- **Open for owner review:** the fix PRs #286, #287, #290, #295, #296, #297, #298, #299, #300 and #303. None is
+  merged. Each PR description states what merging does in production and how to check it.
 - **Related work by the other sessions, merged:** #275 and #280 (TBD edge and probes), #274 (TBD CORS), #277 and #288
-  (Ziftbook photo containment and its staging revert), #278, #279, #283, #284, #285 (Ziftbook 0.31.0 prerequisites).
-  Draft #289 restores photo uploads in production once production runs Ziftbook v0.31.0.
+  (Ziftbook photo containment and its staging revert), #278, #279, #283, #284, #285 (Ziftbook 0.31.0 prerequisites),
+  #256 (Ziftbook production on v0.31.0). #289 restores photo uploads in production; the Ziftbook session merges it.
+- **Jira:** every finding has an INFRA issue (Jira column), labelled `security-assessment-2026-10-cloud-infra` and
+  linked to INFRA-104. Issues with an open PR are In Progress; the rest wait for the owner.
 - **Waiting on the owner:** the decisions in the queue below, the merge order in "Merge plan", and the HCP Terraform
   applies that follow the Terraform PRs.
-- **Next:** the owner merges in the order below; the Jira agent creates the INFRA issues and records the PRs.
+- **Next:** the owner merges in the order below; after each merge, the next session moves the issue to Done with the
+  squash commit.
 
 ## How to pick this up (any agent)
+
+**From 2026-10-25 the work is tracked in Jira**: project INFRA, label `security-assessment-2026-10-cloud-infra`, start
+at INFRA-252. This file is now a public snapshot. Record progress on the INFRA issues, not in a handoff log here. Update
+this file only when the owner asks, for example after a merge wave.
 
 1. Read this whole file, then the handoff log at the end. The tables are a snapshot: confirm a PR's state with
    `gh pr view <n> -R fjcloudaiconsulting/cloud-infra --json state,mergedAt,mergeCommit` before acting on it.
@@ -59,11 +66,11 @@ cross-references them.
    **Owner action** text as the remaining work.
 4. Transition rules:
    - **Fixed**, and the Merged column shows a date: Done. Comment with the PR and its squash commit.
-   - **Fixed** or **Partial**, PR open: In Review, linked to the PR.
+   - **Fixed** or **Partial**, PR open: In Progress (INFRA has no In Review status), linked to the PR.
    - **Partial**, PR merged: keep the issue open for the owner action, or close it and open a follow-up for the rest.
    - **Needs owner**: open, assigned to the owner.
    - **Cross-ref**: no INFRA issue; comment on the tracked issue if one exists.
-   - A PR whose merge needs a window or a manual step stays In Review until the owner confirms the post-merge check.
+   - A PR whose merge needs a window or a manual step stays In Progress until the owner confirms the post-merge check.
 5. Write each key back into the Jira column here, in a `docs(security): ...` PR.
 
 ## Pull requests
@@ -79,7 +86,7 @@ cross-references them.
 | #298 | `security/hosts-hardening` | ANS-01, ANS-02, ANS-03, ANS-04, ANS-05, ANS-06, ANS-09 | Nothing until the owner runs Ansible; the `hetzner` workspace plans | Open |
 | #299 | `security/terraform-iam-fences` | TF-01, TF-02, TF-05, TF-08 | CI at once; the `tbd-backups` plan-role change applies only after the owner approves | Open |
 | #300 | `security/ci-fences` | GHA-03, K8S-03, GHA-07, GHA-09, GHA-08 | CI only | Open |
-| (pending) | `security/postgres-isolation` | DATA-02, DATA-03 | Restarts Postgres (window) and re-runs both bootstrap Jobs | In progress |
+| #303 | `security/postgres-isolation` | DATA-02, DATA-03 | Restarts Postgres (window, with #262 and #247) and re-runs both bootstrap Jobs | Open |
 
 ## Findings
 
@@ -89,66 +96,65 @@ elsewhere), **Accepted** (no change).
 
 | ID | Title | Status | PR | Merged | Commit | Owner action | Jira |
 |---|---|---|---|---|---|---|---|
-| TF-01 | Terraform plan-time credentials | Partial | #299 | | | Review HCP Terraform run settings and per-phase credentials (private report) | |
-| TF-02 | Backup apply role self-management | Partial | #299 | | | Decide the permissions-boundary change (private report) | |
-| TF-03 | Secrets kept in Terraform state | Needs owner | | | | Restrict state access in HCP Terraform | |
-| TF-04 | Cloudflare workspace token scope | Needs owner | | | | Decide on splitting the account-scoped permissions | |
-| TF-05 | Backup plan role read scope | Fixed | #299 | | | Simulate the policy before approving the `tbd-backups` apply (README) | |
-| TF-06 | NetBird group membership binding | Needs owner | | | | Provide peer IDs; enable peer approval and posture checks | |
-| TF-07 | Identifiers committed to the repository | Cross-ref | | | | Tracked as INFRA-233 | |
-| TF-08 | Lock-file platform hashes and version constraint | Fixed | #299 | | | Hash the `cloudflare-tokens` lock for both platforms on its next bump | |
-| K8S-01 | Per-tenant Flux reconciliation | Needs owner | | | | Decide the Flux tenancy restructure (after the Ziftbook release) | |
-| K8S-02 | Digest pins for upgrade and controller images | Fixed | #286, #295 | | | Merge #286 while no k3s roll is in progress | |
-| K8S-03 | Digest pins for TBD images | Partial | #300, #301 | | | Merge the tbd v0.303.1 bumps (staging, then #301) | |
-| K8S-04 | Database NetworkPolicy peers | Fixed | #287 | | | Pre- and post-merge checks in #287 | |
-| K8S-05 | Flux controller RBAC | Fixed | #295 | | | | |
-| K8S-06 | Service-account token mounting | Fixed | #295 | | | | |
-| K8S-07 | App-namespace egress to node addresses | Fixed | #287 | | | | |
-| K8S-08 | NetBird pod security context | Needs owner | | | | Rehearse with a console session open | |
-| K8S-09 | Pod Security levels | Partial | #295 | | | Add the warn/audit labels to the `netbird` namespace | |
-| K8S-10 | Documentation corrections | Partial | #286, #295 | | | | |
-| ANS-01 | Host network filtering | Partial | #298 | | | Decide the host firewall rollout; narrow the SSH allowlist to /24 or longer | |
-| ANS-02 | Kubernetes API audit logging | Partial | #298 | | | Run `site.yml -e k3s_reconfigure=true`; decide log shipping | |
-| ANS-03 | Root SSH key management | Fixed | #298 | | | Run `site.yml --check --diff`, then `site.yml` | |
-| ANS-04 | Cluster-admin credential lifetime | Partial | #298 | | | Shorten the owner token lifetime | |
-| ANS-05 | k3s token rotation procedure | Fixed | #298 | | | | |
-| ANS-06 | k3s installer verification | Partial | #298 | | | Decide on pinning the binary (airgap path) | |
-| ANS-07 | Pending reboot alerting | Needs owner | | | | | |
-| ANS-08 | k3s hardening-guide options | Needs owner | | | | | |
-| ANS-09 | Host key verification at bootstrap | Fixed | #298 | | | | |
-| GHA-01 | Automated commits to `main` | Needs owner | | | | Decide the Renovate automerge model (private report) | |
-| GHA-02 | Shared preset and signer identity pinning | Needs owner | | | | Decide with the `.github` release flow (cross-ref Ziftbook owner action 14) | |
-| GHA-03 | CI checks for secrets and images | Fixed | #300 | | | | |
-| GHA-04 | GHCR retention permissions | Needs owner | | | | Decide where retention runs before any Admin grant | |
-| GHA-05 | Third-party GitHub App access | Needs owner | | | | Review app installations and selections | |
-| GHA-06 | Organisation 2FA and bypass settings | Needs owner | | | | Require 2FA; review bypass modes | |
-| GHA-07 | Public workflow log content | Partial | #300 | | | | |
-| GHA-08 | Repository security settings | Partial | #300 | | | Enable code-owner review and the settings listed in the PR | |
-| GHA-09 | CI input pinning and release age | Partial | #300 | | | Release age for images and actions (with #273) | |
-| EDGE-01 | Access control for the Ziftbook staging host | Needs owner | | | | Decide the Access application and its bypasses | |
-| EDGE-02 | Edge request body limits | Fixed | #290 | | | Approve the `cloudflare` apply; post-apply checks in #290 | |
-| EDGE-03 | Email sender authentication for the product domains | Needs owner | | | | Decide the mail-policy ramp | |
-| EDGE-04 | Telemetry receiver isolation and limits | Partial | #296 | | | Pin the infrastructure alert rules to pipeline labels (Grafana) | |
-| EDGE-05 | Edge rate-limit path coverage | Fixed | #290, #283 | | | | |
-| EDGE-06 | TBD staging Access bypass | Fixed | #290 | | | Apply the Access change in two steps | |
-| EDGE-07 | Tunnel connector egress | Fixed | #287 | | | | |
-| EDGE-08 | DNS zone hygiene | Needs owner | | | | | |
-| EDGE-09 | Data processor inventory | Accepted | | | | Keep the privacy notices current | |
-| DATA-01 | Restore procedure | Partial | #297 | | | Decide the backup format change after #272 | |
-| DATA-02 | Postgres role isolation between environments | In progress | (pending) | | | | |
-| DATA-03 | Postgres connection limits per environment | In progress | (pending) | | | | |
-| DATA-04 | Backup provenance and an independent copy | Needs owner | | | | Decide the second copy and retention | |
-| DATA-05 | Restore drill freshness signal | Needs owner | | | | | |
-| DATA-06 | Database and backup credential separation | Needs owner | | | | | |
-| DATA-07 | Encryption for database data at rest and in transit | Partial | #272 | | | #272 keeps dumps in memory; decide on the rest | |
+| TF-01 | Terraform plan-time credentials | Partial | #299 | | | Review HCP Terraform run settings and per-phase credentials (private report) | INFRA-226 |
+| TF-02 | Backup apply role self-management | Partial | #299 | | | Decide the permissions-boundary change (private report) | INFRA-207 |
+| TF-03 | Secrets kept in Terraform state | Needs owner | | | | Restrict state access in HCP Terraform | INFRA-230 |
+| TF-04 | Cloudflare workspace token scope | Needs owner | | | | Decide on splitting the account-scoped permissions | INFRA-226 |
+| TF-05 | Backup plan role read scope | Fixed | #299 | | | Simulate the policy before approving the `tbd-backups` apply (README) | INFRA-246 |
+| TF-06 | NetBird group membership binding | Needs owner | | | | Provide peer IDs; enable peer approval and posture checks | INFRA-247 |
+| TF-07 | Identifiers committed to the repository | Cross-ref | | | | Tracked as INFRA-233 | INFRA-233 |
+| TF-08 | Lock-file platform hashes and version constraint | Fixed | #299 | | | Hash the `cloudflare-tokens` lock for both platforms on its next bump | INFRA-248 |
+| K8S-01 | Per-tenant Flux reconciliation | Needs owner | | | | Decide the Flux tenancy restructure (after the Ziftbook release) | INFRA-209 |
+| K8S-02 | Digest pins for upgrade and controller images | Fixed | #286, #295 | | | Merge #286 while no k3s roll is in progress | INFRA-218 |
+| K8S-03 | Digest pins for TBD images | Partial | #300, #301 | | | Merge the tbd v0.303.1 bumps (staging, then #301) | INFRA-236 |
+| K8S-04 | Database NetworkPolicy peers | Fixed | #287 | | | Pre- and post-merge checks in #287 | INFRA-210 |
+| K8S-05 | Flux controller RBAC | Fixed | #295 | | | | INFRA-241 |
+| K8S-06 | Service-account token mounting | Fixed | #295 | | | | INFRA-216 |
+| K8S-07 | App-namespace egress to node addresses | Fixed | #287 | | | | INFRA-242 |
+| K8S-08 | NetBird pod security context | Needs owner | | | | Rehearse with a console session open | INFRA-221 |
+| K8S-09 | Pod Security levels | Partial | #295 | | | Add the warn/audit labels to the `netbird` namespace | INFRA-222 |
+| K8S-10 | Documentation corrections | Partial | #286, #295 | | | | INFRA-104 |
+| ANS-01 | Host network filtering | Partial | #298 | | | Decide the host firewall rollout; narrow the SSH allowlist to /24 or longer | INFRA-220 |
+| ANS-02 | Kubernetes API audit logging | Partial | #298 | | | Run `site.yml -e k3s_reconfigure=true`; decide log shipping | INFRA-217 |
+| ANS-03 | Root SSH key management | Fixed | #298 | | | Run `site.yml --check --diff`, then `site.yml` | INFRA-243 |
+| ANS-04 | Cluster-admin credential lifetime | Partial | #298 | | | Shorten the owner token lifetime | INFRA-144 |
+| ANS-05 | k3s token rotation procedure | Fixed | #298 | | | | INFRA-244 |
+| ANS-06 | k3s installer verification | Partial | #298 | | | Decide on pinning the binary (airgap path) | INFRA-245 |
+| ANS-07 | Pending reboot alerting | Needs owner | | | | | INFRA-219 |
+| ANS-08 | k3s hardening-guide options | Needs owner | | | | | INFRA-222 |
+| ANS-09 | Host key verification at bootstrap | Fixed | #298 | | | | INFRA-249 |
+| GHA-01 | Automated commits to `main` | Needs owner | | | | Decide the Renovate automerge model (private report) | INFRA-209 |
+| GHA-02 | Shared preset and signer identity pinning | Needs owner | | | | Decide with the `.github` release flow (cross-ref Ziftbook owner action 14) | INFRA-229 |
+| GHA-03 | CI checks for secrets and images | Fixed | #300 | | | | INFRA-240 |
+| GHA-04 | GHCR retention permissions | Needs owner | | | | Decide where retention runs before any Admin grant | INFRA-92 |
+| GHA-05 | Third-party GitHub App access | Needs owner | | | | Review app installations and selections | INFRA-227 |
+| GHA-06 | Organisation 2FA and bypass settings | Needs owner | | | | Require 2FA; review bypass modes | INFRA-229 |
+| GHA-07 | Public workflow log content | Partial | #300 | | | | INFRA-233 |
+| GHA-08 | Repository security settings | Partial | #300 | | | Enable code-owner review and the settings listed in the PR | INFRA-229 |
+| GHA-09 | CI input pinning and release age | Partial | #300 | | | Release age for images and actions (with #273) | INFRA-250 |
+| EDGE-01 | Access control for the Ziftbook staging host | Needs owner | | | | Decide the Access application and its bypasses | INFRA-224 |
+| EDGE-02 | Edge request body limits | Fixed | #290 | | | Approve the `cloudflare` apply; post-apply checks in #290 | INFRA-234 |
+| EDGE-03 | Email sender authentication for the product domains | Needs owner | | | | Decide the mail-policy ramp | INFRA-228 |
+| EDGE-04 | Telemetry receiver isolation and limits | Partial | #296 | | | Pin the infrastructure alert rules to pipeline labels (Grafana) | INFRA-237 |
+| EDGE-05 | Edge rate-limit path coverage | Fixed | #290, #283 | | | | INFRA-223 |
+| EDGE-06 | TBD staging Access bypass | Fixed | #290 | | | Apply the Access change in two steps | INFRA-238 |
+| EDGE-07 | Tunnel connector egress | Fixed | #287 | | | | INFRA-239 |
+| EDGE-08 | DNS zone hygiene | Needs owner | | | | | INFRA-231 |
+| EDGE-09 | Data processor inventory | Accepted | | | | Keep the privacy notices current | INFRA-104 |
+| DATA-01 | Restore procedure | Partial | #297 | | | Decide the backup format change after #272 | INFRA-235 |
+| DATA-02 | Postgres role isolation between environments | Fixed | #303 | | | | INFRA-211, INFRA-206 |
+| DATA-03 | Postgres connection limits per environment | Fixed | #303 | | | | INFRA-212 |
+| DATA-04 | Backup provenance and an independent copy | Needs owner | | | | Decide the second copy and retention | INFRA-208 |
+| DATA-05 | Restore drill freshness signal | Needs owner | | | | | INFRA-214 |
+| DATA-06 | Database and backup credential separation | Needs owner | | | | | INFRA-215 |
+| DATA-07 | Encryption for database data at rest and in transit | Partial | #272 | | | #272 keeps dumps in memory; decide on the rest | INFRA-213 |
 
 ## Counts
 
 | Status | Findings |
 |---|---|
-| Fixed (PR open) | 15 |
+| Fixed (PR open) | 17 |
 | Partial (PR open) | 15 |
-| In progress | 2 |
 | Needs owner | 18 |
 | Cross-ref | 1 |
 | Accepted | 1 |
@@ -177,14 +183,25 @@ The owner merges, one PR at a time: `gh pr update-branch`, wait for every check 
    #296 and #287 respectively, same files), #263 (before #296), #248 (before #272).
 3. **Flux, low risk:** #286 (no k3s roll in progress), #295.
 4. **Flux, in a window with the checks:** #287, then #296.
-5. **Database windows:** #265 (MySQL restart); #262 with the Postgres follow-up PR and #247 (Postgres restart and the
+5. **Database windows:** #265 (MySQL restart); #262 with #303 and #247 (Postgres restart and the
    bootstrap Jobs).
-6. **Releases:** the tbd-staging v0.303.1 bump (automerges), then #301, then #300 (its tag-only list is then removed);
-   Ziftbook #256 with #289, after the staging checks.
+6. **Releases:** the tbd-staging v0.303.1 bump (automerges), then #301, then #300 (its tag-only list is then removed).
+   Ziftbook #256 is merged; #289 follows once production runs v0.31.0 (the Ziftbook session's call).
+7. **Close:** #260 (Terraform 1.17, failing checks) unless that upgrade is planned.
 
 ## Handoff log
 
-Newest first.
+Newest first. Closed on 2026-10-25: new entries go to Jira (INFRA-252), not here.
+
+### 2026-10-25 (final): cloud-infra security session
+
+- **Done:**
+  - Opened #303 (DATA-02, DATA-03).
+  - Recorded every finding in Jira under INFRA-104: 33 on existing issues and 17 new (INFRA-234 to INFRA-250). The
+    keys are in the Jira column above.
+  - Created INFRA-251 (Flux status on commits) and the handoff INFRA-252.
+- **Next:** start at INFRA-252. The owner works through the decision queue and the merge plan; the coding session
+  takes the queue in INFRA-252 as items unblock.
 
 ### 2026-10-25: cloud-infra security session
 
