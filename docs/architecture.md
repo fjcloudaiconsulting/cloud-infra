@@ -116,7 +116,7 @@ All run in `data` on the Hetzner cluster as StatefulSets on local-path volumes, 
 | Store | For | Key settings |
 |---|---|---|
 | MySQL 8.4 | TBD production (`tbd`, users `tbd_app`, `tbd_backup`); TBD staging (`tbd_staging`, user `tbd_staging`, grants on its own database only, 20 connections at most) | buffer pool 128M, performance_schema off, binlog off |
-| Postgres 18 | Ziftbook staging (`ziftbook`) and production (`ziftbook_prod`); the two roles are shared and created by Ziftbook's pinned `bootstrap.sql`, run as a Job per database | shared_buffers 64MB, no parallel workers |
+| Postgres 18 | Ziftbook staging (`ziftbook`) and production (`ziftbook_prod`); the roles are shared and created by Ziftbook's pinned `bootstrap.sql`, run as a Job per database; production logs in as its own roles, and each environment's logins open only its own database (checked at the end of both Jobs) | shared_buffers 64MB, no parallel workers; 100 connections: staging's logins capped at 40, 26 reserved for production's logins |
 
 A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts `tbd-prod`
 and `tbd-staging`, Postgres (Hetzner only since INFRA-181) `ziftbook-staging` and
