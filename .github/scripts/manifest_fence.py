@@ -11,12 +11,14 @@ runs this fence first and fails closed on anything else instead of guessing:
   WATCHED key, escape, tag, anchor or alias;
 - no backslash escape in a double-quoted scalar; for WATCHED keys except `value`, the value sits on the key's own
   line (no block scalar, no flow collection, no value on the next line);
+- every document is a block mapping, its apiVersion and kind one-line scalars;
 - no `kind: List` or other `*List` kind (kustomize unwraps their items);
 - kustomization files: only resources and configMapGenerator, plus patches and images in the vendored tier-0
-  directories (EXEMPT), where every images entry carries a sha256 digest; each resource is a directory or a
-  MANIFEST_SUFFIXES file inside the tree (the files the checks read), each configMapGenerator files/envs/env entry a
-  file inside the tree, and every such entry a plain or quoted one-line scalar;
-- Flux objects (`*.toolkit.fluxcd.io`) only under flux-system;
+  directories (EXEMPT, exactly <root>/<cluster>/<dir>/), where every images entry carries a sha256 digest; each
+  resource is a directory or a MANIFEST_SUFFIXES file inside the tree (the files the checks read), each
+  configMapGenerator files/envs/env entry a file inside the tree, and every such entry a plain or quoted one-line
+  scalar;
+- Flux objects (`*.toolkit.fluxcd.io`) only in <root>/<cluster>/flux-system/;
 - app namespaces (<app>-prod, <app>-staging): every image is ghcr.io/fjcloudaiconsulting/<app>/..., and a document
   that runs an image in one lives in that namespace's directory;
 - no `scheme://[user]:password@host` with a literal password, in any manifest, configMapGenerator source or SOPS
@@ -35,15 +37,16 @@ import sys
 
 ORG = "ghcr.io/fjcloudaiconsulting/"
 APP_NS = re.compile(r"[a-z0-9][a-z0-9-]*-(?:prod|staging)")
-# Vendored from upstream and patched in their kustomization.yaml (code-owned, see .github/CODEOWNERS).
+# Vendored from upstream and patched in their kustomization.yaml (code-owned, see .github/CODEOWNERS). Exempt only as
+# the directory directly under a cluster directory (clusters/<cluster>/<dir>/), never as a component deeper down.
 EXEMPT = ("flux-system", "system-upgrade")
 KUSTOMIZATIONS = ("kustomization.yaml", "kustomization.yml", "Kustomization")
 MANIFEST_SUFFIXES = (".yaml", ".yml", ".json")
 KUSTOMIZATION_KEYS = {"apiVersion", "kind", "resources", "configMapGenerator"}
 EXEMPT_KUSTOMIZATION_KEYS = KUSTOMIZATION_KEYS | {"patches", "images"}
-# Keys whose values the checks read: the kind of an object, image refs and kustomize's image fields, the namespace,
+# Keys whose values the checks read: the type of an object, image refs and kustomize's image fields, the namespace,
 # env values.
-WATCHED = {"kind", "image", "name", "namespace", "newName", "newTag", "digest", "value"}
+WATCHED = {"apiVersion", "kind", "image", "name", "namespace", "newName", "newTag", "digest", "value"}
 SAME_LINE = WATCHED - {"value"}
 SCALAR = ("plain", "single", "double")
 BAD_CHAR = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ufeff]")
@@ -377,19 +380,32 @@ def _kustomization(root, path, docs, exempt):
     return out
 
 
+def _roots(docs):
+    """Every document is a block mapping whose apiVersion and kind, when set, are one-line scalars."""
+    out = []
+    for doc in docs:
+        root = next((e for e in doc.entries if not e.path or isinstance(e.path[0], int)), None)
+        if root:
+            out.append(f"line {root.line}: a document must be a block mapping")
+        out += [f"line {e.line}: `{e.path[0]}` must be a one-line scalar" for e in doc.entries
+                if len(e.path) == 1 and e.path[0] in ("apiVersion", "kind") and e.style not in SCALAR]
+    return out
+
+
 def _manifest_rules(root, path, text, docs):
     rel = path.relative_to(root)
     dirs = rel.parts[:-1]
     dir_ns = {d for d in dirs if APP_NS.fullmatch(d)}
+    vendored = dirs[1] if len(dirs) == 2 else None  # <root>/<cluster>/<dir>/<file>
     out = [f"line {n}: password in a URL: keep it in a SOPS Secret"
            for n in _credentials(text, docs if path.name.lower().endswith(".secret.yaml") else None)]
     if path.name in KUSTOMIZATIONS:
-        out += _kustomization(root, path, docs, not dir_ns and any(d in EXEMPT for d in dirs))
+        out += _kustomization(root, path, docs, vendored in EXEMPT)
     for doc in docs:
         top = {e.path[0]: e for e in doc.entries if len(e.path) == 1 and e.style in SCALAR}
         api = top.get("apiVersion")
-        if api and ".toolkit.fluxcd.io/" in api.text and (dir_ns or "flux-system" not in dirs):
-            out.append(f"line {api.line}: Flux objects live under flux-system")
+        if api and ".toolkit.fluxcd.io/" in api.text and vendored != "flux-system":
+            out.append(f"line {api.line}: Flux objects live under flux-system, directly in <cluster>/flux-system/")
         images = [e for e in doc.entries if e.path[-1:] == ("image",) and e.style in SCALAR]
         doc_ns = {e.text for e in doc.entries
                   if e.path[-1:] == ("namespace",) and e.style in SCALAR and APP_NS.fullmatch(e.text)}
@@ -434,6 +450,7 @@ def problems(root, manifests=True):
             continue
         errs, docs = scan(text)
         out += [(p, f"line {n}: {msg}") for n, msg in errs]
+        out += [(p, msg) for msg in _roots(docs)]
         if manifests:
             out += [(p, msg) for msg in _manifest_rules(root, p, text, docs)]
         else:

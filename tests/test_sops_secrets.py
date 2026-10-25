@@ -228,7 +228,7 @@ class SopsSecrets(unittest.TestCase):
             "tag": (SECRET_HEAD.replace("kind: Secret", "kind: !!str Secret") + pw, "YAML tag"),
             "escape": (SECRET_HEAD.replace("kind: Secret", 'kind: "Secr\\x65t"') + pw, "escape in a quoted `kind`"),
             "flow": ("{apiVersion: v1, kind: Secret, metadata: {name: s}, stringData: {pw: hunter2}}\n",
-                     "flow collection holds `kind`"),
+                     "flow collection holds `apiVersion`"),
             "list": ("apiVersion: v1\nkind: List\nitems:\n  - kind: Secret\n    apiVersion: v1\n"
                      "    stringData:\n      pw: hunter2\n", "kind List"),
             "block": (SECRET_HEAD.replace("kind: Secret", "kind: |-\n  Secret") + pw, "`kind` value must be a scalar"),

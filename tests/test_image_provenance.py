@@ -171,6 +171,33 @@ class CanonicalForm(unittest.TestCase):
                           "    - name: .*/backend\n      newName: registry.example/x\n"},
                          "Flux objects live under flux-system")
 
+    def test_api_version_and_kind_are_one_line_scalars(self):
+        # A Flux Kustomization whose apiVersion is a block scalar, outside flux-system.
+        flux = ("apiVersion: >-\n  kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: x\n"
+                "spec:\n  path: ./clusters/hetzner/tbd-staging\n  images:\n    - name: .*/backend\n"
+                "      newName: registry.example/x\n")
+        self.assertFails({"hetzner/data/sync.yaml": flux}, "`apiVersion` must be a one-line scalar")
+        self.assertFails({"hetzner/data/x.yaml": "apiVersion: v1\nkind:\n  x: Secret\n"},
+                         "`kind` must be a one-line scalar")
+
+    def test_document_root_is_a_block_mapping(self):
+        base = {"hetzner/tbd-prod/backend.yaml": deployment(ref(digest=""), "tbd-prod")}
+        r, log = run(base, {**base, "hetzner/tbd-prod/kustomization.yaml": "{resources: [backend.yaml, job.txt]}\n",
+                            "hetzner/tbd-prod/job.txt": "kind: Job\n"})
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("a document must be a block mapping", r.stderr)
+        self.assertEqual(log, "")
+        self.assertFails({"hetzner/data/x.yaml": "- kind: Secret\n"}, "a document must be a block mapping")
+
+    def test_vendored_exemption_is_only_directly_under_a_cluster(self):
+        patches = "resources:\n  - plans.yaml\npatches:\n  - path: p.yaml\n"
+        self.assertFails({"hetzner/data/system-upgrade/kustomization.yaml": patches,
+                          "hetzner/data/system-upgrade/plans.yaml": "kind: ConfigMap\n"},
+                         "kustomization key `patches` outside flux-system and system-upgrade")
+        self.assertFails({"hetzner/data/flux-system/source.yaml":
+                          "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: x\n"},
+                         "Flux objects live under flux-system")
+
     def test_override_in_a_vendored_dir_needs_a_digest(self):
         pinned = "images:\n  - name: rancher/system-upgrade-controller\n    newTag: v0.20.2\n"
         base = {"a.yaml": "other: 1"}
