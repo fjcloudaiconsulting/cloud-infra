@@ -18,8 +18,9 @@ manifest. Never print table contents or the grants file (it holds password hashe
 
 There are two targets:
 
-- **Drill:** throwaway servers in a scratch namespace (steps 1-5). Run it before any one-way door
-  that relies on the backups and after a backup format change.
+- **Drill:** throwaway servers in a scratch namespace (steps 1-5). Run it every quarter, before any one-way door
+  that relies on the backups and after a backup format change, then record it
+  ([runbooks.md](../../../docs/runbooks.md#restore-drill)).
 - **Real restore:** the `data` StatefulSet pod after its volume was lost (step 6).
 
 ## 1. Pick a set
@@ -352,6 +353,8 @@ Remove the drill (this deletes the restored data with it) and the manifest:
 ```bash
 kubectl delete namespace "$NS" && rm manifest.json
 ```
+
+Once both engines have passed, set the drill's date in [`docs/restore-drill.md`](../../../docs/restore-drill.md) in a PR.
 
 ## 6. Real restore into `data`
 
