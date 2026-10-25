@@ -641,7 +641,7 @@ the bootstrap token (Account API Tokens: Edit), the only token made by hand and 
 One Grafana Alloy DaemonSet in `observability` (INFRA-85, design in [architecture.md](architecture.md), Telemetry)
 sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s (one screen for all of it: dashboard **Platform overview**, `/d/platform-overview`, INFRA-199):
 
-- **Node:** CPU, memory, load, pressure, disk I/O, OOM kills (`job="node"`), from the host's `/proc` and `/sys` (recursive
+- **Node:** CPU, memory, load, pressure, disk I/O, OOM kills, boot time (`job="node"`), from the host's `/proc` and `/sys` (recursive
   read-only mounts; the host's `/` is not mounted).
 - **Pods and k3s:** per-container CPU, memory, throttling, OOM events and pod network from cAdvisor, plus the whole node
   (`id="/"`) and the k3s service (`id="/system.slice/k3s.service"`) (`job="cadvisor"`). Disk space is
@@ -724,6 +724,12 @@ uncordoned. Uncordon, and wait until `kubectl get deploy -A` shows every prod ba
 CoreDNS at 2/2, before draining the other app node. Draining it earlier still evicts every pod without a PDB (Flux, the
 scheduler, the worker, staging) and then times out on the PDB-covered ones, leaving it cordoned: uncordon it.
 Meanwhile `rollout status` times out and READY shows 1/2 for those Deployments; that is the cordon, not the release.
+
+**Reboot age.** Rule `NodeRebootOverdue` (group `node-reboot`, INFRA-219, applied as in [Memory alerts](#memory-alerts))
+mails the owner daily for each node that has run over 35 days since its last boot (`node_boot_time_seconds`): the
+monthly `reboot.yml` run is overdue. `reboot.yml` clears it once the node is back up. It skips a node without
+`/var/run/reboot-required`, whose alert then stays: silence `instance=<node>` until the next run, or rerun with
+`-e reboot_force=true` (every server, db-1 included).
 
 **Lost node** (NotReady, not planned):
 
@@ -842,6 +848,7 @@ passes through `read -rs` and curl's stdin, never its arguments:
 read -rs T; G=https://<stack>.grafana.net
 api() { printf 'Authorization: Bearer %s\n' "$T" | curl -sS --fail-with-body -H @- -H 'Content-Type: application/json' -X "$1" "$G$2" --data-binary "@$3" && echo; }
 api PUT /api/v1/provisioning/folder/platform/rule-groups/node-memory grafana/node-memory.rules.json
+api PUT /api/v1/provisioning/folder/platform/rule-groups/node-reboot grafana/node-reboot.rules.json
 api PUT /api/v1/provisioning/contact-points/owner-email grafana/contact-point.json
 api POST /api/dashboards/db grafana/node-memory.dashboard.json
 api POST /api/dashboards/db grafana/platform-overview.dashboard.json
