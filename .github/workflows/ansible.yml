@@ -19,9 +19,6 @@ jobs:
   ansible:
     name: Ansible checks
     runs-on: ubuntu-26.04
-    env:
-      ANSIBLE_CORE_VERSION: 2.21.5
-      ANSIBLE_LINT_VERSION: 26.9.0
     defaults:
       run:
         working-directory: ansible
@@ -29,11 +26,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ansible-core, ansible-lint and every dependency are pinned with the sha256 of each file PyPI has for them
+      # (requirements-ci.txt, GHA-09): pip installs nothing unlisted or unhashed. Wheels only, so no sdist build runs
+      # code or fetches unhashed build dependencies. pip still resolves the dependencies (no --no-deps), so a pin that
+      # no longer fits the others fails here instead of installing a broken set.
       - name: install ansible
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/ansible"
-          "$RUNNER_TEMP/ansible/bin/pip" install --quiet "ansible-core==$ANSIBLE_CORE_VERSION" "ansible-lint==$ANSIBLE_LINT_VERSION"
+          "$RUNNER_TEMP/ansible/bin/pip" install --quiet --require-hashes --only-binary :all: -r requirements-ci.txt
           echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
       - name: install pinned collections
         run: ansible-galaxy collection install -r requirements.yml

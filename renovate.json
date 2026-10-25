@@ -122,6 +122,34 @@
       "matchManagers": ["ansible-galaxy"],
       "matchPackageNames": ["https://github.com/k3s-io/k3s-ansible.git"],
       "enabled": false
+    },
+    {
+      "description": "Third-party images (GHA-09): a release, or a new digest for a re-pushed tag, is proposed 7 days after it was published, as for k3s, so a broken or withdrawn release is caught first. Org images are not delayed: staging follows releases at once (INFRA-36, INFRA-91). Version and digest updates only: Renovate cannot age pins or replacements (it would hold them for ever), and a digest pin only freezes what already runs.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["!ghcr.io/fjcloudaiconsulting/**"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Same wait for third-party GitHub Actions and reusable workflows (GHA-09); the org's own are not delayed. Runner labels and setup-* version inputs are not matched here.",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["action", "workflow"],
+      "matchPackageNames": ["!fjcloudaiconsulting/**"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Only Docker Hub gives Renovate release timestamps; without one Renovate holds the update for ever (minimumReleaseAgeBehaviour defaults to timestamp-required). mirror.gcr.io (cloudflared, INFRA-152) has none, so its updates go ahead unaged, with a warning on the Dependency Dashboard.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["mirror.gcr.io/**"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
+      "description": "Ansible CI tools (GHA-09): ansible/requirements-ci.txt pins ansible-core, ansible-lint and every dependency by hash, and Renovate rewrites the hashes with each bump. One grouped PR, so pins that depend on each other move together and the Ansible workflow installs them as a set, after the same 7-day wait. Renovate does not add a new dependency: when the install step says one is missing, regenerate the file with the command in its header.",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["ansible/requirements-ci.txt"],
+      "groupName": "ansible ci tools",
+      "minimumReleaseAge": "7 days"
     }
   ]
 }
