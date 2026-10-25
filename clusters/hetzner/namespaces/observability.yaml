@@ -7,3 +7,7 @@ metadata:
   name: observability
   labels:
     pod-security.kubernetes.io/enforce: privileged
+    # Report what goes beyond baseline (K8S-09): today only those hostPath mounts, so anything new stands out in the
+    # apply warnings.
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline

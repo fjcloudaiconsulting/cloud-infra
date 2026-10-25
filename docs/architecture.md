@@ -105,7 +105,7 @@ Three Hetzner CAX21 ARM64 servers in nbg1 run k3s HA (`terraform/hetzner`, host 
 | `observability` | Grafana Alloy (metrics to Grafana Cloud, INFRA-85) | none (request 128Mi, limit 256Mi) | Pod Security privileged (read-only hostPath for node metrics) |
 | `system-upgrade` | system-upgrade-controller and the two k3s upgrade Plans (INFRA-179) | none | Pod Security privileged (upgrade jobs run privileged with the host mounted) |
 
-The app namespaces enforce Pod Security restricted, `data` baseline. Every app namespace has a LimitRange with default memory limits, and its `default`
+The app namespaces, `data` and `flux-system` enforce Pod Security restricted. Every app namespace has a LimitRange with default memory limits, and its `default`
 ServiceAccount pulls from GHCR through `ghcr-pull`. Manifests:
 [`clusters/hetzner/namespaces/`](../clusters/hetzner/namespaces/).
 
