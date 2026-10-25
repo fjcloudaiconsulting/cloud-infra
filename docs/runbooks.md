@@ -12,6 +12,18 @@ runbook replays MySQL with `--binary-mode` and scans the Postgres files before `
 against commands a backup should never carry; custom-format dumps restored by a non-superuser role
 are planned to replace the scan (#272).
 
+## Restore drill
+
+Every quarter, and before any one-way door that relies on the backups or after a backup format change, run
+[`RESTORE.md`](../clusters/hetzner/data/RESTORE.md) steps 1-5 on its scratch namespace for a recent production set of
+each engine (`tbd-mysql`, `ziftbook-prod-postgres`). It passes when both restore and step 5's checks agree with the
+manifest. Keep the row counts out of git and the PR: they show how the data grows.
+
+After a successful drill, update the record in a PR: in [`docs/restore-drill.md`](restore-drill.md), set
+`last-successful-drill: YYYY-MM-DD` to the UTC date the drill finished, and change nothing else there. The weekly
+`restore-drill-probe.yml` keeps one `[restore-drill]` issue open while that line says `never` or is more than 100
+days old, and closes it when the PR merges. A failed drill is a backup fault: leave the date and fix the cause.
+
 ## Follow Flux and rollouts
 
 One GitRepository and one Kustomization, both named `flux-system`, apply all of `clusters/hetzner` from `main`.

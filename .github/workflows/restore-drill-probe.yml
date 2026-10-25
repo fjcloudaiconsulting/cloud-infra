@@ -1,0 +1,61 @@
+# Restore drill freshness (DATA-05, INFRA-214). The backup probe proves each night's set exists and is big enough;
+# only a restore drill proves a set restores. docs/restore-drill.md records the date of the last successful drill
+# (RESTORE.md steps 1-5); this opens or updates ONE issue while that is never or more than 100 days ago, and closes
+# it once a newer date merges. Logic: .github/scripts/check-restore-drill.py. Reads this repo only: no credentials,
+# and the issue carries no infrastructure names.
+name: Restore Drill Probe
+
+on:
+  schedule:
+    # Mondays 05:41 UTC: weekly is plenty for a 100-day limit. Odd minute, off the top of the hour.
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+  # The merge that records a drill closes the issue at once, and a change to the probe proves it still runs.
+  push:
+    branches: [main]
+    paths:
+      - docs/restore-drill.md
+      - .github/workflows/restore-drill-probe.yml
+      - .github/scripts/check-restore-drill.py
+
+concurrency:
+  group: restore-drill-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: read # each job sets its own
+
+jobs:
+  probe:
+    name: Restore drill freshness
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # checkout: the record and the script
+      issues: write # open, update or close the one [restore-drill] issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the drill record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 -I .github/scripts/check-restore-drill.py --issue docs/restore-drill.md
+
+  # GitHub disables scheduled workflows in a public repo after 60 days without repository activity, which would
+  # silence a 100-day signal before it fires. Re-enabling it on every run resets that (as backup-freshness-probe.yml
+  # does); its own job keeps actions: write away from the job that holds issues: write.
+  keepalive:
+    name: Keep the schedule alive
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # re-enable this workflow, nothing else
+    steps:
+      - name: Re-enable this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh api -X PUT "repos/${GH_REPO}/actions/workflows/restore-drill-probe.yml/enable"
