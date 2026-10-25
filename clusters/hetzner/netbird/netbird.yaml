@@ -19,6 +19,10 @@ metadata:
   labels:
     # hostNetwork is only allowed at privileged.
     pod-security.kubernetes.io/enforce: privileged
+    # Report what goes beyond baseline (K8S-09): today only hostNetwork, so anything new stands out in the apply
+    # warnings.
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
