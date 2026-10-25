@@ -9,6 +9,8 @@
 # the same value is in ziftbook-staging/ziftbook-worker-database.secret.yaml (staging's worker URL). Rotate the
 # two together (docs/runbooks.md "Ziftbook production secrets").
 # admin-password is read only at initdb: rotate it with ALTER ROLE postgres PASSWORD first.
+# bootstrap.sql runs in one transaction that ends with the same end-state check as postgres-bootstrap-prod.yaml (no
+# login of one environment can open the other's database): a run that fails it, or stops anywhere, changes nothing.
 # A Failed Job does not make the Flux Kustomization unready: check `kubectl -n data get job` after a change.
 apiVersion: batch/v1
 kind: Job
@@ -56,7 +58,40 @@ spec:
         - name: psql
           image: postgres:18.6@sha256:1267c7e692de235fda2a50dbcdbcbca4672ea6a0298576a6bd9d07cafc319b32
           # The server may still be starting (first boot runs initdb).
-          command: [sh, -c, 'until pg_isready -q; do sleep 2; done; exec psql -v ON_ERROR_STOP=1 -f /work/bootstrap.sql']
+          command:
+            - sh
+            - -c
+            - |
+              # Stop at the first failure: a failed step fails the Job.
+              set -e
+              until pg_isready -q; do sleep 2; done
+              exec psql -v ON_ERROR_STOP=1 <<'SQL'
+              \set ON_ERROR_STOP on
+              BEGIN;
+              \i /work/bootstrap.sql
+
+              -- The end state, checked before COMMIT; the same block ends both Jobs. No staging login can open
+              -- ziftbook_prod and no production login can open ziftbook, through any grant or membership: otherwise the
+              -- Job fails and the run changes nothing. A role or database not created yet is skipped. A named dollar
+              -- quote: Kubernetes turns a double dollar sign in a command into a single one.
+              DO $check$
+              DECLARE
+                crossed text;
+              BEGIN
+                SELECT string_agg(c.rol || ' on ' || c.db, ', ') INTO crossed
+                FROM (VALUES ('ziftbook_app', 'ziftbook_prod'), ('ziftbook_migrate', 'ziftbook_prod'),
+                             ('ziftbook_worker', 'ziftbook_prod'), ('ziftbook_prod_app', 'ziftbook'),
+                             ('ziftbook_prod_migrate', 'ziftbook'), ('ziftbook_prod_worker', 'ziftbook')) AS c (rol, db)
+                JOIN pg_roles r ON r.rolname = c.rol
+                JOIN pg_database d ON d.datname = c.db
+                WHERE has_database_privilege(r.oid, d.oid, 'CONNECT');
+                IF crossed IS NOT NULL THEN
+                  RAISE EXCEPTION 'CONNECT crosses environments: %', crossed;
+                END IF;
+              END
+              $check$;
+              COMMIT;
+              SQL
           env:
             - name: PGHOST
               value: postgres
