@@ -46,10 +46,17 @@ because any set written once the cluster was compromised may carry changes made 
 
 ```bash
 NS=restore-drill
+# The server images the data StatefulSets run (this file pins none, see below).
+img() { kubectl -n data get -o "jsonpath={.spec.template.spec.containers[?(@.name==\"$1\")].image}" statefulset "$1"; }
+# On a cluster without them, read the manifests in a checkout of main instead (REPO: its root):
+# img() { awk -v n="$1" '$1 == "image:" && index($2, n ":") == 1 { print $2; exit }' "$REPO/clusters/hetzner/data/$1.yaml"; }
+MYSQL_IMAGE=$(img mysql) PG_IMAGE=$(img postgres)
+printf '%s\n' "$MYSQL_IMAGE" "$PG_IMAGE"   # the versions this drill proves
 kubectl create namespace "$NS"
 kubectl label namespace "$NS" pod-security.kubernetes.io/enforce=baseline
 openssl rand -hex 24 | tr -d '\n' | kubectl -n "$NS" create secret generic root --from-file=password=/dev/stdin
-kubectl apply -n "$NS" -f - <<'EOF'
+# Unquoted EOF so the two images expand; `:?` refuses to create the pods if either is empty.
+kubectl apply -n "$NS" -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -65,7 +72,7 @@ metadata:
 spec:
   containers:
     - name: mysql
-      image: mysql:8.4.11@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+      image: "${MYSQL_IMAGE:?}"
       env:
         - name: MYSQL_ROOT_HOST
           value: localhost
@@ -81,7 +88,7 @@ metadata:
 spec:
   containers:
     - name: postgres
-      image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+      image: "${PG_IMAGE:?}"
       env:
         - name: POSTGRES_PASSWORD
           valueFrom: {secretKeyRef: {name: root, key: password}}
@@ -93,7 +100,10 @@ until kubectl -n "$NS" exec mysql -- mysqladmin ping -h127.0.0.1 --silent 2>/dev
 until kubectl -n "$NS" exec postgres -- pg_isready -qh 127.0.0.1 2>/dev/null; do sleep 5; done
 ```
 
-The images are the ones `mysql.yaml`, [`clusters/hetzner/data/db-backup.yaml`](../../hetzner/data/db-backup.yaml) and [`clusters/hetzner/data/postgres.yaml`](../../hetzner/data/postgres.yaml) pin. Renovate bumps those manifests, not this file: if they differ, use the image from the manifest.
+The drill replays into the server versions production runs: `img` reads them from the `data` StatefulSets, which
+Flux applies from [`mysql.yaml`](mysql.yaml) and [`postgres.yaml`](postgres.yaml). Renovate bumps those manifests
+(and the dump clients in [`db-backup.yaml`](db-backup.yaml)), never this file, so it pins no image and cannot drift
+from them; do not paste one in (`tests/test_restore_drill.py`).
 
 ## 3. Copy and check the files
 
