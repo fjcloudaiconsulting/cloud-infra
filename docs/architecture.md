@@ -127,6 +127,11 @@ and `tbd-staging` that hold a database URL (backend and scheduler, backend and M
 INFRA-181) the backend and worker of `ziftbook-staging` and `ziftbook-prod`, and the backup and bootstrap pods reach
 their databases inside `data`. Frontends are not admitted. A new workload that connects needs its `app` label in that
 policy; `tests/test_network_policies.py` derives the list from the manifests.
+Egress from `data` is deny-by-default too (K8S-06). The servers get no egress rule: they only answer, and look up no
+client names. The backup reaches cluster DNS, both servers and HTTPS on public addresses (S3); the Ziftbook bootstrap
+Jobs cluster DNS, Postgres and HTTPS on public addresses (the pinned `bootstrap.sql`). Nothing there reaches the node
+network, the Kubernetes API or instance metadata. A new pod in `data` has no network until it gets its own egress rule;
+`tests/test_data_egress.py` checks every pod template.
 Database auth and the NetBird ACL complete the controls.
 Manifests and comments: [`clusters/hetzner/data/`](../clusters/hetzner/data/).
 
