@@ -1115,12 +1115,13 @@ and bumped by hand with k3s minors: no Renovate manager sees it, so its patch re
 Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
 [`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
 updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
-(db-1)", which also shows what the mount guard does. For a tunnel hostname, see [Add a public hostname for an
+(db-1)", which also shows what the mount guard does. Who did what on the API: "API audit log" there (each server
+keeps its own log; it starts after a `-e k3s_reconfigure=true` run). For a tunnel hostname, see [Add a public hostname for an
 app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
+applying first; each entry must be a /24 or narrower). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
@@ -1214,16 +1215,18 @@ ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
 ```
 
-**6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
-`netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
+**6. kubeconfig over NetBird (owner).** The CA is `~/.kube/hetzner-ca.crt`, which the Ansible k3s play writes from
+the admin kubeconfig it fetches (it then deletes that kubeconfig: its `system:masters` client certificate cannot be
+revoked); the token is `netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
 file that the kubeconfig names as `tokenFile` (kubectl reads it on every call), so it never sits in a variable or
 argv. Renewing is that one `ssh` line again. The server is the peer's NetBird name; its certificate is the API
 server's, which names `kubernetes`, hence `--tls-server-name`.
 
 ```bash
 export KUBECONFIG=~/.kube/hetzner
-kubectl config view --raw --kubeconfig ~/.kube/fjc-hetzner.yaml -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > ~/.kube/hetzner-ca.crt && grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt   # 1
+# 1. Missing (the play fetches only when k3s rewrites its kubeconfig): the CA is public, read it over ssh:
+# ssh root@$N1 cat /var/lib/rancher/k3s/server/tls/server-ca.crt > ~/.kube/hetzner-ca.crt
+grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt
 kubectl config set-cluster hetzner --server=https://hetzner-k3s.netbird.cloud:6443 --tls-server-name=kubernetes \
   --certificate-authority="$HOME/.kube/hetzner-ca.crt" --embed-certs
 (umask 077; ssh root@$N1 k3s kubectl -n netbird create token owner-admin --duration=2160h > ~/.kube/hetzner-token)

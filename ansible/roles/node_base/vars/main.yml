@@ -1,0 +1,4 @@
+---
+# One OpenSSH public key per entry: ed25519, or ed25519 on a FIDO2 token (sk-), whose base64 blob must name the same
+# type, then an optional comment. No options and no second line.
+node_base_ssh_key_pattern: '^(ssh-ed25519 AAAAC3NzaC1lZDI1NTE5|sk-ssh-ed25519@openssh\.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29t)[A-Za-z0-9+/]+={0,2}( [^\r\n]*)?$'  # yamllint disable-line rule:line-length
