@@ -19,7 +19,7 @@ in the same PR or right after.
 | Release job is green but `promote` and `smoke` are skipped, no tag | `main` moved on after the release PR merged ("main is at X; skipping"). Expected | The newer main run | Nothing, the newest commit's run releases it. If the newest run also skipped or failed, re-run it |
 | No release PR after a merge | Only `feat`, `fix`, `perf`, `revert` and breaking commits release (Renovate's `fix(deps):` does); `chore`, `ci`, `docs`, `build`, `test`, `refactor`, `style` do not. Or the release job failed | Run of the merge commit, job `Release / release` (`publish` in `.github`) | Fix the job; a `chore` merge alone never opens one |
 | Staging image bump sits on a `renovate/ziftbook-staging-*` or `renovate/tbd-staging-*` branch and never merges, or shows up as a PR | Renovate lost its branch-automerge permission (owner private ops notes), or CI did not run on the branch | [Rulesets](#branch-protection), `ci.yml` push filter | Restore the permission per the private notes. CI must report `Terraform checks` and `Kubernetes checks` on the branch |
-| No app image bumps, Dependency Dashboard lists `ghcr.io` lookup failures (other dependencies still get PRs) | `GHCR_READ_TOKEN` (Mend org secret) expired or revoked | [Mend Renovate](#mend-renovate) | New classic PAT with only `read:packages`, owned by the owner's GitHub user (the username is fixed in `renovate.json` hostRules); replace the Mend secret, tick "run again" on the dashboard |
+| No app image bumps, Dependency Dashboard lists `ghcr.io` lookup failures (other dependencies still get PRs) | `GHCR_RENOVATE_TOKEN` (Mend org secret) expired or revoked; or the machine user `fjc-renovate-reader` left the org, or the org's base repository permission dropped below Read (it reads the packages through it) | [Mend Renovate](#mend-renovate), [Org members](#org-members) | New classic PAT with only `read:packages`, signed in as `fjc-renovate-reader` (the username is fixed in `renovate.json` hostRules); replace the Mend secret, tick "run again" on the dashboard |
 | `ImagePullBackOff` in `ziftbook-prod`, `ziftbook-staging`, `tbd-staging` or `tbd-prod` | The `ghcr-pull` credential expired or was revoked | `clusters/*/namespaces/*-ghcr-pull.secret.yaml` | Re-encrypt a new GHCR read credential into every file (see [Cluster](#cluster-out-of-band-material)) |
 | Hetzner: `cloudflared` pods in `CreateContainerConfigError`, tunnel `hetzner-k3s` DOWN | Secret `cloudflared/cloudflared-token` missing, or the tunnel was replaced (new token) | `kubectl -n cloudflared describe pod`, Zero Trust > Networks > Tunnels | [Bootstrap runbook](runbooks.md#hetzner-cluster-bootstrap) step 3, merge, restart the Deployment |
 | db-1: `mysql-0`/`postgres-0` Pending or db-1 NotReady; on db-1 `systemctl status k3s` names `var-lib-rancher-k3s-storage.mount`, or db-1 boots into emergency mode | The Hetzner volume `fjc-db` is detached or missing. The mount guard keeps k3s down so the databases never start on empty data dirs on the root disk | `findmnt /var/lib/rancher/k3s/storage` on db-1, Hetzner console > Volumes | Re-attach `fjc-db` (automount off). From emergency mode, power cycle db-1: fstab mounts it and k3s starts. On a running db-1, `mount -a` and `systemctl start k3s` ([`ansible/README.md`](../ansible/README.md) "Volume-missing drill (db-1)" step 6) |
@@ -80,7 +80,7 @@ release a prerelease keeps it out of the drift watch below.
 | 3 | release-please opens or updates the release PR | Release App token, environment `release`, secrets `RELEASE_APP_ID` and `RELEASE_APP_PRIVATE_KEY` |
 | 4 | Owner merges the release PR; the release job creates the tag and GitHub release at the release commit | App permission **Workflows: write** |
 | 5 | `promote` retags the `sha-` image as `vX.Y.Z` (same digest, never rebuilt); `smoke` runs | `sha-` image still on GHCR, `promote-release@v1` |
-| 6 | Renovate in cloud-infra sees the new tag and pushes `renovate/ziftbook-staging-ziftbook-images` | `GHCR_READ_TOKEN`, regex versioning in `renovate.json` |
+| 6 | Renovate in cloud-infra sees the new tag and pushes `renovate/ziftbook-staging-ziftbook-images` | `GHCR_RENOVATE_TOKEN`, regex versioning in `renovate.json` |
 | 7 | CI runs on that branch push | `ci.yml` `push` filter `renovate/ziftbook-staging-**` |
 | 8 | Renovate fast-forwards the branch into `main` without a PR | Renovate's branch-automerge permission (owner private ops notes); the pushed commit must already have both checks green |
 | 9 | Flux applies the commit; Deployments use `Recreate` | `sops-age`, `ghcr-pull` |
@@ -106,6 +106,13 @@ Workflow `ghcr-retention.yml` (weekly, Monday 05:41 UTC, plus manual dispatch) p
 The step summary and logs are public.
 
 Symptoms: run red with `DELETE ... HTTP 403` = the Admin grant is missing for that package, or (403/429 after many deletes) the GITHUB_TOKEN rate limit: rerun later, the outermost-first order keeps a partial run safe; red with `version_count ... does not match` = versions changed while listing, rerun; red with `pinned digest ... is not in the listing` = `clusters/` pins an image GHCR no longer has (a real outage risk, fix the pin first).
+
+### Org members
+
+| Member | Role | Notes |
+|---|---|---|
+| `flamarion`, `fjcloudai` | owner | The owner's accounts |
+| `fjc-renovate-reader` | member, no team | Machine user (INFRA-253). Its only token is `GHCR_RENOVATE_TOKEN` ([Mend Renovate](#mend-renovate)). It reads the private packages through the org's base repository permission (Read), which each package inherits from its linked repo. Lowering the base permission below Read cuts Renovate off from `ghcr.io`; grant it Read on each package first |
 
 ### Branch protection
 
@@ -184,7 +191,7 @@ tbd and ziftbook have no repo-level Dependabot secrets; tbd's environment `copil
 | ziftbook | env `landing` (main only) | secret `CLOUDFLARE_API_TOKEN` | `landing.yml` | pipeline; token `ziftbook-landing deploy`, adopted by workspace `cloudflare-tokens` (INFRA-133 import), value set by hand when the token was made | stays |
 | fjconsulting-website | repo | secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `deploy.yml`, `deploy-dev.yml` | pipeline; token `fjconsulting-website-github-actions` (its HCP workspace uses `fjconsulting-website-terraform-cloud`), both adopted by `cloudflare-tokens` (INFRA-133 import), scopes changed only there | stays |
 
-`GHCR_READ_TOKEN` is a Mend org secret, not a GitHub one (see [Mend Renovate](#mend-renovate)). No app
+`GHCR_RENOVATE_TOKEN` is a Mend org secret, not a GitHub one (see [Mend Renovate](#mend-renovate)). No app
 runtime value is left in GitHub. A new repo in the org gets its rows here.
 
 ## Mend Renovate
@@ -192,18 +199,21 @@ runtime value is left in GitHub. A new repo in the org gets its rows here.
 Hosted Mend app, Free plan, repos selected in
 the Mend installation settings of the org.
 
-- **`GHCR_READ_TOKEN`**: Mend org secret, a classic PAT with only `read:packages`, 90-day expiry, created
-  2026-10-02 (expires around 2026-12-31). cloud-infra's `renovate.json` reads it as
-  `{{ secrets.GHCR_READ_TOKEN }}`; Mend rejects encrypted secrets in repo config. Rotation: new token,
-  replace the Mend secret.
+- **`GHCR_RENOVATE_TOKEN`**: Mend org secret, a classic PAT with only `read:packages`, 90-day expiry, of
+  the machine user `fjc-renovate-reader` (INFRA-253). That user belongs to this org only, so the token
+  reads no private package outside it, and it has no scope that reads code. cloud-infra's
+  `renovate.json` reads it as `{{ secrets.GHCR_RENOVATE_TOKEN }}` with that username; Mend rejects
+  encrypted secrets in repo config. Rotation: sign in as `fjc-renovate-reader`, new token, replace the
+  Mend secret. Changing the identity: add the new Mend secret first, then merge the `renovate.json`
+  change; a secret the config names but Mend lacks stops Renovate for the repo.
 - cloud-infra rules in `renovate.json`: database majors never proposed (data dirs upgrade by hand after a
   fresh dump); `ghcr.io/fjcloudaiconsulting/**` tracks `vX.Y.Z` only, no digest pin, production bumps stay
   PRs; manifests under `clusters/**/ziftbook-staging/**` bump in one grouped branch and automerge by
   branch. `clusters/**/tbd-staging/**` the same way (INFRA-91, group `tbd staging images`, branch prefix
   `tbd-staging-`; the MCP image moves in the same group, INFRA-147); `tbd-prod` is one grouped PR (backend, migrations, frontend, scheduler if present), no automerge.
 - Each repo has a Dependency Dashboard issue; ticking "run again" there forces a run.
-- App repos (tbd, ziftbook) add repo-level rules in their own `renovate.json` (tbd#833, ziftbook#180), not in the shared preset: there they would also bundle cloud-infra's platform image bumps into one docker group and put staging app-image majors behind dashboard approval, breaking the ziftbook-staging automerge. Rules: non-major updates grouped per ecosystem, FastAPI and uvicorn standalone, OpenTelemetry in its own group, npm updates wait 1 day (pnpm 12's default release age), majors and runtime upgrades only on Dependency Dashboard approval, datastore image majors off. tbd needs no `GHCR_READ_TOKEN`: it references no private `ghcr.io` image.
-- Local dry run (check a config without waiting for Mend): Node 24, then `renovate --platform=local --dry-run=full` with `GITHUB_COM_TOKEN`, `RENOVATE_TOKEN` and `RENOVATE_SECRETS='{"GHCR_READ_TOKEN":"..."}'` in the environment. The local platform reads only committed files, and `local>` presets do not resolve there. `LOG_LEVEL=debug LOG_FORMAT=json` prints a `packageFiles with updates` record with each update's branch; it does not render the dashboard, so approval gates show only on the first Mend run.
+- App repos (tbd, ziftbook) add repo-level rules in their own `renovate.json` (tbd#833, ziftbook#180), not in the shared preset: there they would also bundle cloud-infra's platform image bumps into one docker group and put staging app-image majors behind dashboard approval, breaking the ziftbook-staging automerge. Rules: non-major updates grouped per ecosystem, FastAPI and uvicorn standalone, OpenTelemetry in its own group, npm updates wait 1 day (pnpm 12's default release age), majors and runtime upgrades only on Dependency Dashboard approval, datastore image majors off. tbd needs no `GHCR_RENOVATE_TOKEN`: it references no private `ghcr.io` image.
+- Local dry run (check a config without waiting for Mend): Node 24, then `renovate --platform=local --dry-run=full` with `GITHUB_COM_TOKEN`, `RENOVATE_TOKEN` and `RENOVATE_SECRETS='{"GHCR_RENOVATE_TOKEN":"..."}'` in the environment. The local platform reads only committed files, and `local>` presets do not resolve there. `LOG_LEVEL=debug LOG_FORMAT=json` prints a `packageFiles with updates` record with each update's branch; it does not render the dashboard, so approval gates show only on the first Mend run.
 
 ## HCP Terraform
 
@@ -344,7 +354,7 @@ commit body only.
 
 | What | When | Rotation |
 |---|---|---|
-| `GHCR_READ_TOKEN` (Mend) | about 2026-12-31 | Mend section |
+| `GHCR_RENOVATE_TOKEN` (Mend) | 90 days from the mint | Mend section |
 | `ghcr-pull` credentials | with their token | Cluster section |
 | NetBird `owner-admin` token | 90 days from the mint | [Bootstrap runbook](runbooks.md#hetzner-cluster-bootstrap) step 6 |
 | `k3s-backup-uploader` access key | no expiry, rotate on suspicion | Cluster section |

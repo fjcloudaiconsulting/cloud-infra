@@ -59,6 +59,6 @@ if [[ -z "$drift" ]]; then
   exit 0
 fi
 printf '%s' "$drift"
-body="$(printf 'Newer releases not in `clusters/` for at least %s days. Merge the Renovate bump PR, or check the Dependency Dashboard and `GHCR_READ_TOKEN` if there is none (docs/configuration-map.md).\n\n%s\nRun: %s' "$GRACE_DAYS" "$drift" "$RUN_URL")"
+body="$(printf 'Newer releases not in `clusters/` for at least %s days. Merge the Renovate bump PR, or check the Dependency Dashboard and `GHCR_RENOVATE_TOKEN` if there is none (docs/configuration-map.md).\n\n%s\nRun: %s' "$GRACE_DAYS" "$drift" "$RUN_URL")"
 if [[ -n "$existing" ]]; then gh issue edit "$existing" --body "$body"
 else gh issue create --title "$title" --body "$body"; fi
