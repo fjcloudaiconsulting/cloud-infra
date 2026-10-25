@@ -26,9 +26,19 @@
         "kms:DescribeKey",
         "kms:GetKeyPolicy",
         "kms:GetKeyRotationStatus",
-        "kms:ListAliases",
         "kms:ListResourceTags"
       ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/component": "mysql-offhost-backup"
+        }
+      }
+    },
+    {
+      "Sid": "ListKeyAliasesTakesNoResource",
+      "Effect": "Allow",
+      "Action": "kms:ListAliases",
       "Resource": "*"
     },
     {
@@ -38,12 +48,22 @@
         "iam:Get*",
         "iam:List*"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:iam::884686184019:user/k3s-backup-uploader",
+        "arn:aws:iam::884686184019:role/github-actions-backup-probe",
+        "arn:aws:iam::884686184019:role/tfc-backups-provisioner",
+        "arn:aws:iam::884686184019:role/tfc-backups-plan",
+        "arn:aws:iam::884686184019:oidc-provider/app.terraform.io",
+        "arn:aws:iam::884686184019:oidc-provider/token.actions.githubusercontent.com"
+      ]
     },
     {
       "Sid": "ReadOwnIdentity",
       "Effect": "Allow",
-      "Action": "sts:GetCallerIdentity",
+      "Action": [
+        "sts:GetCallerIdentity",
+        "iam:ListOpenIDConnectProviders"
+      ],
       "Resource": "*"
     },
     {
