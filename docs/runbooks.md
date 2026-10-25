@@ -1059,7 +1059,9 @@ backoff limit is 99 and finished jobs live 900 s (`SYSTEM_UPGRADE_JOB_BACKOFF_LI
 hours; `k3s-app` has a 1800 s deadline.
 
 A roll happens only on a version change (or when a node's `plan.upgrade.cattle.io/<plan>` label is removed). Editing a
-Plan's prepare script or drain flags does not re-run anything: the edit applies to the next roll.
+Plan's prepare script, drain flags or images does not re-run anything: the Plan hash covers only the version, the
+service account and Secrets, and the edit applies to the next roll. Merge such an edit while both Plans are complete
+(`kubectl -n system-upgrade get plans`): during a roll the controller replaces the running job with the edited one.
 
 **Before merging**
 1. Every node Ready and nothing cordoned: `kubectl get nodes -L role`. No `ansible/reboot.yml` run in progress.
@@ -1104,9 +1106,13 @@ change in the same PR the k3s-ansible pin (`ansible/requirements.yml`) and the k
 `system-upgrade/kustomization.yaml` (it must stay within one minor of the server). A rebuilt node installs
 `k3s_version` and is upgraded on join.
 
-**Supply chain.** `rancher/k3s-upgrade` is a mutable Docker Hub tag, pulled per version and run privileged as host
-root; a digest pin is impossible by design (the controller appends the tag), and the 7-day release age is the
-mitigation. The controller image is pinned by digest in `system-upgrade/kustomization.yaml`; a new controller tag
+**Supply chain.** The Plans run `rancher/k3s-upgrade` privileged as host root, so every `prepare` and `upgrade` image is
+pinned as `rancher/k3s-upgrade:<version with - for +>@sha256:<multi-arch index digest>` (K8S-02). The controller
+appends the version only to an untagged image; a tagged one runs as written. Renovate moves the tag and digest of all
+four lines with `version` in the k3s PR, under the same 7-day release age and minor approval, and never proposes a
+digest-only change, so a tag pushed again is not followed. `tests/test_upgrade_image_pins.py` fails a PR whose images
+and `version` disagree. To set one by hand: `docker buildx imagetools inspect rancher/k3s-upgrade:<tag>`, the top
+`Digest:` line. The controller image is pinned by digest in `system-upgrade/kustomization.yaml`; a new controller tag
 means re-vendoring `crd.yaml` and `system-upgrade-controller.yaml` by hand. `rancher/kubectl` in that file is tag-only
 and bumped by hand with k3s minors: no Renovate manager sees it, so its patch releases are not tracked.
 

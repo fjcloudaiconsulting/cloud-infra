@@ -1,5 +1,8 @@
 # k3s upgrades (INFRA-179, runbook "Upgrade k3s"). Both Plans share the version; Renovate bumps it together with
-# k3s_version in ansible/group_vars/all.yml. `upgrade.image` has no tag on purpose: the controller appends the version.
+# k3s_version in ansible/group_vars/all.yml and, in the same k3s PR, the tag and digest of the four images below.
+# The images run privileged with the host root mounted, so they are pinned to the multi-arch index digest; the tag is
+# the version with - for + (K8S-02). The controller appends the version only to an untagged image and runs a tagged one
+# as written. The images are not in the Plan hash: changing only them re-runs nothing (they apply to the next roll).
 # One server at a time, app nodes first, db-1 last (its prepare waits for the app Plan).
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
@@ -28,7 +31,7 @@ spec:
     deleteEmptydirData: true
     timeout: "10m"
   prepare:
-    image: rancher/k3s-upgrade
+    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
     command: [sh, -c]
     args:
       - |
@@ -45,7 +48,7 @@ spec:
           exit 1
         fi
   upgrade:
-    image: rancher/k3s-upgrade
+    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
 ---
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
@@ -76,7 +79,7 @@ spec:
   # KillMode=process, so the containers survive the k3s restart.
   cordon: true
   prepare:
-    image: rancher/k3s-upgrade
+    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
     command: [sh, -c]
     args:
       - |
@@ -109,4 +112,4 @@ spec:
           exit 1
         fi
   upgrade:
-    image: rancher/k3s-upgrade
+    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
