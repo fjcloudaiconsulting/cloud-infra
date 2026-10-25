@@ -120,6 +120,7 @@ TITLE = "[backup-stale] off-host database backup is not fresh"
 BOT = "app/github-actions"
 GH_STUB = """#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
+for ((i = 1; i < $#; i++)); do j=$((i + 1)); [[ "${!i}" == --body ]] && printf '%s' "${!j}" > "$GH_BODY"; done
 if [[ "$1 $2" == "issue list" ]]; then
   # ISSUES: author<TAB>number<TAB>title lines; honour --author like gh, emit number<TAB>title like the --jq.
   # Like real gh: no --search means no results (author filter needs it); --jq without @tsv/.title prints numbers only.
@@ -132,7 +133,7 @@ fi
 """
 
 
-def notify(issues):
+def notify(issues, detail="x", body=False):
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
         (d / "bin").mkdir()
@@ -142,9 +143,22 @@ def notify(issues):
         r = subprocess.run(
             ["bash", str(NOTIFY)], capture_output=True, text=True, cwd=d,
             env={**os.environ, "PATH": f"{d/'bin'}:{os.environ['PATH']}", "GH_LOG": str(d / "log"), "GH_REPO": "o/r",
-                 "RUN_ID": "1", "VERDICT": "stale", "DETAIL": "x", "ISSUES": issues},
+                 "GH_BODY": str(d / "body"), "RUN_ID": "1", "VERDICT": "stale", "DETAIL": detail, "ISSUES": issues},
         )
-        return r, (d / "log").read_text()
+        return r, (d / "body").read_text() if body else (d / "log").read_text()
+
+
+def fenced(body):
+    """The content of the first fenced code block in body, closed the way CommonMark closes it."""
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        m = re.fullmatch(r" {0,3}(`{3,})", line)
+        if m:
+            for j in range(i + 1, len(lines)):
+                if re.fullmatch(r" {0,3}`{%d,}[ \t]*" % len(m.group(1)), lines[j]):
+                    return "\n".join(lines[i + 1:j])
+            return "\n".join(lines[i + 1:])
+    return None
 
 
 class NotifyOwnIssueOnly(unittest.TestCase):
@@ -160,6 +174,18 @@ class NotifyOwnIssueOnly(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("issue create", log)
         self.assertNotIn("issue comment 9", log)
+
+    def test_detail_stays_inside_its_code_block(self):
+        # GHA-07: S3 key names land in a public issue; a key holding a fence line must not end the block early.
+        detail = ("tbd-mysql/2026/10/24/tbd_x.sql.gz\n```\n@someone [link](https://example.invalid) <b>x</b>\n"
+                  "`````\n~~~\nend")
+        for issues in ("", f"{BOT}\t7\t{TITLE}\n"):  # new issue and comment
+            with self.subTest(existing=bool(issues)):
+                r, body = notify(issues, detail, body=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(fenced(body), detail)
+        r, body = notify("", "tbd-mysql/2026/10/24 stale", body=True)
+        self.assertIn("\n```\ntbd-mysql/2026/10/24 stale\n```\n", body)  # plain detail, plain fence
 
     def test_bot_issue_with_a_longer_title_is_not_matched(self):
         r, log = notify(f"{BOT}\t9\t{TITLE} (copy)\n")

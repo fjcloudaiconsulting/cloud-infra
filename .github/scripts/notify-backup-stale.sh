@@ -15,15 +15,20 @@ set -euo pipefail
 TITLE_PREFIX="[backup-stale]"
 TITLE="${TITLE_PREFIX} off-host database backup is not fresh"
 RUN_URL="https://github.com/${GH_REPO}/actions/runs/${RUN_ID}"
+# DETAIL echoes S3 key names, which may hold any character. A Markdown code fence closes only on a line of at least as
+# many backticks as it opened with, so open one longer than any backtick run in DETAIL: the detail stays verbatim and
+# nothing in it renders (GHA-07).
+FENCE='```'
+while [[ "$DETAIL" == *"$FENCE"* ]]; do FENCE+='`'; done
 
 BODY="$(cat <<BODY_EOF
 The scheduled backup freshness probe did not find a healthy off-host backup.
 
 **Verdict:** \`${VERDICT}\`
 
-\`\`\`
+${FENCE}
 ${DETAIL}
-\`\`\`
+${FENCE}
 
 Probe run: ${RUN_URL}
 
