@@ -121,7 +121,8 @@ spec:
                   key: database-url
             # Service photos in R2 (ZIF-133, docs/runbooks.md "R2 for Ziftbook photos"). EU buckets answer only on the .eu
             # endpoint. The env's own R2 token is in Secret ziftbook-storage; optional: uploads answer 503 until it exists.
-            # ZIF_S3_UPLOADS_BUCKET is left out on purpose until ziftbook 0.31.0 (ZIF-214): photo uploads answer 503.
+            - name: ZIF_S3_UPLOADS_BUCKET
+              value: ziftbook-uploads-prod
             - name: ZIF_S3_MEDIA_BUCKET
               value: ziftbook-media-prod
             - name: ZIF_MEDIA_URL
