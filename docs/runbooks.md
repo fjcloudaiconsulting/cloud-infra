@@ -1125,6 +1125,21 @@ applying first). With SSH gone too, use the Hetzner Cloud Console, your project 
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
 
+**Changing the NetBird pod** (`clusters/hetzner/netbird/netbird.yaml`): it is the kubectl path itself, so merge with
+break-glass ready. Within about 10 minutes Flux recreates the pod on the same node (its volume pins it); kubectl over
+NetBird drops until the peer reconnects with the identity on its volume (no setup key is needed). Check over SSH, then
+over NetBird:
+
+```bash
+ssh root@<public IPv4> k3s kubectl -n netbird get pods -o wide   # 1/1 Running, RESTARTS 0
+ssh root@<public IPv4> k3s kubectl -n netbird logs deploy/netbird --since=10m | grep -iE 'read-only file system|permission denied'   # nothing
+kubectl get nodes   # from your device: 3 Ready; the NetBird dashboard shows hetzner-k3s connected
+```
+
+A crash loop or either error means the client writes outside its two mounts (the state volume and `/tmp`):
+`git revert` the merge commit and merge the revert; Flux restores the previous pod within its interval, and SSH
+carries kubectl until then.
+
 ## Hetzner cluster bootstrap
 
 One time, for the new cluster (INFRA-171, epic INFRA-164): `clusters/hetzner/` is its Flux path (final, never moved),

@@ -63,6 +63,8 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: netbird
           image: netbirdio/netbird:0.81.3-rootless@sha256:6ecdc46761656f2e724dd3daffed6bf48c2ea55fe5446c940e81295af188b3f9
@@ -78,6 +80,11 @@ spec:
                 name: netbird-setup-key
           securityContext:
             allowPrivilegeEscalation: false
+            # The client writes only to the state volume (config, state, daemon socket and, as the image user's home,
+            # the CLI's ~/.config) and to /tmp (debug bundles and captures, on request), per upstream's
+            # client/Dockerfile-rootless and client source at this tag (K8S-08). On an image bump, re-check that
+            # Dockerfile's ENV paths: a write anywhere else now fails.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
           resources:
@@ -89,10 +96,14 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /var/lib/netbird
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: state
           persistentVolumeClaim:
             claimName: netbird-state
+        - name: tmp
+          emptyDir: {}
 ---
 # The owner's kubectl identity (tokens via `kubectl create token`). Revoke every token by
 # deleting the account (Flux recreates it). Anyone who can create pods or tokens in this
