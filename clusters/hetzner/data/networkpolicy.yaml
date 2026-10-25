@@ -1,6 +1,10 @@
 # Ingress to `data` is deny-by-default; egress stays open (bootstrap fetches from GitHub, backups go to S3).
 # kube-router accepts anything from the node itself first (kubelet probes, but also hostNetwork pods
 # such as netbird and host processes), so that path is guarded by DB auth and the NetBird ACL, not here.
+# From the app namespaces only the pods that hold a database URL are admitted, by `app` label: the migrate init
+# containers run inside the backend and worker pods, and the frontends hold none. A new pod that connects (tbd's DB-04
+# exporter, for one) needs its label here, or must run inside an admitted pod; tests/test_network_policies.py derives
+# the list from the manifests and fails until this file follows.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,13 +26,24 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
+        # The API (and its migrate init container) and the scheduler.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: tbd-prod
-        # TBD staging (INFRA-67): its own database and user, no grant outside tbd_staging.
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [backend, scheduler]
+        # TBD staging (INFRA-67): its own database and user, no grant outside tbd_staging. The API and MCP.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: tbd-staging
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [backend, mcp]
         # INFRA-30 dump job.
         - podSelector:
             matchLabels:
@@ -48,12 +63,23 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
+        # The API and the worker, each with its migrate init container.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ziftbook-staging
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [backend, worker]
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ziftbook-prod
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [backend, worker]
         # INFRA-30 dump job.
         - podSelector:
             matchLabels:
