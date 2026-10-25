@@ -28,6 +28,17 @@
   ],
   "packageRules": [
     {
+      "description": "Terraform providers and the CLI (INFRA-226): every PR plan runs with that workspace's write credentials, so a malicious release would run on the next Renovate cycle. Wait 7 days after a release before proposing it.",
+      "matchManagers": ["terraform"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Same gate for the Terraform CLI pin in ci.yml (setup-terraform `terraform_version`, depName `terraform` in the github-actions manager), so the group never moves CI ahead of required_version.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": ["terraform"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "description": "Workspace cloudflare-tokens plans every PR with the bootstrap token, which can mint any Cloudflare token (INFRA-133): no provider bump branch, and so no plan, until the owner ticks it on the dashboard.",
       "matchFileNames": ["terraform/cloudflare-tokens/**"],
       "additionalBranchPrefix": "cloudflare-tokens-",
