@@ -264,7 +264,7 @@ spec:
                   mountPath: /scripts
           containers:
             - name: upload
-              image: amazon/aws-cli:2.38.2@sha256:5d39fd52f236ed01c5c25fba66c9aebcfc6cbb88e7bb1b727c5fe1f150540597
+              image: amazon/aws-cli:2.39.3@sha256:d557b3524475d70dd3104cf44d96568ee3188897b73a6ece2b37aa50e1af362f
               command: [bash, /scripts/upload.sh]
               env:
                 - name: HOME
