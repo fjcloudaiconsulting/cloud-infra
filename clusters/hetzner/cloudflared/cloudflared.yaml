@@ -51,7 +51,7 @@ spec:
       containers:
         - name: cloudflared
           # Docker Hub's cloudflare/cloudflared through Google's pull-through mirror (same digest; INFRA-152).
-          image: mirror.gcr.io/cloudflare/cloudflared:2026.10.2@sha256:0e56c13c7058fcef9c4f0e7d83372f82330548dbf8f8b366f3d8b506526d93b2
+          image: mirror.gcr.io/cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
           # The image's entrypoint is `cloudflared --no-autoupdate`; `tunnel run` reads the token from TUNNEL_TOKEN.
           args: [tunnel, --no-autoupdate, --metrics, 0.0.0.0:2000, run]
           env:
