@@ -725,8 +725,10 @@ class LockFilesAndVersions(unittest.TestCase):
     def test_single_platform_lock_fails(self):
         hetzner = (TERRAFORM / "hetzner/.terraform.lock.hcl").read_text()
         first, *rest = re.findall(r'\s*"h1:[^"]+",', hetzner)
-        self.assertTrue(rest, "fixture needs the hetzner lock with two h1: hashes")
-        one = hetzner.replace(rest[0], "")
+        self.assertTrue(rest, "fixture needs the hetzner lock with two or more h1: hashes")
+        one = hetzner
+        for h in rest:  # Renovate records one h1: per platform (13 for hcloud), terraform providers lock two
+            one = one.replace(h, "", 1)
         self.assertIn("has 1 h1: hash(es)", "".join(lock_problems("hetzner", one)))
         # fence: no stack or version is exempt, including the cloudflare-tokens entries that once were (INFRA-248).
         lock = 'provider "registry.terraform.io/hashicorp/tfe" {\n  version     = "%s"\n  hashes = [\n' \
