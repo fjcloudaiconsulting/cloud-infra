@@ -67,7 +67,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: netbird
-          image: netbirdio/netbird:0.81.3-rootless@sha256:6ecdc46761656f2e724dd3daffed6bf48c2ea55fe5446c940e81295af188b3f9
+          image: netbirdio/netbird:0.81.4-rootless@sha256:75127ab9bdd13c59006a4c1b1c3a9521f858c9bdab083508ec17632b7f2e40a1
           env:
             - name: NB_HOSTNAME
               value: hetzner-k3s
