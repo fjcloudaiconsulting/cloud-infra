@@ -11,14 +11,16 @@
 # share the host, so one login cookie covers both.
 #
 # MCP OAuth bypass (INFRA-147, owner ruling 2026-10-09): an MCP client cannot pass the email PIN, so the paths it calls
-# without a browser are open: /mcp, the two OAuth discovery documents and /api/v1/oauth/* (register, token, and the
-# consent endpoints the page calls). An application path covers its subpaths, so
-# /.well-known/oauth-protected-resource/mcp is included (and /mcp/x reaches the frontend's 404 without a login).
-# The consent page /oauth/authorize is NOT bypassed: it is opened in a browser, and every page first calls
-# /api/v1/auth/status (the root layout's AuthProvider), which stays behind Access. Bypassed, a browser without an Access
-# session would get a page whose auth calls fail on the cross-origin Access redirect and never see the PIN prompt; kept
-# behind Access, the browser gets the PIN prompt first and the page then works. For the same reason /_next/static/* is
-# not bypassed either: the page cannot work without an Access session, so its assets need no bypass.
+# without a browser are open: /mcp, the two OAuth discovery documents, and exactly the two OAuth endpoints it calls
+# itself, /api/v1/oauth/register and /api/v1/oauth/token (EDGE-06; tbd has no revoke, introspection or userinfo
+# endpoint). An application path covers its subpaths, so /.well-known/oauth-protected-resource/mcp is included (and
+# /mcp/x reaches the frontend's 404 without a login). The consent endpoints /api/v1/oauth/authorize and
+# /api/v1/oauth/authorize/context are NOT bypassed: only the consent page calls them, from a browser that has the Access
+# session. The consent page /oauth/authorize is NOT bypassed either: it is opened in a browser, and every page first
+# calls /api/v1/auth/status (the root layout's AuthProvider), which stays behind Access. Bypassed, a browser without an
+# Access session would get a page whose auth calls fail on the cross-origin Access redirect and never see the PIN
+# prompt; kept behind Access, the browser gets the PIN prompt first and the page then works. For the same reason
+# /_next/static/* is not bypassed either: the page cannot work without an Access session, so its assets need no bypass.
 
 locals {
   access_host = "dev.thebetterdecision.com"
@@ -83,7 +85,8 @@ resource "cloudflare_zero_trust_access_application" "tbd_staging_mcp" {
     "/mcp",
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-protected-resource",
-    "/api/v1/oauth/*",
+    "/api/v1/oauth/register",
+    "/api/v1/oauth/token",
   ])
 
   account_id           = var.account_id
