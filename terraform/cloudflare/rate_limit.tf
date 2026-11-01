@@ -11,8 +11,8 @@
 # it: its redirect rule runs in an earlier phase). DNS-only records never reach it.
 #
 # One counter per address for all paths of a zone. 20 requests in 10 s is far above a person signing in (a few
-# requests) and above the TBD post-deploy smoke test (one login). GET /api/session on ziftbook.com shares the path of
-# the sign-in POST, so reads count too. Paths are matched after the zones' URL normalization (docs/configuration-map.md,
+# requests) and above the TBD post-deploy smoke test (one login). GET /api/session and GET /api/admin/session on ziftbook.com
+# share the paths of the sign-in POSTs, so reads count too. Paths are matched after the zones' URL normalization (docs/configuration-map.md,
 # Cloudflare); a path with an encoded slash also counts, since no app route needs one. Residuals of the plan: the
 # counter is per address and per data center, so many addresses (or one IPv6 prefix) get more.
 #
@@ -20,6 +20,12 @@
 # consent endpoints under /api/v1/oauth/authorize are not counted. They are meant for staging only (production
 # keeps them off until its security review), but the rule has no host condition. A hosted MCP client calls them from its
 # provider's shared egress addresses, so its users share one counter; the app's own per-code, per-client and per-IP limits stay.
+#
+# TBD also counts the Google step-up callback (one request per step-up) and POST /api/v1/auth/verify, which checks the
+# refresh cookie and has no caller in the frontend (EDGE-05). Left out on purpose, as one person could pass 20 in 10 s
+# and lock their address out of sign-in: /api/v1/auth/refresh (every open tab refreshes on load and after a 401, with
+# up to two retries; the app limits it per session), /api/v1/auth/check-username (the sign-up form checks after each
+# 400 ms pause in typing) and /api/v1/security/csp-report (one page can send a burst of reports).
 #
 # Neither zone had an http_ratelimit entrypoint ruleset before this one. A rule added in the dashboard is drift that
 # the next apply removes. Back out with enabled = false.
@@ -29,6 +35,7 @@ locals {
   auth_rate_limit_paths = {
     tbd = [
       "/api/v1/auth/login",
+      "/api/v1/auth/verify",
       "/api/v1/auth/register",
       "/api/v1/auth/forgot-password",
       "/api/v1/auth/reset-password",
@@ -39,6 +46,7 @@ locals {
       "/api/v1/auth/mfa/email-code",
       "/api/v1/auth/mfa/email-verify",
       "/api/v1/auth/google/callback",
+      "/api/v1/auth/sso-stepup/callback",
       "/api/v1/orgs/invitations/preview",
       "/api/v1/orgs/invitations/accept",
       "/api/v1/oauth/token",
@@ -46,6 +54,8 @@ locals {
     ]
     ziftbook = [
       "/api/session",
+      "/api/admin/session",
+      "/api/admin/session/second-factor",
       "/api/sign-up",
       "/api/sign-up/complete",
       "/api/password-reset",
