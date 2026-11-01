@@ -115,6 +115,21 @@ def release_age(config, dep):
     return age, behaviour
 
 
+def dashboard_approval(config, dep):
+    """dependencyDashboardApproval as Renovate resolves it for dep (same rule order and matchers as release_age)."""
+    approval = config.get("dependencyDashboardApproval", False)
+    for i, rule in enumerate(config.get("packageRules", [])):
+        if "dependencyDashboardApproval" not in rule:
+            continue
+        unknown = [k for k in rule if k.startswith(("match", "exclude")) and k not in MATCHERS]
+        if unknown:
+            raise AssertionError(f"packageRules[{i}] sets dependencyDashboardApproval with unmodelled matchers "
+                                 f"{unknown}")
+        if all(matches(dep.get(field), rule[key]) for key, field in MATCHERS.items() if key in rule):
+            approval = rule["dependencyDashboardApproval"]
+    return approval
+
+
 # ---- what Renovate reads ------------------------------------------------------------------------------------------
 
 def image_name(ref):
@@ -341,6 +356,26 @@ class RenovateReleaseAge(unittest.TestCase):
                 self.assertRegex(rule["minimumReleaseAge"], r"^\d+ (minutes|hours|days|weeks)$", i)
             if "minimumReleaseAgeBehaviour" in rule:
                 self.assertIn(rule["minimumReleaseAgeBehaviour"], BEHAVIOURS, i)
+
+
+class TerraformCliUpgradesArePlanned(unittest.TestCase):
+    # The CLI moves in one group: required_version (terraform manager) and the setup-terraform pin in ci.yml.
+    DEPS = ({"manager": "terraform", "depName": "hashicorp/terraform", "packageName": "hashicorp/terraform",
+             "datasource": "github-releases", "fileName": "terraform/hetzner/versions.tf"},
+            {"manager": "github-actions", "depName": "terraform", "packageName": "hashicorp/terraform",
+             "datasource": "github-releases", "fileName": ".github/workflows/ci.yml"})
+
+    def test_majors_and_minors_wait_for_a_dashboard_tick_patches_do_not(self):
+        config = renovate()
+        for dep in self.DEPS:
+            for t, approval in (("major", True), ("minor", True), ("patch", False)):
+                with self.subTest(manager=dep["manager"], update=t):
+                    self.assertIs(dashboard_approval(config, {**dep, "updateType": t}), approval)
+
+    def test_providers_are_not_held(self):
+        dep = {"manager": "terraform", "depName": "hetznercloud/hcloud", "packageName": "hetznercloud/hcloud",
+               "datasource": "terraform-provider", "fileName": "terraform/hetzner/versions.tf", "updateType": "minor"}
+        self.assertIs(dashboard_approval(renovate(), dep), False)
 
 
 class PipInstallsArePinnedByHash(unittest.TestCase):

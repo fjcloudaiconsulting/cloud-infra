@@ -39,6 +39,13 @@
       "minimumReleaseAge": "7 days"
     },
     {
+      "description": "Terraform CLI majors and minors (required_version in every stack and the ci.yml pin, one group) wait for a tick on the Dependency Dashboard, like k3s minors: an upgrade is planned, not proposed by a release (#260 and #315 closed, 2026-11-01). Patches still come, after the 7 days above.",
+      "matchManagers": ["terraform", "github-actions"],
+      "matchDepNames": ["hashicorp/terraform", "terraform"],
+      "matchUpdateTypes": ["major", "minor"],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Workspace cloudflare-tokens plans every PR with the bootstrap token, which can mint any Cloudflare token (INFRA-133): no provider bump branch, and so no plan, until the owner ticks it on the dashboard.",
       "matchFileNames": ["terraform/cloudflare-tokens/**"],
       "additionalBranchPrefix": "cloudflare-tokens-",
