@@ -54,6 +54,7 @@ in the same PR or right after.
 | `LogRetentionStale` mail, or request logs older than 7 days on the node | CronJob `observability/log-retention` failing (image pull, hostPath, script error) or Alloy down (heartbeat refused) | `kubectl -n observability get cronjob,jobs`, `kubectl -n observability logs job/<latest>` | [Runbook](runbooks.md#request-log-retention); `kubectl -n observability create job --from=cronjob/log-retention lr-manual` to rerun |
 | A Grafana alert is Firing (Alerting > Alert rules) but no email arrives | Contact point `owner-email` failing (its row in Alerting > Contact points shows the last error), or the mail is in spam (sender `noreply@grafana.net`) | [Grafana Cloud](#grafana-cloud) | Fix `grafana/contact-point.json` and re-apply it ([runbook](runbooks.md#memory-alerts)) |
 | `Kubernetes checks` red at step `prod tags not ahead of staging`: `<app>-prod` image is newer than `<app>-staging` | Prod bumped (or staging not yet bumped) ahead of staging; one app's red also blocks the other app's staging automerge | Step 10 of [Release and deploy chain](#release-and-deploy-chain) | Merge or make the staging bump on `main` first, then update the prod branch. Never merge the prod bump first |
+| `Kubernetes checks` red at `every Secret is SOPS-encrypted`, `prod tags not ahead of staging` or `image provenance` with a file, a line and a message such as `YAML tag`, `escape in a quoted`, `flow collection holds`, `kustomization key` or `must come from ghcr.io/...` | A file under `clusters/` is outside the plain YAML those checks read as text (GHA-03); the rules are in the docstring of `.github/scripts/manifest_fence.py` | The named line | Write it plainly: block style, unescaped values, an app's images from its own GHCR path in its own namespace directory. A new kustomize transform, image override or Flux object outside `flux-system` is a change to the fence itself, reviewed as a CI change |
 
 ## Release and deploy chain
 
@@ -114,6 +115,12 @@ Branch and tag protection per repo: see the owner's private ops notes.
 cloud-infra `main` also has a ruleset with **no bypass** that requires `Terraform checks` and `Kubernetes checks`
 (strict), so not even an admin merge goes past a red check (INFRA-107, created 2026-10-23). A staging bump that Renovate
 automerges as a branch still lands, because the pushed commit already carries both green checks.
+
+`.github/CODEOWNERS` (GHA-08) names the owner on the tier-0 paths: `.github/`, `renovate.json`, `flux-system`,
+`system-upgrade`, `netbird`, `terraform/`, `aws/`, `ansible/` and `.sops.yaml`. It only requests a review until the
+`main` pull-request ruleset turns on **Require review from Code Owners** (owner, ruleset setting). With a single owner,
+the owner's own PRs to those paths then need a bypass or a second code owner: decide that before turning it on. A
+staging automerge touches none of these paths.
 
 ### Tag protection
 

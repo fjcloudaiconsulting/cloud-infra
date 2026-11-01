@@ -89,7 +89,9 @@ jobs:
     env:
       KUBECONFORM_VERSION: v0.8.0
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
-      # datreeio/CRDs-catalog commit, pinned so schemas change only with a repo change.
+      # Schema repo commits (yannh/kubernetes-json-schema for built-in kinds, datreeio/CRDs-catalog), pinned so schemas
+      # change only with a repo change. Bump by hand; tests/test_ci_fences.py keeps both pinned.
+      K8S_SCHEMA_SHA: f7d855e49c34b039c9ef2196444910275e31e09e
       CRDS_CATALOG_SHA: d373c2da9702bc9509a004db83e57263fe3bdfc1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,6 +124,6 @@ jobs:
           # Flux custom resources validate against the CRDs catalog. Non-strict: SOPS adds a sops: field.
           ./kubeconform -summary -kubernetes-version 1.36.0 -skip CustomResourceDefinition \
             -ignore-filename-pattern 'kustomization\.yaml$' \
-            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$K8S_SCHEMA_SHA/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json" \
             -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/$CRDS_CATALOG_SHA/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
             clusters/
