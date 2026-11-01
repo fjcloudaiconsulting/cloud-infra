@@ -23,9 +23,11 @@ because a network attached after first boot is missing from cloud-init's netplan
   `sops`, and the Ansible age key: `export SOPS_AGE_KEY_FILE=~/.config/sops/age/ansible-hetzner.txt`. The owner's
   cluster key is never needed for Ansible.
 - `kubectl` on this machine. The k3s play checks it first: without it the collection silently skips fetching the
-  admin kubeconfig.
+  admin kubeconfig, which the play reads the cluster CA from.
 - `ansible-galaxy collection install -r requirements.yml` (installs into the git-ignored `collections/`).
-- The deploy key at `~/.ssh/fjc-hetzner-deploy`.
+- The deploy key at `~/.ssh/fjc-hetzner-deploy`, with its public half next to it (`.pub`; `ssh-keygen -y -f
+  ~/.ssh/fjc-hetzner-deploy > ~/.ssh/fjc-hetzner-deploy.pub` recreates it). `node_base` reads it ([Root SSH
+  keys](#root-ssh-keys)).
 - `inventory.yaml` holds each server's primary IPv4 (they outlive server rebuilds). The first play refuses a
   `192.0.2.x` placeholder.
 
@@ -38,10 +40,72 @@ The collection handles the token in task arguments. The `k3s_server` role runs w
 `secrets.sops.yaml` holds `k3s_token`, encrypted to two age keys (`.sops.yaml`): the owner key and the Ansible key
 (`~/.config/sops/age/ansible-hetzner.txt` on the operator laptop, which decrypts only `ansible/`). INFRA-180 adds a CI
 recipient. It is decrypted lazily, only when a k3s task needs it. A lost Ansible key: make a new one, swap its public
-key into `.sops.yaml`, then `sops updatekeys ansible/secrets.sops.yaml` with the owner key. To rotate the token itself,
-on a fresh cluster only (a live cluster's token cannot simply be swapped):
+key into `.sops.yaml`, then `sops updatekeys ansible/secrets.sops.yaml` with the owner key. A leaked one (Ansible or
+owner key) also needs [the token rotated](#rotate-the-k3s-token-live): `updatekeys` keeps the same data key, and git
+history keeps the old ciphertext. The token for a new cluster:
 `openssl rand -hex 32 | sed 's/^/k3s_token: /' | sops encrypt --filename-override ansible/secrets.sops.yaml > ansible/secrets.sops.yaml`
 from the repo root. Never print it.
+
+## Rotate the k3s token (live)
+
+`k3s token rotate` replaces the server token on a running cluster (k3s added it in 2023; step 1 checks the running
+version has it). Run it after a lost or leaked age key that decrypts `ansible/` (the Ansible key, or the owner key,
+which is also the in-cluster Flux key), a leaked deploy SSH key, a node disk, backup or etcd snapshot out of your
+hands, or any cluster-admin incident. It does not change the cluster CA or its keys: if a rogue server may have
+joined or the bootstrap data was read, that is a CA rotation (`k3s certificate rotate-ca`), not this.
+
+From the repo root on a new branch, with `SOPS_AGE_KEY_FILE` set as above. Nothing below prints the token.
+
+1. Every server Ready, nothing cordoned, no other k3s or reboot run going. `N1=<node-1 public IPv4>`, then
+   `ssh root@$N1 'k3s token rotate --help >/dev/null && echo supported'` and
+   `ssh root@$N1 k3s etcd-snapshot save --name pre-token-rotate`. Snapshots from before the rotation need the old
+   token to restore; git history keeps it.
+2. The new token, into the SOPS file (through a temp file, so a failed encrypt leaves the old one):
+
+   ```sh
+   F=ansible/secrets.sops.yaml
+   openssl rand -hex 32 | sed 's/^/k3s_token: /' \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.new" && mv "$F.new" "$F"
+   grep -c 'k3s_token: ENC\[AES256' "$F"   # 1
+   ```
+
+3. Rotate on node-1: the new token goes over ssh stdin, the old one is the server's own token file. The new value is
+   in that command's arguments on node-1 while it runs.
+
+   ```sh
+   sops decrypt --extract '["k3s_token"]' "$F" \
+     | ssh root@$N1 'T=$(cat); [ -n "$T" ] && K3S_TOKEN=$(cat /var/lib/rancher/k3s/server/token) k3s token rotate --new-token "$T"'
+   ```
+
+4. Right away, from `ansible/` on the same branch: `ansible-playbook site.yml -e k3s_reconfigure=true`. It writes the
+   new token into each server's `config.yaml` and restarts the servers one at a time behind the quorum guard. Until
+   this run reaches a server, that server must not restart: with the old token it cannot read the cluster's bootstrap
+   data and does not start (rerun this step to fix it).
+5. PR the new `secrets.sops.yaml` with the `PLAY RECAP` and merge it straight away: until then `main` still has the old
+   token, so run nothing k3s-related from `main`.
+
+## Root SSH keys
+
+`node_base` makes root's `authorized_keys` on every node exactly the deploy keys: the public key next to
+`ansible_ssh_private_key_file` (`~/.ssh/fjc-hetzner-deploy.pub`) plus `deploy_ssh_extra_public_keys` in
+`group_vars/all.yml`. Any other key goes on the next run. The `hetzner` workspace variable `deploy_ssh_public_key`
+only seeds a new server. Before writing, the play stops if a key is not one line of `ssh-ed25519` or
+`sk-ssh-ed25519@openssh.com` (FIDO2), or if the key it connects with is not already accepted on that host.
+
+Read the change first, the first time and whenever the list changes: `ansible-playbook site.yml --check --diff`. The
+`authorized_keys` diff shows public keys only; every removed line must be a key you mean to drop. If root SSH is lost
+anyway, use the Hetzner console ([break-glass](../docs/runbooks.md#hetzner-nodes-ansible-rebuild-break-glass)).
+
+Rotate the deploy key (after a leak, also [rotate the k3s token](#rotate-the-k3s-token-live): root on a node can read
+it):
+
+1. `ssh-keygen -t ed25519 -f ~/.ssh/fjc-hetzner-deploy.new` (`-t ed25519-sk` for a FIDO2 key), add the content of
+   `~/.ssh/fjc-hetzner-deploy.new.pub` to `deploy_ssh_extra_public_keys`, merge, run `site.yml` (check first). Both
+   keys now work.
+2. Move the new pair over the old one (`mv ~/.ssh/fjc-hetzner-deploy.new ~/.ssh/fjc-hetzner-deploy`, the same for
+   `.pub`), empty `deploy_ssh_extra_public_keys`, set the workspace variable `deploy_ssh_public_key` to the new public
+   key (its apply replaces only the Hetzner key object, no server), merge, run `site.yml`: the old key is gone from
+   every node.
 
 ## Split brain: bootstrap versus join
 
@@ -75,7 +139,11 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
 
 1. `terraform/hetzner` applied; the volume `fjc-db` is attached to db-1.
 2. The primary IPv4s in `inventory.yaml` match `terraform/hetzner`.
-3. `ssh -i ~/.ssh/fjc-hetzner-deploy root@<ip> true` for each host, to accept the host keys.
+3. Accept each host key only after checking it (this first run sends the k3s token). In the Hetzner Cloud Console,
+   open the server's Console: at first boot cloud-init prints its fingerprints under `BEGIN SSH HOST KEY
+   FINGERPRINTS`. Then `ssh -i ~/.ssh/fjc-hetzner-deploy root@<ip> true` and answer `yes` only if the `ED25519`
+   fingerprint it shows is the console's. No fingerprint on the console any more: Rescue > Reset root password, log
+   in there, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, then `passwd -l root`.
 4. From `main` at the merged SHA:
 
    ```sh
@@ -84,8 +152,10 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
    ```
 
 5. Check: `ssh root@<node-1> k3s kubectl get nodes -o wide` shows three Ready nodes; db-1 carries the taint.
-   The admin kubeconfig is fetched to `~/.kube/fjc-hetzner.yaml` (mode 0600) with the server set to node-1's
-   private IP; it works only from inside the private network or over a tunnel.
+   The play fetches the admin kubeconfig to `~/.kube/fjc-hetzner.yaml`, writes its cluster CA to
+   `~/.kube/hetzner-ca.crt` and deletes it: its client certificate is `system:masters`, which no RBAC change revokes.
+   Day-to-day access is the owner token over NetBird ([bootstrap runbook](../docs/runbooks.md#hetzner-cluster-bootstrap)
+   step 6, which uses that CA file); break-glass is `ssh root@<server> k3s kubectl ...`.
 
 ## Steady-state run
 
@@ -98,6 +168,21 @@ After each restart it waits for that node's own `/readyz/etcd`, then for the nod
    (`group_vars` k3s keys): then add `-e k3s_reconfigure=true`, which restarts the servers one at a time behind the
    quorum guard. k3s versions move through system-upgrade-controller (INFRA-179), not this playbook.
 5. Paste the `PLAY RECAP` into the PR with the SHA.
+
+## API audit log
+
+Each k3s server writes an API audit log to `/var/lib/rancher/k3s/server/logs/audit.log` (at most 5 files of 100 MB,
+none older than 30 days). The policy is [`files/k3s-audit-policy.yaml`](files/k3s-audit-policy.yaml), installed on
+every run as `/etc/rancher/k3s/audit-policy.yaml`: metadata (who, what, when, never a value) for Secrets, ConfigMaps,
+token requests and token reviews; the request too for exec, attach, port-forward, RBAC changes and node changes. The
+API server reads both only at start, so the log begins, and a policy change applies, after a `-e k3s_reconfigure=true`
+run (each server restarts in turn behind the quorum guard). A server logs only the requests it served, so read all
+three:
+
+    ssh root@<server> tail -n 200 /var/lib/rancher/k3s/server/logs/audit.log \
+      | jq -c '{t: .requestReceivedTimestamp, user: .user.username, verb, res: .objectRef.resource, ns: .objectRef.namespace, name: .objectRef.name}'
+
+The log stays on the node; nothing ships it (or the SSH journal) elsewhere yet, so a root intruder can delete it.
 
 ## Rolling reboot
 
@@ -137,7 +222,8 @@ rejoins as a stale member, and the rebuilt node then hits a node-password confli
 2. On the OLD node: `systemctl disable --now k3s && /usr/local/bin/k3s-killall.sh`.
 3. From a working node: `k3s kubectl delete node <name>`.
 4. Replace the server in TFC.
-5. `ssh-keygen -R <public ip>`, accept the new host key, then `ansible-playbook site.yml --limit <name>` (never with
+5. `ssh-keygen -R <public ip>`, accept the new host key only after checking it against the console ([First
+   bootstrap](#first-bootstrap) step 3), then `ansible-playbook site.yml --limit <name>` (never with
    `k3s_bootstrap`). The rebuilt node has no etcd data, so the quorum guard lets it run alone; it joins a live peer.
 
 If that run fails after k3s started on the new node, the node now has etcd data: a plain rerun skips k3s on it and
@@ -172,7 +258,8 @@ goes away.
    `umount /var/lib/rancher/k3s/storage` (`findmnt /var/lib/rancher/k3s/storage` prints nothing).
 4. `k3s kubectl delete node db-1` from a working node.
 5. Replace the server in TFC (the attachment follows the new server).
-6. `ssh-keygen -R <public ip>`, then `ansible-playbook site.yml --limit db-1`. The play finds the volume, mounts it by
+6. `ssh-keygen -R <public ip>`, accept the new host key only after checking it against the console ([First
+   bootstrap](#first-bootstrap) step 3), then `ansible-playbook site.yml --limit db-1`. The play finds the volume, mounts it by
    its filesystem UUID and installs the k3s mount guard before k3s is installed.
 7. Scale the StatefulSets back up; the local-path volumes are pinned to node `db-1` and come back with their data.
 

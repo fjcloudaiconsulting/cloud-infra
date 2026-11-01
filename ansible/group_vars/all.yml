@@ -3,10 +3,22 @@
 # Bootstrap pin only: the Plans in clusters/hetzner/system-upgrade/plans.yaml win once the cluster runs.
 # renovate: datasource=github-releases depName=k3s-io/k3s
 k3s_version: v1.36.5+k3s1
+# The k3s installer site.yml puts on a server: install.sh at the commit of a k3s tag, checked against this sha256. It
+# installs whatever k3s_version names, so a k3s bump does not need a new pin. To move it: the tag's commit
+# (`gh api 'repos/k3s-io/k3s/commits/<tag, + as %2B>' --jq .sha`) and `sha256sum` of install.sh at that commit.
+# The k3s binary itself is still fetched by install.sh and checked only against the release's own sha256sum file.
+k3s_install_sh_commit: "3dd98cc58ec34991e7e59b93663eee2e26fc1f65"  # v1.36.5+k3s1
+k3s_install_sh_sha256: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
 
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.
 private_nic: enp7s0
+# The private subnet (hcloud_network_subnet.main in terraform/hetzner/main.tf); every private_ip is in it.
+private_cidr: 10.0.1.0/24
+
+# Public keys root accepts besides the one next to ansible_ssh_private_key_file (node_base writes exactly these):
+# the next deploy key during a rotation, or a second operator key. ed25519 or sk-ssh-ed25519@openssh.com only.
+deploy_ssh_extra_public_keys: []
 
 # true ONLY for the very first bootstrap of an empty cluster (-e k3s_bootstrap=true). See README.md.
 k3s_bootstrap: false
@@ -21,13 +33,17 @@ api_endpoint: "{{ private_ip if (k3s_init_node | bool) else k3s_join_peer }}"
 token: "{{ lookup('community.sops.sops', playbook_dir ~ '/secrets.sops.yaml', extract='[\"k3s_token\"]') }}"
 user_kubectl: false
 # The admin kubeconfig fetched from node-1 lands here on the machine running Ansible, never in ~/.kube/config.
+# site.yml then writes its cluster CA to kubeconfig_ca and deletes it (its client certificate is system:masters).
 kubeconfig: ~/.kube/fjc-hetzner.yaml
+kubeconfig_ca: ~/.kube/hetzner-ca.crt
 manage_firewall: false
 # GOGC=50 trades a little CPU for a smaller k3s heap (about 846Mi to 625Mi RSS, measured on the old Lightsail node, INFRA-80).
 # The installer rewrites k3s.service.env; the collection re-adds this line after it on every run.
 extra_service_envs: ["GOGC=50"]
 k3s_node_labels: []
 k3s_node_taints: []
+# The API audit policy (files/k3s-audit-policy.yaml), installed by site.yml before k3s is configured.
+k3s_audit_policy_file: /etc/rancher/k3s/audit-policy.yaml
 # Merged last over the collection's generated config, so cluster-init and server below are what k3s gets.
 server_config_yaml: |
   node-name: {{ inventory_hostname }}
@@ -39,6 +55,15 @@ server_config_yaml: |
   secrets-encryption: true
   write-kubeconfig-mode: "0600"
   kubelet-arg: ["fail-swap-on=false"]
+  # NodePorts answer on the private network only, never on the public NIC (no Service uses one today).
+  kube-proxy-arg: ["nodeport-addresses={{ private_cidr }}"]
+  # API audit log (README.md, "API audit log"): at most 5 files of 100 MB per server, none older than 30 days.
+  kube-apiserver-arg:
+    - "audit-policy-file={{ k3s_audit_policy_file }}"
+    - "audit-log-path=/var/lib/rancher/k3s/server/logs/audit.log"
+    - "audit-log-maxage=30"
+    - "audit-log-maxbackup=4"
+    - "audit-log-maxsize=100"
   tls-san: {{ groups['server'] | map('extract', hostvars, 'private_ip') | list | to_json }}
   node-label: {{ k3s_node_labels | to_json }}
   node-taint: {{ k3s_node_taints | to_json }}

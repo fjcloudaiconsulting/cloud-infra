@@ -35,7 +35,8 @@
   # The collection writes the token into config.yaml; no diff may print it.
   diff: false
   pre_tasks:
-    # Without kubectl here the collection silently skips fetching the admin kubeconfig.
+    # Without kubectl here the collection silently skips fetching the admin kubeconfig, which the cluster CA is read
+    # from (post_tasks).
     - name: Kubectl is installed on this machine
       run_once: true
       delegate_to: localhost
@@ -146,11 +147,35 @@
         group: root
         mode: "0700"
 
-    # The collection only downloads get.k3s.io when this file is absent, so the installer stays pinned to k3s_version.
-    - name: Install the k3s installer from the release tag
+    # The API server reads its audit policy at start (kube-apiserver-arg in group_vars/all.yml), so it is in place
+    # before k3s is first installed; a changed policy takes effect on the next -e k3s_reconfigure=true run.
+    # 0755 as the collection makes it.
+    - name: The k3s config directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      register: k3s_config_dir
+
+    # In check mode on a new server the directory is not there yet, so the copy has nothing to compare with.
+    - name: Install the API audit policy
+      when: not ansible_check_mode or k3s_config_dir is not changed
+      ansible.builtin.copy:
+        src: k3s-audit-policy.yaml
+        dest: "{{ k3s_audit_policy_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    # The collection only downloads get.k3s.io when this file is absent, so this pinned installer is the one it runs:
+    # install.sh at a k3s tag's commit, checked against its sha256 (both in group_vars/all.yml).
+    - name: Install the pinned k3s installer
       when: k3s_apply | bool
       ansible.builtin.get_url:
-        url: https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version }}/install.sh
+        url: https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_install_sh_commit }}/install.sh
+        checksum: sha256:{{ k3s_install_sh_sha256 }}
         dest: /usr/local/bin/k3s-install.sh
         owner: root
         group: root
@@ -187,11 +212,22 @@
       delay: 10
       changed_when: false
 
-    - name: Keep the fetched admin kubeconfig private
+    # The fetched kubeconfig's client certificate is system:masters, which no RBAC change revokes, so only its cluster
+    # CA is kept (the owner's kubeconfig names it: docs/runbooks.md, Hetzner cluster bootstrap step 6). Break-glass is
+    # `k3s kubectl` over SSH, which needs no copy here.
+    - name: Keep only the cluster CA from the fetched admin kubeconfig
       when: (kubeconfig | expanduser) is file
       run_once: true
       delegate_to: localhost
       become: false
-      ansible.builtin.file:
-        path: "{{ kubeconfig | expanduser }}"
-        mode: "0600"
+      block:
+        - name: Write the cluster CA next to the kubeconfig
+          ansible.builtin.copy:
+            dest: "{{ kubeconfig_ca | expanduser }}"
+            content: "{{ (lookup('ansible.builtin.file', kubeconfig | expanduser) | from_yaml).clusters[0].cluster['certificate-authority-data'] | b64decode }}"
+            mode: "0600"
+
+        - name: Delete the fetched admin kubeconfig
+          ansible.builtin.file:
+            path: "{{ kubeconfig | expanduser }}"
+            state: absent
