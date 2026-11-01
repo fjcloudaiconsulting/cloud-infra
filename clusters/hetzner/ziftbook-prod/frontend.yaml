@@ -66,6 +66,10 @@ spec:
               value: http://backend:8000
             - name: ZIF_CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # CSP violation reports (ZIF-236): the web adds report-uri/report-to only when the request's Host is
+            # this URL's host, and accepts exactly https://<host>[:port]/api/csp-reports. Older images ignore it.
+            - name: ZIF_CSP_REPORT_URL
+              value: https://app.ziftbook.com/api/csp-reports
             # Public, but kept beside the widget's secret so one owner step writes both (ZIF-116). Read per request.
             - name: ZIF_TURNSTILE_SITE_KEY
               valueFrom:
