@@ -9,9 +9,11 @@ Older is allowed (rollback).
 No app is named here, so a new <app>-prod/<app>-staging pair is covered with no change.
 Limits: it reads the checked-out tree, so one PR that bumps staging and prod together passes (review
 catches it), and ordering is not proof staging ran that exact tag; live health is the post-deploy smoke's job.
-Not covered (review-visible): prod manifests outside a <app>-prod dir, refs of other registries or YAML-escaped,
-Helm `tag:` fields; a ref inside a comment counts as a real ref.
-Fails closed: prod without a staging dir or image, a tag that is not plain vX.Y.Z (an @sha256:<64 hex> pin is stripped first), no prod dir at all.
+A ref inside a comment counts as a real ref.
+Fails closed: prod without a staging dir or image, a tag that is not plain vX.Y.Z (an @sha256:<64 hex> pin is stripped
+first), no prod dir at all, and a tree outside manifest_fence.py's canonical form (GHA-03): that fence also keeps
+every image in an <app>-prod or <app>-staging namespace on ghcr.io/fjcloudaiconsulting/<app>/, in that namespace's
+directory, unescaped and untouched by kustomize image overrides.
 
 Usage: check-prod-tags.py [clusters-dir]   (default: clusters)
 """
@@ -19,6 +21,9 @@ import os
 import pathlib
 import re
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import manifest_fence  # noqa: E402
 
 REF = re.compile(r"ghcr\.io/fjcloudaiconsulting/([^:@\s\"']+)(?::([^\s\"']+))?")
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")  # optional pin after the tag (INFRA-107)
@@ -31,7 +36,7 @@ def refs(d, errs):
     for f in sorted(d.rglob("*")):
         if f.suffix.lower() not in (".yaml", ".yml") or not f.is_file():
             continue
-        for image, tag in REF.findall(f.read_text()):
+        for image, tag in REF.findall(f.read_bytes().decode("utf-8", "replace")):  # the fence reports non-UTF-8
             tag = DIGEST.sub("", tag)
             if SEMVER.match(tag):
                 out.setdefault(image, []).append((tag, f))
@@ -45,7 +50,8 @@ def ver(tag):
 
 
 def main(root):
-    errs, prods = [], sorted(pathlib.Path(root).rglob("*-prod"))
+    errs = [f"{p}: {m}" for p, m in manifest_fence.problems(root)]
+    prods = sorted(pathlib.Path(root).rglob("*-prod"))
     prods = [p for p in prods if p.is_dir()]
     if not prods:
         errs.append(f"no <app>-prod directory under {root}")

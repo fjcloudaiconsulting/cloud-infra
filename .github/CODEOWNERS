@@ -1,0 +1,15 @@
+# Tier-0 paths (GHA-08): a change here reaches CI and its fences, Renovate's automerge, Flux, the privileged upgrade
+# controller, the owner's cluster access, Terraform, the AWS trust documents, the hosts or the SOPS rules.
+# It requests the owner's review; it blocks a merge only while the `main` ruleset requires review from code owners
+# (docs/configuration-map.md, Branch protection). tests/test_ci_fences.py keeps every path below owned.
+# The last matching line wins: keep these anchored, and add broader patterns above them, not below.
+
+/.github/                          @flamarion
+/renovate.json                     @flamarion
+/clusters/hetzner/flux-system/     @flamarion
+/clusters/hetzner/system-upgrade/  @flamarion
+/clusters/hetzner/netbird/         @flamarion
+/terraform/                        @flamarion
+/aws/                              @flamarion
+/ansible/                          @flamarion
+/.sops.yaml                        @flamarion
