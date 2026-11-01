@@ -169,6 +169,17 @@
         group: root
         mode: "0600"
 
+    # The API server also reads its Pod Security defaults at start (admission-control-config-file in
+    # group_vars/all.yml) and does not start without the file, so it is in place before k3s is installed or restarted.
+    - name: Install the Pod Security admission defaults
+      when: not ansible_check_mode or k3s_config_dir is not changed
+      ansible.builtin.copy:
+        src: k3s-pod-security.yaml
+        dest: "{{ k3s_psa_config_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+
     # The collection only downloads get.k3s.io when this file is absent, so this pinned installer is the one it runs:
     # install.sh at a k3s tag's commit, checked against its sha256 (both in group_vars/all.yml).
     - name: Install the pinned k3s installer
