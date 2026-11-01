@@ -675,12 +675,6 @@ class BackupRolePolicies(unittest.TestCase):
         ])
 
 
-# Lock entries recorded with a single h1: hash before this fence, in a stack another change owns. Keyed on the
-# version, so the next bump of either provider must record both platforms.
-SINGLE_H1 = {("cloudflare-tokens", "registry.terraform.io/cloudflare/cloudflare", "5.26.0"),
-             ("cloudflare-tokens", "registry.terraform.io/hashicorp/tfe", "0.81.0")}
-
-
 def lock_problems(stack_name, text):
     """A lock file must hash every provider for both platforms in use: linux_amd64 (HCP Terraform, CI) and
     darwin_arm64 (the owner's machine). The format does not say which platform an h1: hash is for, so the check is
@@ -690,9 +684,8 @@ def lock_problems(stack_name, text):
     if not providers:
         problems.append(f"{stack_name}: the lock file records no provider")
     for address, body_ in providers:
-        version = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', body_)
         h1 = re.findall(r'"h1:[A-Za-z0-9+/=]+"', body_)
-        if len(h1) < 2 and (stack_name, address, version and version.group(1)) not in SINGLE_H1:
+        if len(h1) < 2:
             problems.append(f"{stack_name}: {address} has {len(h1)} h1: hash(es); run terraform providers lock "
                             "-platform=linux_amd64 -platform=darwin_arm64")
         if normalize(address) not in PROVIDER_ALLOWLIST:
@@ -735,12 +728,11 @@ class LockFilesAndVersions(unittest.TestCase):
         self.assertTrue(rest, "fixture needs the hetzner lock with two h1: hashes")
         one = hetzner.replace(rest[0], "")
         self.assertIn("has 1 h1: hash(es)", "".join(lock_problems("hetzner", one)))
-        # fence: the exemption is per version, so a bump of an exempt provider must hash both platforms. A fixture,
-        # not the real lock, so the test still holds once that lock is bumped and hashed for both platforms.
+        # fence: no stack or version is exempt, including the cloudflare-tokens entries that once were (INFRA-248).
         lock = 'provider "registry.terraform.io/hashicorp/tfe" {\n  version     = "%s"\n  hashes = [\n' \
                '    "h1:a=",\n    "zh:b",\n  ]\n}\n'
-        self.assertEqual(lock_problems("cloudflare-tokens", lock % "0.81.0"), [])
-        self.assertIn("hashicorp/tfe has 1 h1", "".join(lock_problems("cloudflare-tokens", lock % "0.82.0")))
+        for version in ("0.81.0", "0.83.0"):
+            self.assertIn("hashicorp/tfe has 1 h1", "".join(lock_problems("cloudflare-tokens", lock % version)))
 
     def test_lock_file_with_another_provider_fails(self):
         lock = 'provider "registry.terraform.io/hashicorp/external" {\n  version = "2.3.5"\n  hashes = [\n' \

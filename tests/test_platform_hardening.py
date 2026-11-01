@@ -29,11 +29,6 @@ RESTRICTED_VOLUMES = {"configMap", "csi", "downwardAPI", "emptyDir", "ephemeral"
                       "secret"}
 SELINUX_TYPES = {"", "container_t", "container_init_t", "container_kvm_t", "container_engine_t"}
 LEVELS = ("privileged", "baseline", "restricted")
-# Privileged namespaces not yet labelled for warn and audit: netbird's Namespace is in netbird/netbird.yaml, which only
-# its owner changes. Drop it from this set once that file carries the labels.
-WARN_AUDIT_PENDING = {"netbird"}
-
-
 # ---- helpers ------------------------------------------------------------------------------------------------------
 
 def parse_docs(text, where):
@@ -359,7 +354,7 @@ class PodSecurity(unittest.TestCase):
 
     def test_privileged_namespaces_warn_and_audit_at_baseline(self):
         for name, ns in namespaces().items():
-            if label(ns, PSA + "enforce") != "privileged" or name in WARN_AUDIT_PENDING:
+            if label(ns, PSA + "enforce") != "privileged":
                 continue
             for mode in ("warn", "audit"):
                 self.assertIn(label(ns, PSA + mode), ("baseline", "restricted"), f"{name}: {mode}")
