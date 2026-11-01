@@ -6,7 +6,9 @@ resources:
   - plans.yaml
 # Upstream's kubectl image is v1.30.3, outside the +-1 minor skew of a v1.36 server, and the app Plan's drain does real
 # work with it (INFRA-179). Patched here, not in system-upgrade-controller.yaml, so a re-download of the release asset
-# diffs cleanly. Bump it by hand with every k3s minor: no Renovate manager sees this line.
+# diffs cleanly. The drain runs with the controller's ServiceAccount, so the image is pinned by digest too (multi-arch
+# index of the tag, K8S-02). Bump tag and digest together by hand with every k3s minor: no Renovate manager sees this
+# line.
 patches:
   - target:
       kind: ConfigMap
@@ -14,7 +16,17 @@ patches:
     patch: |
       - op: replace
         path: /data/SYSTEM_UPGRADE_JOB_KUBECTL_IMAGE
-        value: rancher/kubectl:v1.36.2
+        value: rancher/kubectl:v1.36.2@sha256:06c7a7a9772737494ae1e0c3af90f1b5385630c147e47c1c7cea92f4bed55fbe
+  # The upgrade Jobs must stay privileged with the host mounted, so enforce stays privileged; warn and audit at baseline
+  # report each such pod, and anything else that lands here (K8S-09).
+  - patch: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: system-upgrade
+        labels:
+          pod-security.kubernetes.io/warn: baseline
+          pod-security.kubernetes.io/audit: baseline
 # The controller runs cluster-wide with a privileged ServiceAccount: pin the image by digest (multi-arch index of
 # v0.20.2) without touching the vendored file. Bumped by hand with a re-vendor of crd.yaml (runbook "Upgrade k3s").
 images:
