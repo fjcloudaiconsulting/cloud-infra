@@ -39,7 +39,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.30.0@sha256:e7e1a91601831f795909b77d4c2e1b678effcb0af54133f528fd2d98de04b11f
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.31.0@sha256:6dac5f1c005bc741271e64c02a1ddace83e05cebe6601548abca7a0057e1310c
           ports:
             - containerPort: 3000
           env:
@@ -57,6 +57,13 @@ spec:
                   name: ziftbook-turnstile
                   key: site-key
                   optional: true
+            # Content-Security-Policy origins (ZB-12), read per request: images from the media domain (the backend's
+            # ZIF_MEDIA_URL) and photo uploads to the R2 account endpoint the API presigns them for (docs/runbooks.md
+            # "R2 for Ziftbook photos"). The web holds no R2 credential and uses the endpoint for the policy only.
+            - name: ZIF_MEDIA_URL
+              value: https://img-dev.ziftbook.com
+            - name: ZIF_S3_ENDPOINT
+              value: https://fb5eb042529f2621c6de3f34c6801174.eu.r2.cloudflarestorage.com
             - name: OTEL_TRACES_EXPORTER
               value: none
             - name: OTEL_LOGS_EXPORTER

@@ -6,7 +6,23 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 (`~/.kube/hetzner`, over NetBird) and never prints a secret value.
 
 Database restores are
-[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md).
+[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
+set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
+runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
+against commands a backup should never carry; custom-format dumps restored by a non-superuser role
+are planned to replace the scan (#272).
+
+## Restore drill
+
+Every quarter, and before any one-way door that relies on the backups or after a backup format change, run
+[`RESTORE.md`](../clusters/hetzner/data/RESTORE.md) steps 1-5 on its scratch namespace for a recent production set of
+each engine (`tbd-mysql`, `ziftbook-prod-postgres`). It passes when both restore and step 5's checks agree with the
+manifest. Keep the row counts out of git and the PR: they show how the data grows.
+
+After a successful drill, update the record in a PR: in [`docs/restore-drill.md`](restore-drill.md), set
+`last-successful-drill: YYYY-MM-DD` to the UTC date the drill finished, and change nothing else there. The weekly
+`restore-drill-probe.yml` keeps one `[restore-drill]` issue open while that line says `never` or is more than 100
+days old, and closes it when the PR merges. A failed drill is a backup fault: leave the date and fix the cause.
 
 ## Follow Flux and rollouts
 
@@ -58,6 +74,10 @@ CI runs on it and Renovate fast-forwards it into `main`; Flux applies it. Produc
 3. Merge the `tbd images` PR for `tbd-prod` once `Kubernetes checks` is green: its step `prod tags not ahead of staging` (INFRA-89) fails while the PR's tags are newer than `tbd-staging` on its tree. Update its branch if it is behind. The bound is the lowest `tbd-staging` tag, MCP image included (INFRA-147): if mcp did not move with the release, fix the tbd promote first.
    The step `image provenance` (INFRA-107) checks every image ref the PR adds: it must be `:vX.Y.Z@sha256:<digest>` and the digest must have a build attestation from the shared `build-image` workflow, made on `main` at the commit of tag `vX.Y.Z`. Red means the ref is unpinned, has no matching attestation, or the registry or API lookup failed (a registry authorization error is the package access grant in `docs/configuration-map.md`). Do not merge past it. Versions built before attestation existed (tbd v0.302.0 and older, ziftbook v0.26.1 and older) fail it by design.
 4. A release broken on staging is fixed forward: do not merge the prod PR, release the fix; a newer tag replaces the PR.
+5. The backend and MCP containers set `args` to the image's uvicorn command with a narrower `--forwarded-allow-ips`
+   (INF-01). When a release changes that command in tbd `backend/Dockerfile` or `backend/Dockerfile.mcp`, change
+   `args` in `tbd-staging/backend.yaml` and `tbd-staging/mcp.yaml` as soon as the staging bump lands, and in
+   `tbd-prod/backend.yaml` in the production PR.
 
 ## Post-deploy smoke
 
@@ -85,7 +105,7 @@ pass closes it. The failure says which step failed:
 |---|---|---|
 | `never converged (live X, expected Y)` | The new backend never served: Flux did not apply, the image did not pull, the migration or the pod crashed. `live none` means the app was down | [Follow Flux and rollouts](#follow-flux-and-rollouts): `flux get kustomizations`, `kubectl -n <namespace> get pods,events` |
 | `frontend GET / returned N` (`/robots.txt` for `tbd-staging`) | The backend serves, the frontend does not | `kubectl -n <namespace> get pods -l app=frontend`, its logs |
-| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (Ziftbook: `/api/health/dependencies`) and the backend logs |
+| `app smoke failed` | The app's own checks failed. The run log shows which one. Also shown when the `tbd-prod` environment secrets are missing (the script exits 2 before logging in) | The run log, then `/health/dependencies` (TBD: in the cluster only, e.g. `kubectl -n tbd-prod port-forward deploy/backend 8000`, INF-09; Ziftbook: `/api/health/dependencies`) and the backend logs |
 | `could not fetch ...` | The GitHub API did not return the app's smoke script at that tag | The tag exists in the app repo, then re-run |
 | `bad backend tag` | The manifest has no plain `vX.Y.Z` backend tag | The manifest |
 
@@ -128,7 +148,7 @@ first (`export SOPS_AGE_KEY_FILE=<path to the key file>`), then `sops edit <file
 
 ## Ziftbook production secrets
 
-Three files, none typed by hand. Production has its own Postgres login roles (`ziftbook_prod_app`,
+None of these files is typed by hand. Production has its own Postgres login roles (`ziftbook_prod_app`,
 `ziftbook_prod_migrate`, see `data/postgres-bootstrap-prod.yaml`), so `data/postgres-ziftbook-prod` (their passwords, read
 by the bootstrap Job) and `ziftbook-prod/ziftbook` (the two connection URLs) are generated together, from fresh random
 passwords, with the public key only. Run from the repo root in bash; nothing is printed except the two counts (3 each:
@@ -149,6 +169,51 @@ grep -c 'ENC\[' clusters/hetzner/data/postgres-ziftbook-prod.secret.yaml cluster
 To rotate, run it again and commit both files; Flux does not rerun the bootstrap Job for a Secret change: delete it
 (`kubectl -n data delete job ziftbook-prod-bootstrap`, Flux recreates it), then restart `deploy/backend` and
 `deploy/worker` in `ziftbook-prod`.
+
+The worker has a database role of its own (ZB-08, ziftbook #334): `ziftbook_worker` holds every privilege of
+`ziftbook_app` plus what only background jobs may do (minting email tokens), and owns nothing. Its URL lives in its own
+Secret, never in `ziftbook`: an API given it could mint tokens itself. Like the other two it is created by
+`bootstrap.sql` and shared by both environments (roles are cluster-wide; the migrations hardcode the name). Production's
+worker logs in as `ziftbook_prod_worker`, a member that does not inherit and sets its role to `ziftbook_worker` at
+login, as the API's login role does; staging's logs in as `ziftbook_worker` itself. Two pairs of files, each pair
+generated together, with the public key only; each block prints only its two counts (2 each: the value and the MAC).
+
+Production: `data/postgres-ziftbook-prod-worker` (key `password`, read by `ziftbook-prod-bootstrap`) and
+`ziftbook-prod/ziftbook-worker-database` (key `database-url`, the worker's URL):
+
+```sh
+set -euo pipefail
+P=$(openssl rand -hex 32); H=postgres.data.svc.cluster.local
+enc() { sops encrypt --filename-override "$1" --input-type yaml --output-type yaml /dev/stdin > "$1.tmp" && mv "$1.tmp" "$1"; }
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: postgres-ziftbook-prod-worker\n  namespace: data\ntype: Opaque\nstringData:\n  password: "%s"\n' "$P" \
+  | enc clusters/hetzner/data/postgres-ziftbook-prod-worker.secret.yaml
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: ziftbook-worker-database\n  namespace: ziftbook-prod\ntype: Opaque\nstringData:\n  database-url: "postgresql+psycopg://ziftbook_prod_worker:%s@%s:5432/ziftbook_prod"\n' "$P" "$H" \
+  | enc clusters/hetzner/ziftbook-prod/ziftbook-worker-database.secret.yaml
+unset P
+grep -c 'ENC\[' clusters/hetzner/data/postgres-ziftbook-prod-worker.secret.yaml clusters/hetzner/ziftbook-prod/ziftbook-worker-database.secret.yaml
+```
+
+The shared role's password: `data/postgres-ziftbook-worker` (key `password`) and staging's worker URL
+`ziftbook-staging/ziftbook-worker-database`. Both bootstrap Jobs run `bootstrap.sql`, which sets this password, so both
+read this one Secret. Nothing in production logs in with it: CONNECT on `ziftbook_prod` is taken from the shared roles.
+
+```sh
+set -euo pipefail
+W=$(openssl rand -hex 32); H=postgres.data.svc.cluster.local
+enc() { sops encrypt --filename-override "$1" --input-type yaml --output-type yaml /dev/stdin > "$1.tmp" && mv "$1.tmp" "$1"; }
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: postgres-ziftbook-worker\n  namespace: data\ntype: Opaque\nstringData:\n  password: "%s"\n' "$W" \
+  | enc clusters/hetzner/data/postgres-ziftbook-worker.secret.yaml
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: ziftbook-worker-database\n  namespace: ziftbook-staging\ntype: Opaque\nstringData:\n  database-url: "postgresql+psycopg://ziftbook_worker:%s@%s:5432/ziftbook"\n' "$W" "$H" \
+  | enc clusters/hetzner/ziftbook-staging/ziftbook-worker-database.secret.yaml
+unset W
+grep -c 'ENC\[' clusters/hetzner/data/postgres-ziftbook-worker.secret.yaml clusters/hetzner/ziftbook-staging/ziftbook-worker-database.secret.yaml
+```
+
+To rotate either, run its block again, commit both files and merge. Then rerun the Job that sets the password:
+production's is `ziftbook-prod-bootstrap`; for the shared role either Job will do, and `ziftbook-bootstrap` is the
+staging one (`kubectl -n data delete job <name>`, Flux recreates it). Wait for `kubectl -n data get jobs` to show it
+Complete, then `kubectl -n ziftbook-<env> rollout restart deploy/worker`. Until the Job has run, the database keeps the
+old password, so a worker that starts in between cannot log in; it recovers on the restart.
 
 The namespace's `ghcr-pull` is staging's credential, which only the offline key can read, so it is derived from the
 staging file (owner, needs `SOPS_AGE_KEY_FILE`); it prints `1`:
@@ -189,16 +254,44 @@ Rotate only if the key leaks: a new key makes every enrolled second factor unrea
 credentials; the live Secret in the namespace is a second copy. Only the backend reads it: the worker and the admin
 CLI (`python -m app.admin enrol`) do not.
 
+## Ziftbook rate-limit key
+
+From the security release (v0.31.0, ziftbook #333, ZB-25) the API and the worker store every rate-limit key, an email
+or an IP, as its HMAC-SHA256 under `ZIF_RATE_LIMIT_KEY`, so the `rate_limits` table holds no addresses (the worker's
+per-recipient email limits too). One value per environment, base64 of 32 random bytes (44 characters; the app needs 32),
+in Secret `ziftbook-rate-limit` (key `rate-limit-key`), read by `deploy/backend` and `deploy/worker`. Unset or shorter,
+both keep the plain form and log a WARNING at start (`rate_limit_key` in the `api started` and `worker started` lines
+says `set` when it is used). Earlier releases ignore it. Generated, never typed, with the public key only, in bash from
+the repo root; nothing is printed except `1`. It refuses to overwrite an existing file:
+
+```sh
+env=staging   # or prod
+F=clusters/hetzner/ziftbook-$env/ziftbook-rate-limit.secret.yaml
+K=$(openssl rand -base64 32) && [ ${#K} -eq 44 ] && test ! -e "$F" \
+  && printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: ziftbook-rate-limit\n  namespace: ziftbook-%s\ntype: Opaque\nstringData:\n  rate-limit-key: "%s"\n' "$env" "$K" \
+  | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+  && mv "$F.tmp" "$F" && grep -cE '^ +rate-limit-key: ENC' "$F"
+rm -f "$F.tmp"; unset K
+```
+
+Rotate it only if it leaks: `git rm` the file, run the block again, merge, then
+`kubectl -n ziftbook-<env> rollout restart deploy/backend deploy/worker` (env is read at start; restart both together so
+the two never count under different keys). Setting or changing the key changes every stored key, so every counter
+restarts once: each limit starts again from zero, and the old rows are never matched again. The first release that
+reads the key does the same once.
+
 ## Ziftbook first-run setup (production)
 
 A Ziftbook database with no user redirects every page to `/setup` and refuses sign-up (409 `setup_required`), and the
 backend logs the ERROR `setup token unset: first-run setup refused` while it has no token (ZIF-70, since v0.25.0).
 `/setup` creates the first platform admin once, against `ZIF_SETUP_TOKEN` (backend only, Secret `ziftbook-setup`, key
 `token`, at least 32 characters; shorter counts as unset). It works only while there is no user, so the token is
-single-use; staging is already set up.
+single-use; staging is already set up, and so is production (ZIF-217): its `backend.yaml` no longer has the env, so a
+repeat on an empty database starts by adding it back (step 1; tests/test_ziftbook_manifests.py forbids it, lift that while setting up).
 
 1. Write the Secret on a branch, generated, never typed, with the public key only, in bash from the repo root. Nothing
-   is printed except `1`; it refuses to overwrite an existing file. Open the PR and merge it. The backend reads the
+   is printed except `1`; it refuses to overwrite an existing file. The same PR adds `ZIF_SETUP_TOKEN` to the `backend`
+   container of `ziftbook-prod/backend.yaml` (`secretKeyRef` name `ziftbook-setup`, key `token`, `optional: true`). Open the PR and merge it. The backend reads the
    token at start: if the Secret arrives without a manifest change, `kubectl -n ziftbook-prod rollout restart deploy/backend`:
 
    ```sh
@@ -219,8 +312,8 @@ single-use; staging is already set up.
    kubectl -n ziftbook-prod get secret ziftbook-setup -o jsonpath='{.data.token}' | base64 -d | pbcopy
    ```
 
-3. Delete `clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml` in a PR. Flux prunes the Secret; the backend
-   keeps the old value in its environment until the next restart, which is harmless once a user exists.
+3. Delete `clusters/hetzner/ziftbook-prod/ziftbook-setup.secret.yaml` and the `ZIF_SETUP_TOKEN` env in a PR (the env
+   change rolls the backend, so no pod keeps the token). Flux prunes the Secret.
 
 ## MySQL database per app environment
 
@@ -383,7 +476,8 @@ Service photos (ZIF-133) live in Cloudflare R2, EU jurisdiction, two buckets per
 | `ziftbook-media-<env>` | public read on `img-dev.ziftbook.com` (staging) or `img.ziftbook.com` (prod) only | none; the app sets `Cache-Control` on upload |
 
 The S3 endpoint of an EU bucket is `https://<account id>.eu.r2.cloudflarestorage.com`, set as
-`ZIF_S3_ENDPOINT` on backend and worker (the `.eu` matters: the default endpoint does not see these buckets).
+`ZIF_S3_ENDPOINT` on backend and worker (the `.eu` matters: the default endpoint does not see these buckets). The web
+has it too, with `ZIF_MEDIA_URL`, only for its Content-Security-Policy (ZB-12): keep the three in step.
 Bucket names and the jurisdiction are fixed at creation.
 
 One-time owner steps, in this order:
@@ -488,8 +582,9 @@ kept equal. Account controls, the manual run and the rotation procedure: owner p
 `dev.thebetterdecision.com` needs a login (INFRA-117): Cloudflare Access, email one-time PIN, allow-list = the owner
 (`local.access_allow_emails` in `terraform/cloudflare/access.tf`), 24 h session. Only `GET /health` and `GET /robots.txt`
 are open, for the [post-deploy smoke](#post-deploy-smoke), plus what an MCP client calls without a browser
-(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included) and `/api/v1/oauth/*`. The consent
-page `/oauth/authorize` stays behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
+(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included), `/api/v1/oauth/register` and
+`/api/v1/oauth/token`. The consent page `/oauth/authorize` and the API calls it makes (`/api/v1/oauth/authorize`,
+`.../authorize/context`) stay behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
 is therefore not indexable. Every other path, `/api`
 included, needs the session cookie; the frontend and API share the host, so the browser carries it. Google SSO is off
 on staging, so there is no external callback to break. Staging mail links open only in a browser that has logged in.
@@ -505,8 +600,9 @@ so the order never breaks it.
 answers 302 to `*.cloudflareaccess.com`; `/health` and `/robots.txt` answer 200; `/api/` answers 302.
 MCP paths: `curl -s https://dev.thebetterdecision.com/.well-known/oauth-protected-resource/mcp` returns the backend's
 JSON, `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://dev.thebetterdecision.com/mcp` answers 401 from the MCP
-server (not 302), `curl -s -X POST https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
-(not 302), and `/api/v1/auth/me` still answers 302.
+server (not 302), `curl -s -d '' https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
+(not 302; `-d ''` sends `Content-Length: 0`, a bare `-X POST` sends no length and gets the body rule's 403), and
+`/api/v1/auth/me` and `/api/v1/oauth/authorize/context` still answer 302.
 **Lockout:** applications edited in the dashboard are drift that the next apply reverts; to open staging again, remove
 `cloudflare_zero_trust_access_application.tbd_staging` in a PR.
 
@@ -776,7 +872,7 @@ once (`POST /api/v1/provisioning/contact-points`).
 
 ### Synthetic uptime
 
-Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health/dependencies` and
+Grafana Cloud Synthetic Monitoring (INFRA-172) probes `https://app.thebetterdecision.com/health` (liveness, no database: the database probes are internal only, INF-09) and
 `https://app.ziftbook.com/api/healthz` (the backend's readiness path) from the outside, expecting 200, and replaces the
 Route 53 health check. Rule `ProdEndpointDown` (group `synthetic-uptime`, folder Platform) emails `owner-email` when
 `probe_success` averages under 0.5 over 6 minutes for 2 minutes (both probes failing). No data fires only when both checks report nothing; one check disappearing resolves its own series silently, then every 4 h.
@@ -873,6 +969,28 @@ returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-p
 misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
+
+### TBD app alerts
+
+Rule group `tbd-app` (folder Platform) watches the TBD backend's CSP report sink in production
+(`tbd_security_csp_reports_total`, service `tbd-api`; the counter exists once prod runs a tbd release that includes it, expected 0.303.1). A series appears only on the
+first report with that `outcome`, so the rules count new reports the same way as the Ziftbook counter rules (now
+minus the last value seen up to a day before the window, or 0 if the series is newer) and treat no data as OK.
+
+| Alert | Fires when | Severity, repeat |
+|---|---|---|
+| `TbdCspReportsDropped` | any CSP report dropped in the last hour because the global budget was spent (`outcome="global_budget"`): later reports in that window are not stored | warning, daily |
+| `TbdCspReportSinkFailing` | any CSP report not stored in the last hour because the counter store or the write failed (`outcome` `counter_unavailable` or `write_failed`); the sink fails open | warning, daily |
+
+When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
+of dropped reports is either a real CSP regression (a release that blocks its own assets) or someone flooding the
+report endpoint; the app decides which, not infra.
+
+Apply as under [Memory alerts](#memory-alerts):
+`api PUT /api/v1/provisioning/folder/platform/rule-groups/tbd-app grafana/tbd-app.rules.json`. The metric name is
+not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
+`count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
+returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
 
 ### Find a request's logs
 
@@ -1015,12 +1133,14 @@ and bumped by hand with k3s minors: no Renovate manager sees it, so its patch re
 Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
 [`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
 updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
-(db-1)", which also shows what the mount guard does. For a tunnel hostname, see [Add a public hostname for an
-app](#add-a-public-hostname-for-an-app).
+(db-1)", which also shows what the mount guard does. Who did what on the API: "API audit log" there (each server
+keeps its own log; it starts after a `-e k3s_reconfigure=true` run). The cluster's Pod Security defaults for namespaces
+without their own labels: "Pod Security defaults" there (they too start after that run; do its dry-run check first).
+For a tunnel hostname, see [Add a public hostname for an app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
+applying first; each entry must be a /24 or narrower). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
@@ -1114,16 +1234,18 @@ ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
 ```
 
-**6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
-`netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
+**6. kubeconfig over NetBird (owner).** The CA is `~/.kube/hetzner-ca.crt`, which the Ansible k3s play writes from
+the admin kubeconfig it fetches (it then deletes that kubeconfig: its `system:masters` client certificate cannot be
+revoked); the token is `netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
 file that the kubeconfig names as `tokenFile` (kubectl reads it on every call), so it never sits in a variable or
 argv. Renewing is that one `ssh` line again. The server is the peer's NetBird name; its certificate is the API
 server's, which names `kubernetes`, hence `--tls-server-name`.
 
 ```bash
 export KUBECONFIG=~/.kube/hetzner
-kubectl config view --raw --kubeconfig ~/.kube/fjc-hetzner.yaml -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > ~/.kube/hetzner-ca.crt && grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt   # 1
+# 1. Missing (the play fetches only when k3s rewrites its kubeconfig): the CA is public, read it over ssh:
+# ssh root@$N1 cat /var/lib/rancher/k3s/server/tls/server-ca.crt > ~/.kube/hetzner-ca.crt
+grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt
 kubectl config set-cluster hetzner --server=https://hetzner-k3s.netbird.cloud:6443 --tls-server-name=kubernetes \
   --certificate-authority="$HOME/.kube/hetzner-ca.crt" --embed-certs
 (umask 077; ssh root@$N1 k3s kubectl -n netbird create token owner-admin --duration=2160h > ~/.kube/hetzner-token)
