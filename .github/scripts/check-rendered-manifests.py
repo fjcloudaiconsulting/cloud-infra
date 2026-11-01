@@ -57,11 +57,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 REGISTRIES = ("ghcr.io", "docker.io", "mirror.gcr.io")
 # K8S-02: refs that the open digest pins for the Flux controllers and the k3s upgrade Plans replace. Delete each entry
 # as they land (tests/test_render_check.py fails while one is no longer rendered); never add one.
-AWAITING_DIGEST = {
-    ("hetzner/flux-system/gotk-components.yaml", "ghcr.io/fluxcd/source-controller:v1.9.6"),
-    ("hetzner/flux-system/gotk-components.yaml", "ghcr.io/fluxcd/kustomize-controller:v1.9.6"),
-    ("hetzner/system-upgrade/plans.yaml", "rancher/k3s-upgrade"),
-}
+AWAITING_DIGEST = set()
 # Flux Kustomization spec fields that leave the objects as kustomize builds them.
 FLUX_SPEC = {"interval", "retryInterval", "timeout", "path", "prune", "sourceRef", "decryption", "dependsOn", "wait",
              "healthChecks", "healthCheckExprs", "force", "suspend", "serviceAccountName", "deletionPolicy",

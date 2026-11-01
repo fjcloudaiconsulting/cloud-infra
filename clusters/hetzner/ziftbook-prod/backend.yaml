@@ -61,7 +61,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.27.0@sha256:dac3c04f6125dea3859bce81a4680128018cd908e89315cb68465e4d6267a6c9
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.31.0@sha256:893fe4e97caa0c9fd0e54c9e0ea70834ce4f2ddbd29ffb212316ae3627e2afe1
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -87,7 +87,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.27.0@sha256:592831b13118f55d53d20457eb202e107d934eab8be0d47b3d57ce82b41cf169
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.31.0@sha256:ec754adc68119fd2095a47ead00b8dd7eb9f5eed46d78296ff650d94dcc5f7cf
           ports:
             - containerPort: 8000
           envFrom:
@@ -105,14 +105,14 @@ spec:
                   name: ziftbook-totp
                   key: key
                   optional: true
-            # First-run setup (ZIF-70): with no user in the database every page redirects to /setup, which takes this
-            # token (32+ characters) once. Works only while there are no users; delete the Secret after setup.
-            - name: ZIF_SETUP_TOKEN
+            # Pepper for the rate-limit keys (ZB-25): the email or IP in each key is stored as its HMAC under it, so the
+            # rate_limits table holds no addresses. One value per environment, the worker's too; changing it restarts every
+            # counter once (docs/runbooks.md "Ziftbook rate-limit key"). Not optional: the Secret is in git.
+            - name: ZIF_RATE_LIMIT_KEY
               valueFrom:
                 secretKeyRef:
-                  name: ziftbook-setup
-                  key: token
-                  optional: true
+                  name: ziftbook-rate-limit
+                  key: rate-limit-key
             # The migrate role's credentials stay in the init container.
             - name: ZIF_DATABASE_URL
               valueFrom:
@@ -121,7 +121,8 @@ spec:
                   key: database-url
             # Service photos in R2 (ZIF-133, docs/runbooks.md "R2 for Ziftbook photos"). EU buckets answer only on the .eu
             # endpoint. The env's own R2 token is in Secret ziftbook-storage; optional: uploads answer 503 until it exists.
-            # ZIF_S3_UPLOADS_BUCKET is left out on purpose until ziftbook 0.31.0 (ZIF-214): photo uploads answer 503.
+            - name: ZIF_S3_UPLOADS_BUCKET
+              value: ziftbook-uploads-prod
             - name: ZIF_S3_MEDIA_BUCKET
               value: ziftbook-media-prod
             - name: ZIF_MEDIA_URL

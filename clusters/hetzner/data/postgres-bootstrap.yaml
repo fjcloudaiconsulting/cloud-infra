@@ -4,6 +4,10 @@
 # A rotated ziftbook password must also go into ziftbook-staging/ziftbook.secret.yaml (the app's
 # connection URLs), or staging loses the database, and nothing else: production logs in as its own roles
 # (postgres-bootstrap-prod.yaml). The ziftbook database is staging's; production is ziftbook_prod.
+# The worker's role ziftbook_worker (ZB-08: ziftbook_app's privileges plus what only background jobs may do)
+# is shared like the other two, so both Jobs set its password from the same Secret, postgres-ziftbook-worker;
+# the same value is in ziftbook-staging/ziftbook-worker-database.secret.yaml (staging's worker URL). Rotate the
+# two together (docs/runbooks.md "Ziftbook production secrets").
 # admin-password is read only at initdb: rotate it with ALTER ROLE postgres PASSWORD first.
 # A Failed Job does not make the Flux Kustomization unready: check `kubectl -n data get job` after a change.
 apiVersion: batch/v1
@@ -31,9 +35,9 @@ spec:
           image: curlimages/curl:8.23.0@sha256:a134550be58ab783810e613ae96fd253c38f7bdd16d9bf9be350700c7a29ac06
           env:
             - name: URL
-              value: https://raw.githubusercontent.com/fjcloudaiconsulting/ziftbook/21974f3a39eae3a194aaa0e1ac1a2cfa7a5f37b5/backend/migrations/bootstrap.sql
+              value: https://raw.githubusercontent.com/fjcloudaiconsulting/ziftbook/afcc222885e6df46e7dbc830d9a3b2fbbf72b504/backend/migrations/bootstrap.sql
             - name: SHA256
-              value: d5a918ef1e4329dc6fdc0bc50cababd81d27d61a5db2c225258e05a24db68d15
+              value: ad12d2174033a5677c315e1f838ddf910517a4c7e992a0ff81d10c7d9300a9dc
           command: [sh, -c, 'curl -fsSLo /work/bootstrap.sql "$URL" && echo "$SHA256  /work/bootstrap.sql" | sha256sum -c -']
           resources:
             requests:
@@ -75,6 +79,11 @@ spec:
                 secretKeyRef:
                   name: postgres
                   key: ziftbook-app-password
+            - name: ZIF_WORKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-worker
+                  key: password
           resources:
             requests:
               cpu: 10m
