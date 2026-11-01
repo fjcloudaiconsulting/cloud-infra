@@ -65,10 +65,15 @@ flowchart LR
 
 Every app host goes through the Hetzner cluster's Cloudflare Tunnel: `dev.thebetterdecision.com` (staging, since INFRA-173) and
 `app.thebetterdecision.com` (TBD production, since INFRA-175, proxied CNAMEs to the tunnel), `dev.ziftbook.com`
-(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime checks target TBD's `app.../health/dependencies` and Ziftbook's `app.../api/healthz`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
+(staging, since INFRA-173) and `app.ziftbook.com` (production, since INFRA-181). The uptime checks target TBD's `app.../health` (liveness only: `/ready` and `/health/dependencies` are not routed publicly, INF-09) and Ziftbook's `app.../api/healthz`, through the tunnel since INFRA-175. The ziftbook.com apex and www are a Cloudflare Worker (`ziftbook-landing`), and since INFRA-61 the
 thebetterdecision.com apex is the Worker `tbd-landing`; their code and deploys live in the app repos, and their custom
 domains are attached by hand ([configuration-map.md](configuration-map.md#worker-and-snippet-access-infra-98)).
 `www.thebetterdecision.com` is a proxied record that a redirect rule in `terraform/cloudflare` sends to the apex (301).
+
+The tunnel is the only way in to the TBD workloads (INF-01). In `tbd-prod` and `tbd-staging` only `cloudflared` reaches the backend
+and MCP pods, and their uvicorn reads `X-Forwarded-For` and `X-Forwarded-Proto` from the pod network only. The TBD
+processes take the visitor's address from `CF-Connecting-IP` (`CLIENT_IP_HEADER`). `tests/test_tbd_manifests.py` and
+`tests/test_tbd_edge.py` hold these in place.
 
 Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
 unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s
@@ -76,8 +81,13 @@ from one IP (per Cloudflare data center) to those paths gets a 429 from Cloudfla
 address can send to them. The zones are on the Free plan, which allows one such rule per zone and matches on the path only,
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.
 
+A zone custom rule caps request bodies on the TBD app hosts (`app.` and `dev.`, BE-13): a request that declares a
+`Content-Length` over 16 MiB gets Cloudflare's 403 block page, and so does a chunked request or a POST, PUT or PATCH
+that declares no length (EDGE-02; exactly `/mcp` on `dev.`, the MCP server, is exempt). The largest upload TBD accepts is 5 MiB.
+
 - Terraform: [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf), rate limit in
-  [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf)
+  [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf), body cap in
+  [`terraform/cloudflare/body_limit.tf`](../terraform/cloudflare/body_limit.tf)
 
 ## Node and k3s
 
@@ -180,7 +190,9 @@ reach every replica), and then gets one per environment, never shared.
   locked for 7 days (GOVERNANCE).
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
-- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md), restore drill (steps 1-5) passed 2026-10-02 (INFRA-31).
+- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
+  (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
+  when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
 Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
@@ -301,6 +313,7 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 | Signal | Source | Goes to |
 |---|---|---|
 | Stale backup | freshness probe | GitHub issue `[backup-stale]` |
+| No restore drill in 100 days | restore drill probe | GitHub issue `[restore-drill]` |
 
 Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
 
