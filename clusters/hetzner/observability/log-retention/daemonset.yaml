@@ -37,8 +37,9 @@ spec:
             - -c
             - 'while true; do timeout 600 sh /script/log-retention.sh || echo "log-retention: pass failed" >&2; sleep 3600; done'
           env:
+            # Alloy's heartbeat-only receiver; the NetworkPolicy in ../alloy/alloy.yaml admits only these pods to it.
             - name: HEARTBEAT_URL
-              value: http://alloy.observability.svc:4318/v1/metrics
+              value: http://alloy.observability.svc:4320/v1/metrics
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
