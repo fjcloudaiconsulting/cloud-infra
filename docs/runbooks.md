@@ -6,7 +6,23 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 (`~/.kube/hetzner`, over NetBird) and never prints a secret value.
 
 Database restores are
-[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md).
+[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
+set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
+runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
+against commands a backup should never carry; custom-format dumps restored by a non-superuser role
+are planned to replace the scan (#272).
+
+## Restore drill
+
+Every quarter, and before any one-way door that relies on the backups or after a backup format change, run
+[`RESTORE.md`](../clusters/hetzner/data/RESTORE.md) steps 1-5 on its scratch namespace for a recent production set of
+each engine (`tbd-mysql`, `ziftbook-prod-postgres`). It passes when both restore and step 5's checks agree with the
+manifest. Keep the row counts out of git and the PR: they show how the data grows.
+
+After a successful drill, update the record in a PR: in [`docs/restore-drill.md`](restore-drill.md), set
+`last-successful-drill: YYYY-MM-DD` to the UTC date the drill finished, and change nothing else there. The weekly
+`restore-drill-probe.yml` keeps one `[restore-drill]` issue open while that line says `never` or is more than 100
+days old, and closes it when the PR merges. A failed drill is a backup fault: leave the date and fix the cause.
 
 ## Follow Flux and rollouts
 
@@ -566,8 +582,9 @@ kept equal. Account controls, the manual run and the rotation procedure: owner p
 `dev.thebetterdecision.com` needs a login (INFRA-117): Cloudflare Access, email one-time PIN, allow-list = the owner
 (`local.access_allow_emails` in `terraform/cloudflare/access.tf`), 24 h session. Only `GET /health` and `GET /robots.txt`
 are open, for the [post-deploy smoke](#post-deploy-smoke), plus what an MCP client calls without a browser
-(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included) and `/api/v1/oauth/*`. The consent
-page `/oauth/authorize` stays behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
+(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included), `/api/v1/oauth/register` and
+`/api/v1/oauth/token`. The consent page `/oauth/authorize` and the API calls it makes (`/api/v1/oauth/authorize`,
+`.../authorize/context`) stay behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
 is therefore not indexable. Every other path, `/api`
 included, needs the session cookie; the frontend and API share the host, so the browser carries it. Google SSO is off
 on staging, so there is no external callback to break. Staging mail links open only in a browser that has logged in.
@@ -583,8 +600,9 @@ so the order never breaks it.
 answers 302 to `*.cloudflareaccess.com`; `/health` and `/robots.txt` answer 200; `/api/` answers 302.
 MCP paths: `curl -s https://dev.thebetterdecision.com/.well-known/oauth-protected-resource/mcp` returns the backend's
 JSON, `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://dev.thebetterdecision.com/mcp` answers 401 from the MCP
-server (not 302), `curl -s -X POST https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
-(not 302), and `/api/v1/auth/me` still answers 302.
+server (not 302), `curl -s -d '' https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
+(not 302; `-d ''` sends `Content-Length: 0`, a bare `-X POST` sends no length and gets the body rule's 403), and
+`/api/v1/auth/me` and `/api/v1/oauth/authorize/context` still answer 302.
 **Lockout:** applications edited in the dashboard are drift that the next apply reverts; to open staging again, remove
 `cloudflare_zero_trust_access_application.tbd_staging` in a PR.
 
@@ -1115,12 +1133,14 @@ and bumped by hand with k3s minors: no Renovate manager sees it, so its patch re
 Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
 [`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
 updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
-(db-1)", which also shows what the mount guard does. For a tunnel hostname, see [Add a public hostname for an
-app](#add-a-public-hostname-for-an-app).
+(db-1)", which also shows what the mount guard does. Who did what on the API: "API audit log" there (each server
+keeps its own log; it starts after a `-e k3s_reconfigure=true` run). The cluster's Pod Security defaults for namespaces
+without their own labels: "Pod Security defaults" there (they too start after that run; do its dry-run check first).
+For a tunnel hostname, see [Add a public hostname for an app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
+applying first; each entry must be a /24 or narrower). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
@@ -1214,16 +1234,18 @@ ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
 ```
 
-**6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
-`netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
+**6. kubeconfig over NetBird (owner).** The CA is `~/.kube/hetzner-ca.crt`, which the Ansible k3s play writes from
+the admin kubeconfig it fetches (it then deletes that kubeconfig: its `system:masters` client certificate cannot be
+revoked); the token is `netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
 file that the kubeconfig names as `tokenFile` (kubectl reads it on every call), so it never sits in a variable or
 argv. Renewing is that one `ssh` line again. The server is the peer's NetBird name; its certificate is the API
 server's, which names `kubernetes`, hence `--tls-server-name`.
 
 ```bash
 export KUBECONFIG=~/.kube/hetzner
-kubectl config view --raw --kubeconfig ~/.kube/fjc-hetzner.yaml -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > ~/.kube/hetzner-ca.crt && grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt   # 1
+# 1. Missing (the play fetches only when k3s rewrites its kubeconfig): the CA is public, read it over ssh:
+# ssh root@$N1 cat /var/lib/rancher/k3s/server/tls/server-ca.crt > ~/.kube/hetzner-ca.crt
+grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt
 kubectl config set-cluster hetzner --server=https://hetzner-k3s.netbird.cloud:6443 --tls-server-name=kubernetes \
   --certificate-authority="$HOME/.kube/hetzner-ca.crt" --embed-certs
 (umask 077; ssh root@$N1 k3s kubectl -n netbird create token owner-admin --duration=2160h > ~/.kube/hetzner-token)

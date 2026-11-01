@@ -1,0 +1,27 @@
+---
+# k3s Pod Security admission defaults, installed by site.yml at k3s_psa_config_file (group_vars/all.yml) and passed to
+# the API server as admission-control-config-file. A default applies only to a namespace with no
+# pod-security.kubernetes.io/<mode> label of its own for that mode, so the enforce default reaches the namespaces k3s
+# makes (default, kube-public, kube-node-lease), flux-system unless its kustomization labels it, and any namespace made
+# by hand; every other Namespace in clusters/hetzner/ keeps the level it sets. The API server reads this file at start,
+# so a change takes effect on the next `-e k3s_reconfigure=true` run (README.md, "Pod Security defaults").
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+  - name: PodSecurity
+    configuration:
+      apiVersion: pod-security.admission.config.k8s.io/v1
+      kind: PodSecurityConfiguration
+      defaults:
+        enforce: baseline
+        enforce-version: latest
+        audit: restricted
+        audit-version: latest
+        warn: restricted
+        warn-version: latest
+      exemptions:
+        usernames: []
+        runtimeClasses: []
+        # k3s's own add-ons run here, and the local-path provisioner starts its helper pods here with a hostPath
+        # volume (every PV, the database volumes included): baseline would refuse them.
+        namespaces: [kube-system]
