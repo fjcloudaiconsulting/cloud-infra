@@ -299,8 +299,11 @@ spec:
                   mountPath: /scripts
           volumes:
             - name: backup
+              # tmpfs: the plaintext dumps (password hashes included) never reach the node's disk (INFRA-205).
+              # A set is ~600 KB and counts toward the container's memory limit.
               emptyDir:
-                sizeLimit: 1Gi
+                medium: Memory
+                sizeLimit: 64Mi
             - name: scripts
               configMap:
                 name: db-backup
