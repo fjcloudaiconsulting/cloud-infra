@@ -82,7 +82,8 @@ address can send to them. The zones are on the Free plan, which allows one such 
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.
 
 A zone custom rule caps request bodies on the TBD app hosts (`app.` and `dev.`, BE-13): a request that declares a
-`Content-Length` over 16 MiB gets Cloudflare's 403 block page. The largest upload TBD accepts is 5 MiB.
+`Content-Length` over 16 MiB gets Cloudflare's 403 block page, and so does a chunked request or a POST, PUT or PATCH
+that declares no length (EDGE-02; exactly `/mcp` on `dev.`, the MCP server, is exempt). The largest upload TBD accepts is 5 MiB.
 
 - Terraform: [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf), rate limit in
   [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf), body cap in
