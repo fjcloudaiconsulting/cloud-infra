@@ -100,11 +100,12 @@ otelcol.receiver.prometheus "scraped" {
 
 // Node: the embedded node_exporter, reading the host's /proc and /sys (read-only mounts). Disk space comes from
 // cAdvisor (container_fs_*{id="/"}, one series per disk, the DB volume on db-1 included), so the host's / is not
-// mounted at all.
+// mounted at all. stat (/proc/stat) is there for node_boot_time_seconds only: rule NodeRebootOverdue
+// (grafana/node-reboot.rules.json, INFRA-219) alerts on a node's boot age; prometheus.relabel "node" drops the rest.
 prometheus.exporter.unix "node" {
 	procfs_path    = "/host/proc"
 	sysfs_path     = "/host/sys"
-	set_collectors = ["cpu", "diskstats", "loadavg", "meminfo", "pressure", "vmstat"]
+	set_collectors = ["cpu", "diskstats", "loadavg", "meminfo", "pressure", "stat", "vmstat"]
 
 	disk {
 		device_exclude = "^(loop|ram|dm-|sr)\\d+$"
@@ -129,7 +130,19 @@ discovery.relabel "node" {
 prometheus.scrape "node" {
 	targets         = discovery.relabel.node.output
 	scrape_interval = "60s"
-	forward_to      = [otelcol.receiver.prometheus.scraped.receiver]
+	forward_to      = [prometheus.relabel.node.receiver]
+}
+
+// The stat collector's other series (interrupts, context switches, forks, running and blocked processes): nothing
+// reads them, so they do not leave the node. Every other node series passes.
+prometheus.relabel "node" {
+	rule {
+		source_labels = ["__name__"]
+		regex         = "node_(intr|context_switches|forks)_total|node_procs_(running|blocked)"
+		action        = "drop"
+	}
+
+	forward_to = [otelcol.receiver.prometheus.scraped.receiver]
 }
 
 // cAdvisor on this node's kubelet (10250), with the pod's token (RBAC: nodes/metrics only). The kubelet's own

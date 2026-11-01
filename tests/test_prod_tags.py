@@ -141,9 +141,10 @@ class ProdTags(unittest.TestCase):
             self.assertEqual(run(layout).returncode, 1, ref)
 
     def test_other_repos_in_staging_do_not_bound_prod(self):
-        # Kills dropping the repo filter from the lowest-tag computation.
+        # Kills dropping the repo filter from the lowest-tag computation. Not an image: the fence keeps tbd-staging's
+        # images on tbd/, but any ref in the text counts.
         layout = tbd([("backend", "v0.3.0")], [("backend", "v0.3.0")])
-        layout["p/tbd-staging"]["b.yaml"] = img("other", "x", "v0.1.0")
+        layout["p/tbd-staging"]["b.yaml"] = "value: ghcr.io/fjcloudaiconsulting/other/x:v0.1.0\n"
         self.assertEqual(run(layout).returncode, 0)
 
     def test_no_prod_dir_is_an_error(self):
@@ -153,6 +154,41 @@ class ProdTags(unittest.TestCase):
     def test_prod_dir_without_images_fails(self):
         r = run({"p/tbd-prod": {"a.yaml": "kind: Service\n"}, "p/tbd-staging": {"a.yaml": img("tbd", "backend", "v0.2.0")}})
         self.assertEqual(r.returncode, 1)
+
+
+class CanonicalForm(unittest.TestCase):
+    """GHA-03: shapes kustomize renders as a prod image that the text match above does not see. Each layout passes
+    without manifest_fence.py: staging and prod otherwise agree on v0.2.0."""
+
+    def assertFails(self, extra, needle, where="p/tbd-prod"):
+        layout = tbd([("backend", "v0.2.0")], [("backend", "v0.2.0")])
+        layout.setdefault(where, {}).update(extra)
+        r = run(layout)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(needle, r.stderr)
+
+    def test_escaped_prod_ref_fails(self):
+        self.assertFails({"b.yaml": 'image: "ghcr.io\\/fjcloudaiconsulting/tbd/backend:v9.0.0"\n'},
+                         "escape in a quoted `image` value")
+
+    def test_foreign_registry_in_prod_fails(self):
+        self.assertFails({"b.yaml": "image: registry.example/tbd/backend:v9.0.0\n"},
+                         "image in tbd-prod must come from ghcr.io/fjcloudaiconsulting/tbd/")
+
+    def test_kustomize_image_override_in_prod_fails(self):
+        self.assertFails({"kustomization.yaml": "images:\n  - name: backend\n    newTag: v9.0.0\n"},
+                         "kustomization key `images` outside flux-system and system-upgrade")
+
+    def test_prod_workload_outside_its_directory_fails(self):
+        doc = ("kind: Deployment\nmetadata:\n  namespace: tbd-prod\nspec:\n  template:\n    spec:\n      containers:\n"
+               "        - image: ghcr.io/fjcloudaiconsulting/tbd/backend:v9.0.0\n")
+        self.assertFails({"a.yaml": doc}, "a workload in tbd-prod lives in that namespace's directory", where="p/data")
+
+    def test_repo_clusters_pass(self):
+        # guard: the committed tree.
+        r = subprocess.run(["python3", "-I", str(SCRIPT), str(SCRIPT.parent.parent.parent / "clusters")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == "__main__":

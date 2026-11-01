@@ -83,7 +83,8 @@ address can send to them. The zones are on the Free plan, which allows one such 
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.
 
 A zone custom rule caps request bodies on the TBD app hosts (`app.` and `dev.`, BE-13): a request that declares a
-`Content-Length` over 16 MiB gets Cloudflare's 403 block page. The largest upload TBD accepts is 5 MiB.
+`Content-Length` over 16 MiB gets Cloudflare's 403 block page, and so does a chunked request or a POST, PUT or PATCH
+that declares no length (EDGE-02; exactly `/mcp` on `dev.`, the MCP server, is exempt). The largest upload TBD accepts is 5 MiB.
 
 - Terraform: [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf), rate limit in
   [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf), body cap in
@@ -106,7 +107,7 @@ Three Hetzner CAX21 ARM64 servers in nbg1 run k3s HA (`terraform/hetzner`, host 
 | `observability` | Grafana Alloy (metrics to Grafana Cloud, INFRA-85) | none (request 128Mi, limit 256Mi) | Pod Security privileged (read-only hostPath for node metrics) |
 | `system-upgrade` | system-upgrade-controller and the two k3s upgrade Plans (INFRA-179) | none | Pod Security privileged (upgrade jobs run privileged with the host mounted) |
 
-The app namespaces enforce Pod Security restricted, `data` baseline. Every app namespace has a LimitRange with default memory limits, and its `default`
+The app namespaces, `data` and `flux-system` enforce Pod Security restricted. Every app namespace has a LimitRange with default memory limits, and its `default`
 ServiceAccount pulls from GHCR through `ghcr-pull`. Manifests:
 [`clusters/hetzner/namespaces/`](../clusters/hetzner/namespaces/).
 Their egress (`egress-no-imds` in each `networkpolicy.yaml`) reaches every pod and Service and the internet, except
@@ -195,7 +196,9 @@ reach every replica), and then gets one per environment, never shared.
   locked for 7 days (GOVERNANCE).
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
-- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md), restore drill (steps 1-5) passed 2026-10-02 (INFRA-31).
+- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
+  (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
+  when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
 Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
@@ -316,6 +319,7 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 | Signal | Source | Goes to |
 |---|---|---|
 | Stale backup | freshness probe | GitHub issue `[backup-stale]` |
+| No restore drill in 100 days | restore drill probe | GitHub issue `[restore-drill]` |
 
 Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
 
