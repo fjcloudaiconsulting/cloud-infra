@@ -58,6 +58,43 @@
     validate: /usr/sbin/sshd -t -f %s
   notify: Reload sshd
 
+# Root's authorized_keys is exactly the deploy keys: the public key next to ansible_ssh_private_key_file on this
+# machine plus deploy_ssh_extra_public_keys (group_vars/all.yml). Hetzner writes a key only when a server is created,
+# so without this a replaced key, or one added by hand, would stay valid. Run with --check --diff first (README.md).
+- name: Collect the deploy public keys
+  ansible.builtin.set_fact:
+    node_base_root_keys: "{{ [lookup('ansible.builtin.file', (ansible_ssh_private_key_file | expanduser) ~ '.pub')] + deploy_ssh_extra_public_keys }}"
+
+- name: The deploy public keys are well-formed
+  ansible.builtin.assert:
+    that:
+      - node_base_root_keys | length > 0
+      - node_base_root_keys | reject('match', node_base_ssh_key_pattern) | list | length == 0
+    fail_msg: >-
+      Not writing root's authorized_keys: each deploy key must be one line, "ssh-ed25519 AAAA..." or
+      "sk-ssh-ed25519@openssh.com AAAA...", with an optional comment.
+    quiet: true
+
+- name: Read root's authorized keys
+  ansible.builtin.slurp:
+    src: /root/.ssh/authorized_keys
+  register: node_base_authorized_keys
+
+# Lockout guard: the exclusive write below keeps the key this run connects with, so that key must already work.
+- name: The key Ansible connects with is already authorized
+  ansible.builtin.assert:
+    that: (node_base_root_keys[0].split()[:2] | join(' ')) in (node_base_authorized_keys.content | b64decode)
+    fail_msg: >-
+      Not writing root's authorized_keys on {{ inventory_hostname }}: {{ ansible_ssh_private_key_file }}.pub is not
+      among its keys. Check that the .pub file belongs to that private key.
+    quiet: true
+
+- name: Root accepts only the deploy keys
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ node_base_root_keys | join('\n') }}"
+    exclusive: true
+
 # A network attached after first boot is missing from cloud-init's 50-cloud-init.yaml, so its NIC stays down.
 # Netplan merges the same interface ID across files: where cloud-init already lists the NIC (by MAC, dhcp4),
 # this adds nothing new.
