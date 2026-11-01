@@ -189,7 +189,9 @@ reach every replica), and then gets one per environment, never shared.
   locked for 7 days (GOVERNANCE).
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
-- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md), restore drill (steps 1-5) passed 2026-10-02 (INFRA-31).
+- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
+  (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
+  when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
 Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
@@ -310,6 +312,7 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 | Signal | Source | Goes to |
 |---|---|---|
 | Stale backup | freshness probe | GitHub issue `[backup-stale]` |
+| No restore drill in 100 days | restore drill probe | GitHub issue `[restore-drill]` |
 
 Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
 
