@@ -735,11 +735,12 @@ class LockFilesAndVersions(unittest.TestCase):
         self.assertTrue(rest, "fixture needs the hetzner lock with two h1: hashes")
         one = hetzner.replace(rest[0], "")
         self.assertIn("has 1 h1: hash(es)", "".join(lock_problems("hetzner", one)))
-        # fence: the exemption is per version, so a bump of an exempt provider must hash both platforms.
-        tokens = (TERRAFORM / "cloudflare-tokens/.terraform.lock.hcl").read_text()
-        bumped = tokens.replace('version     = "0.81.0"', 'version     = "0.82.0"')
-        self.assertNotEqual(bumped, tokens)
-        self.assertIn("hashicorp/tfe has 1 h1", "".join(lock_problems("cloudflare-tokens", bumped)))
+        # fence: the exemption is per version, so a bump of an exempt provider must hash both platforms. A fixture,
+        # not the real lock, so the test still holds once that lock is bumped and hashed for both platforms.
+        lock = 'provider "registry.terraform.io/hashicorp/tfe" {\n  version     = "%s"\n  hashes = [\n' \
+               '    "h1:a=",\n    "zh:b",\n  ]\n}\n'
+        self.assertEqual(lock_problems("cloudflare-tokens", lock % "0.81.0"), [])
+        self.assertIn("hashicorp/tfe has 1 h1", "".join(lock_problems("cloudflare-tokens", lock % "0.82.0")))
 
     def test_lock_file_with_another_provider_fails(self):
         lock = 'provider "registry.terraform.io/hashicorp/external" {\n  version = "2.3.5"\n  hashes = [\n' \
