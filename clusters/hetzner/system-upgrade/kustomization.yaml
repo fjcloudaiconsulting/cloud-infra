@@ -27,6 +27,33 @@ patches:
         labels:
           pod-security.kubernetes.io/warn: baseline
           pod-security.kubernetes.io/audit: baseline
+  # The controller pod itself (K8S-08); upstream sets no resources and leaves the root writable. Its image is the static
+  # binary on scratch, run as 65534 with no capabilities, so the emptyDir upstream mounts at /tmp is all it can write:
+  # a read-only root takes nothing away (re-check on a re-vendor). Memory: a Go controller caching this namespace's
+  # Plans, Jobs and Secrets plus three Nodes, tens of MiB; 128Mi leaves several times that, and an OOM kill fires
+  # NodeOOMKill. Check after a change: max_over_time(container_memory_working_set_bytes{namespace="system-upgrade",
+  # container="system-upgrade-controller"}[7d]). Only this Deployment matches: the upgrade Jobs take their pod spec
+  # from the Plans and default-controller-env, never from the controller's own pod.
+  - target:
+      kind: Deployment
+      name: system-upgrade-controller
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: system-upgrade-controller
+      spec:
+        template:
+          spec:
+            containers:
+              - name: system-upgrade-controller
+                securityContext:
+                  readOnlyRootFilesystem: true
+                resources:
+                  requests:
+                    memory: 32Mi
+                  limits:
+                    memory: 128Mi
 # The controller runs cluster-wide with a privileged ServiceAccount: pin the image by digest (multi-arch index of
 # v0.20.2) without touching the vendored file. Bumped by hand with a re-vendor of crd.yaml (runbook "Upgrade k3s").
 images:
