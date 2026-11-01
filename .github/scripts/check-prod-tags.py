@@ -34,7 +34,7 @@ def refs(d, errs):
     """{repo/image: [(tag, file)]} for every yaml under d; non-vX.Y.Z tags are errors."""
     out = {}
     for f in sorted(d.rglob("*")):
-        if f.suffix.lower() not in (".yaml", ".yml") or not f.is_file():
+        if not f.name.lower().endswith((".yaml", ".yml")) or not f.is_file():  # by name: ".yaml" has no suffix
             continue
         for image, tag in REF.findall(f.read_bytes().decode("utf-8", "replace")):  # the fence reports non-UTF-8
             tag = DIGEST.sub("", tag)

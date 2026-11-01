@@ -93,6 +93,9 @@ jobs:
       # change only with a repo change. Bump by hand; tests/test_ci_fences.py keeps both pinned.
       K8S_SCHEMA_SHA: f7d855e49c34b039c9ef2196444910275e31e09e
       CRDS_CATALOG_SHA: d373c2da9702bc9509a004db83e57263fe3bdfc1
+      # The kustomize release Flux's kustomize-controller embeds (v1.9.6 pins v5.8.1): bump it with a Flux upgrade.
+      KUSTOMIZE_VERSION: v5.8.1
+      KUSTOMIZE_SHA256: 029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,6 +104,17 @@ jobs:
       - name: every Secret is SOPS-encrypted
         # clusters/ Secrets and ansible/ *.sops.yaml vars files.
         run: python3 .github/scripts/check-sops-secrets.py clusters ansible
+      - name: rendered manifests
+        # GHA-03: render what Flux applies (offline, nothing decrypted) and check the objects; then the check's tests,
+        # which fail here instead of skipping without kustomize.
+        run: |
+          set -euo pipefail
+          curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$KUSTOMIZE_VERSION/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "$KUSTOMIZE_SHA256  kustomize.tgz" | sha256sum -c -
+          tar -xzf kustomize.tgz kustomize
+          export KUSTOMIZE="$PWD/kustomize" RENDER_CHECK_REQUIRED=1
+          python3 .github/scripts/check-rendered-manifests.py clusters
+          python3 -m unittest discover -s tests -p test_render_check.py
       - name: prod tags not ahead of staging
         # INFRA-89: every <app>-prod image tag must be <= the same app's <app>-staging tags.
         run: python3 .github/scripts/check-prod-tags.py clusters

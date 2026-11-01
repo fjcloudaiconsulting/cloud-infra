@@ -4,6 +4,8 @@
 # (docs/configuration-map.md, Branch protection). tests/test_ci_fences.py keeps every path below owned.
 # The last matching line wins: keep these anchored, and add broader patterns above them, not below.
 
+# source-controller applies a .sourceignore in any directory to what Flux reads.
+**/.sourceignore                   @flamarion
 /.github/                          @flamarion
 /renovate.json                     @flamarion
 /clusters/hetzner/flux-system/     @flamarion
