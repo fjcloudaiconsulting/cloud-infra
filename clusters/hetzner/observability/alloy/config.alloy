@@ -27,14 +27,148 @@ otelcol.processor.batch "default" {
 	}
 }
 
-// ---- Apps: OTLP/HTTP on 4318 (alloy.observability.svc) ------------------------------------------------------------
+// ---- Apps: OTLP/HTTP, one receiver per environment (alloy.observability.svc) ---------------------------------------
+// 4318 takes tbd-prod and ziftbook-prod, 4319 tbd-staging and ziftbook-staging; the NetworkPolicy in alloy.yaml admits
+// each namespace to its own port only (4320, the log-retention heartbeat, is further down). Each receiver's data goes
+// through its memory limiter and its environment transform, then the shared filter and scrub, then export: the
+// environment label comes from the port, not from the app, and app data never carries the names of the series the
+// platform alerts read.
+// Body cap 4MiB (the default is 20MiB): an app's largest request is a trace batch (the SDK's default 512 spans,
+// uncompressed protobuf, about 1 MiB with SQL statements); its 60 s metric export is a few hundred KiB at most.
 
-otelcol.receiver.otlp "apps" {
+otelcol.receiver.otlp "apps_production" {
 	http {
-		endpoint = "0.0.0.0:4318"
+		endpoint              = "0.0.0.0:4318"
+		max_request_body_size = "4MiB"
 	}
 
 	// Metrics and traces. Logs sent here are refused: app logs come only from the Ziftbook pod logs below.
+	output {
+		metrics = [otelcol.processor.memory_limiter.apps_production.input]
+		traces  = [otelcol.processor.memory_limiter.apps_production.input]
+	}
+}
+
+otelcol.receiver.otlp "apps_staging" {
+	http {
+		endpoint              = "0.0.0.0:4319"
+		max_request_body_size = "4MiB"
+	}
+
+	output {
+		metrics = [otelcol.processor.memory_limiter.apps_staging.input]
+		traces  = [otelcol.processor.memory_limiter.apps_staging.input]
+	}
+}
+
+// While Alloy's heap is over limit - spike_limit (144MiB) app data is refused (the SDK retries it later); over limit a
+// GC is forced too. Both sit under GOMEMLIMIT (200MiB, alloy.yaml), so the limiter acts before the Go runtime starts
+// collecting hard, and app traffic cannot push Alloy to the 256Mi container limit. The node, cAdvisor and log pipelines
+// do not pass through it (their heap is about 44 MiB). Both limiters read the same process: keep their values equal.
+otelcol.processor.memory_limiter "apps_production" {
+	check_interval = "1s"
+	limit          = "180MiB"
+	spike_limit    = "36MiB"
+
+	output {
+		metrics = [otelcol.processor.transform.environment_production.input]
+		traces  = [otelcol.processor.transform.environment_production.input]
+	}
+}
+
+otelcol.processor.memory_limiter "apps_staging" {
+	check_interval = "1s"
+	limit          = "180MiB"
+	spike_limit    = "36MiB"
+
+	output {
+		metrics = [otelcol.processor.transform.environment_staging.input]
+		traces  = [otelcol.processor.transform.environment_staging.input]
+	}
+}
+
+// deployment.environment.name is the receiver's, whatever the app sent: set on the resource (Grafana Cloud copies it
+// to every series as deployment_environment_name), and deleted from data points and spans, where a key with the same
+// label name would win over the resource's. Every spelling that maps to that label (".", "_", "-") goes.
+otelcol.processor.transform "environment_production" {
+	metric_statements {
+		context    = "resource"
+		statements = [
+			`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`,
+			`set(attributes["deployment.environment.name"], "production")`,
+		]
+	}
+
+	metric_statements {
+		context    = "datapoint"
+		statements = [`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`]
+	}
+
+	trace_statements {
+		context    = "resource"
+		statements = [
+			`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`,
+			`set(attributes["deployment.environment.name"], "production")`,
+		]
+	}
+
+	trace_statements {
+		context    = "span"
+		statements = [`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`]
+	}
+
+	output {
+		metrics = [otelcol.processor.filter.apps.input]
+		traces  = [otelcol.processor.filter.apps.input]
+	}
+}
+
+otelcol.processor.transform "environment_staging" {
+	metric_statements {
+		context    = "resource"
+		statements = [
+			`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`,
+			`set(attributes["deployment.environment.name"], "staging")`,
+		]
+	}
+
+	metric_statements {
+		context    = "datapoint"
+		statements = [`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`]
+	}
+
+	trace_statements {
+		context    = "resource"
+		statements = [
+			`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`,
+			`set(attributes["deployment.environment.name"], "staging")`,
+		]
+	}
+
+	trace_statements {
+		context    = "span"
+		statements = [`delete_matching_keys(attributes, "^deployment[^a-zA-Z0-9]environment[^a-zA-Z0-9]name$")`]
+	}
+
+	output {
+		metrics = [otelcol.processor.filter.apps.input]
+		traces  = [otelcol.processor.filter.apps.input]
+	}
+}
+
+// App metrics never take the names of the platform's own series, which the rules in grafana/ alert on: the scrapes
+// below (up, scrape_*, node_*, machine_*, container_*), Synthetic Monitoring (probe_*) and the log-retention heartbeat
+// (log_retention_*). Matched loosely, in any case and with any other character (leading ones too) as the separator,
+// because Grafana Cloud turns ".", "-" and the like into "_" when it maps an OTLP name to a Prometheus one. A name with
+// no ASCII letter or digit goes too: the mapping would build it from the unit alone. Traces pass untouched.
+otelcol.processor.filter "apps" {
+	metrics {
+		metric = [
+			`IsMatch(name, "(?i)^[^a-zA-Z0-9]*(up|scrape|node|machine|container|probe|log[^a-zA-Z0-9]+retention)([^a-zA-Z0-9]|$)")`,
+			`not IsMatch(name, "[a-zA-Z0-9]")`,
+		]
+	}
+
 	output {
 		metrics = [otelcol.processor.transform.scrub.input]
 		traces  = [otelcol.processor.transform.scrub.input]
@@ -87,6 +221,31 @@ otelcol.processor.transform "scrub" {
 	output {
 		metrics = [otelcol.processor.batch.default.input]
 		traces  = [otelcol.processor.batch.default.input]
+	}
+}
+
+// ---- Log-retention heartbeat: OTLP/HTTP on 4320 (INFRA-130) -------------------------------------------------------
+// Only the log-retention DaemonSet reaches this port (NetworkPolicy in alloy.yaml). Each pass posts one gauge of a few
+// hundred bytes, hence the small body cap; any other metric is dropped, and traces and logs are refused.
+
+otelcol.receiver.otlp "heartbeat" {
+	http {
+		endpoint              = "0.0.0.0:4320"
+		max_request_body_size = "64KiB"
+	}
+
+	output {
+		metrics = [otelcol.processor.filter.heartbeat.input]
+	}
+}
+
+otelcol.processor.filter "heartbeat" {
+	metrics {
+		metric = [`name != "log_retention_last_success_timestamp_seconds"`]
+	}
+
+	output {
+		metrics = [otelcol.processor.batch.default.input]
 	}
 }
 

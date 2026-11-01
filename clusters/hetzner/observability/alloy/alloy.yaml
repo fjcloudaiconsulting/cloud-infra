@@ -1,7 +1,9 @@
 # Grafana Alloy: the one collector (INFRA-85, docs/architecture.md, Telemetry). A DaemonSet on every node, db-1 included
-# (it tolerates role=db), so a rollout never runs two copies on a node and each node's metrics carry instance=<node>. Apps send OTLP/HTTP to alloy.observability.svc:4318; Alloy scrapes the node and the kubelet
-# itself, and reads Ziftbook pod logs through the kube API (ZIF-89); everything goes to Grafana Cloud with the credentials
-# in Secret grafana-cloud. Config: config.alloy.
+# (it tolerates role=db), so a rollout never runs two copies on a node and each node's metrics carry instance=<node>.
+# Apps send OTLP/HTTP to alloy.observability.svc, production on 4318 and staging on 4319, and the log-retention
+# heartbeat goes to 4320 (one receiver per source, EDGE-04); Alloy scrapes the node and the kubelet itself, and reads
+# Ziftbook pod logs through the kube API (ZIF-89); everything goes to Grafana Cloud with the credentials in Secret
+# grafana-cloud. Config: config.alloy.
 # Debug UI: kubectl -n observability port-forward ds/alloy 12345, then http://localhost:12345.
 apiVersion: v1
 kind: ServiceAccount
@@ -110,12 +112,13 @@ spec:
             - /etc/alloy/config.alloy
             - --storage.path=/var/lib/alloy/data
             # The UI and /metrics (no auth) listen on the pod IP for the readiness probe; the NetworkPolicy below admits
-            # only 4318. Node-local traffic (hostNetwork pods such as netbird) bypasses it; the NetBird ACL admits the
-            # owner to TCP 6443 only.
+            # only the OTLP ports. Node-local traffic (hostNetwork pods such as netbird) bypasses it; the NetBird ACL
+            # admits the owner to TCP 6443 only.
             - --server.http.listen-addr=0.0.0.0:12345
             - --disable-reporting
           env:
-            # The Go runtime collects harder near this, well before the container limit.
+            # The Go runtime collects harder near this, well before the container limit. The app receivers' memory
+            # limiters (config.alloy) sit below it.
             - name: GOMEMLIMIT
               value: 200MiB
             - name: HOST_IP
@@ -141,9 +144,14 @@ spec:
                 secretKeyRef:
                   name: grafana-cloud
                   key: token
+          # One OTLP/HTTP receiver per source (config.alloy): production apps, staging apps, the log-retention heartbeat.
           ports:
-            - name: otlp-http
+            - name: otlp-prod
               containerPort: 4318
+            - name: otlp-staging
+              containerPort: 4319
+            - name: otlp-heartbeat
+              containerPort: 4320
             - name: http
               containerPort: 12345
           readinessProbe:
@@ -200,12 +208,19 @@ spec:
   selector:
     app: alloy
   ports:
-    - name: otlp-http
+    - name: otlp-prod
       port: 4318
-      targetPort: otlp-http
+      targetPort: otlp-prod
+    - name: otlp-staging
+      port: 4319
+      targetPort: otlp-staging
+    - name: otlp-heartbeat
+      port: 4320
+      targetPort: otlp-heartbeat
 ---
-# Only the app namespaces reach the OTLP port; never `data`. Node-local traffic bypasses this (see
-# data/networkpolicy.yaml). Egress (Grafana Cloud, the kubelet, DNS) is open except instance metadata.
+# Each source reaches its own OTLP port only: the production namespaces 4318, the staging namespaces 4319, the
+# log-retention pods 4320 (config.alloy labels each port's data with its environment); never `data`. Node-local traffic
+# bypasses this (see data/networkpolicy.yaml). Egress (Grafana Cloud, the kubelet, DNS) is open except instance metadata.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -221,19 +236,25 @@ spec:
               kubernetes.io/metadata.name: tbd-prod
         - namespaceSelector:
             matchLabels:
+              kubernetes.io/metadata.name: ziftbook-prod
+      ports:
+        - port: 4318
+    - from:
+        - namespaceSelector:
+            matchLabels:
               kubernetes.io/metadata.name: tbd-staging
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ziftbook-staging
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ziftbook-prod
-        # The log-retention DaemonSet's heartbeat (INFRA-130).
+      ports:
+        - port: 4319
+    # The log-retention DaemonSet's heartbeat (INFRA-130), from this namespace's log-retention pods only.
+    - from:
         - podSelector:
             matchLabels:
               app: log-retention
       ports:
-        - port: 4318
+        - port: 4320
   egress:
     - to:
         - namespaceSelector: {}
