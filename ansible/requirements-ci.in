@@ -1,0 +1,6 @@
+# Tools for .github/workflows/ansible.yml (GHA-09). No versions here on purpose: they live in requirements-ci.txt,
+# which Renovate keeps updated, hashes included. Regenerate that file with the command in its header, run from this
+# directory: uv keeps the current pins, adds any new dependency, and moves everything to its latest with --upgrade.
+# It resolves for the runner (ubuntu-26.04's python3, 3.14, on x86_64); the hashes cover every file PyPI has per pin.
+ansible-core
+ansible-lint

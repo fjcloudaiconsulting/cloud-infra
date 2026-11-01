@@ -46,3 +46,6 @@ metadata:
     kustomize.toolkit.fluxcd.io/prune: disabled
 imagePullSecrets:
   - name: ghcr-pull
+# No app calls the Kubernetes API: a pod here (a debug pod or a Job too) gets no token unless its own spec asks for
+# one (K8S-06). The Deployments set the same at pod level.
+automountServiceAccountToken: false
