@@ -201,6 +201,11 @@ the Mend installation settings of the org.
   PRs; manifests under `clusters/**/ziftbook-staging/**` bump in one grouped branch and automerge by
   branch. `clusters/**/tbd-staging/**` the same way (INFRA-91, group `tbd staging images`, branch prefix
   `tbd-staging-`; the MCP image moves in the same group, INFRA-147); `tbd-prod` is one grouped PR (backend, migrations, frontend, scheduler if present), no automerge.
+- Release age (GHA-09): third-party images and GitHub Actions, like k3s, are proposed 7 days after the release
+  (`minimumReleaseAge`); until then the update is listed under "Pending Status Checks" on the Dependency Dashboard,
+  and ticking it there raises it at once. Org images and actions never wait. Only Docker Hub gives Renovate release
+  timestamps: images from other registries (`mirror.gcr.io` for cloudflared) go through unaged, with a
+  `timestamp-optional` warning on the dashboard.
 - Each repo has a Dependency Dashboard issue; ticking "run again" there forces a run.
 - App repos (tbd, ziftbook) add repo-level rules in their own `renovate.json` (tbd#833, ziftbook#180), not in the shared preset: there they would also bundle cloud-infra's platform image bumps into one docker group and put staging app-image majors behind dashboard approval, breaking the ziftbook-staging automerge. Rules: non-major updates grouped per ecosystem, FastAPI and uvicorn standalone, OpenTelemetry in its own group, npm updates wait 1 day (pnpm 12's default release age), majors and runtime upgrades only on Dependency Dashboard approval, datastore image majors off. tbd needs no `GHCR_READ_TOKEN`: it references no private `ghcr.io` image.
 - Local dry run (check a config without waiting for Mend): Node 24, then `renovate --platform=local --dry-run=full` with `GITHUB_COM_TOKEN`, `RENOVATE_TOKEN` and `RENOVATE_SECRETS='{"GHCR_READ_TOKEN":"..."}'` in the environment. The local platform reads only committed files, and `local>` presets do not resolve there. `LOG_LEVEL=debug LOG_FORMAT=json` prints a `packageFiles with updates` record with each update's branch; it does not render the dashboard, so approval gates show only on the first Mend run.
