@@ -1,5 +1,5 @@
 terraform {
-  required_version = "~> 1.16.0"
+  required_version = "~> 1.17.0"
 
   # ⚠⚠ THIS IS A DIFFERENT AWS ACCOUNT FROM terraform/tbd-apex/.
   # apex (the public landing site) lives in the operator's older account; this
