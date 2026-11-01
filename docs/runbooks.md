@@ -6,7 +6,23 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 (`~/.kube/hetzner`, over NetBird) and never prints a secret value.
 
 Database restores are
-[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md).
+[`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
+set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
+runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
+against commands a backup should never carry; custom-format dumps restored by a non-superuser role
+are planned to replace the scan (#272).
+
+## Restore drill
+
+Every quarter, and before any one-way door that relies on the backups or after a backup format change, run
+[`RESTORE.md`](../clusters/hetzner/data/RESTORE.md) steps 1-5 on its scratch namespace for a recent production set of
+each engine (`tbd-mysql`, `ziftbook-prod-postgres`). It passes when both restore and step 5's checks agree with the
+manifest. Keep the row counts out of git and the PR: they show how the data grows.
+
+After a successful drill, update the record in a PR: in [`docs/restore-drill.md`](restore-drill.md), set
+`last-successful-drill: YYYY-MM-DD` to the UTC date the drill finished, and change nothing else there. The weekly
+`restore-drill-probe.yml` keeps one `[restore-drill]` issue open while that line says `never` or is more than 100
+days old, and closes it when the PR merges. A failed drill is a backup fault: leave the date and fix the cause.
 
 ## Follow Flux and rollouts
 
@@ -47,6 +63,28 @@ Swap the namespace for `tbd-staging`, `ziftbook-staging` or `data` (StatefulSets
 release reaches the cluster only through a PR that changes an image tag under `clusters/`; there is no image
 automation.
 
+After a change to the `data` NetworkPolicies (`clusters/hetzner/data/networkpolicy.yaml`), run what they govern
+instead of waiting for the night. kube-router enforces a policy as soon as Flux applies it (open connections are
+kept); a wrong egress rule shows only as a failed backup, the stale-backup alert the next morning, or a bootstrap Job
+that fails on its next run.
+
+```bash
+# Backup (one more set in the bucket, as any manual run): "ok: <set>" four times, "uploaded" twelve, no "!!".
+kubectl -n data create job --from=cronjob/db-backup db-backup-manual
+kubectl -n data wait --for=condition=complete job/db-backup-manual --timeout=30m
+kubectl -n data logs job/db-backup-manual --all-containers | grep -E '^(ok|uploaded|!!)'
+kubectl -n data delete job db-backup-manual
+# Staging's bootstrap Job (idempotent; production's has the same egress policy): Flux recreates it, expect Complete.
+kubectl -n data delete job ziftbook-bootstrap && flux reconcile kustomization flux-system --with-source
+kubectl -n data wait --for=condition=complete job/ziftbook-bootstrap --timeout=15m
+# The apps still hold their database sessions: a count per login.
+kubectl -n data exec mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -NB -e "SHOW PROCESSLIST"' | cut -f2 | sort | uniq -c
+kubectl -n data exec postgres-0 -- psql -U postgres -XAtc 'SELECT usename, count(*) FROM pg_stat_activity WHERE usename IS NOT NULL GROUP BY 1'
+# Back out: hold Flux and drop the three egress policies (egress is open again); resume once the revert is on main.
+flux suspend kustomization flux-system
+kubectl -n data delete networkpolicy default-deny-egress db-backup ziftbook-bootstrap
+```
+
 ## Promote a TBD release (staging, then production)
 
 A TBD release reaches `tbd-staging` by itself (INFRA-91): Renovate pushes `renovate/tbd-staging-tbd-staging-images`,
@@ -57,6 +95,7 @@ CI runs on it and Renovate fast-forwards it into `main`; Flux applies it. Produc
 2. Check staging runs the tag: `curl -s https://dev.thebetterdecision.com/health` reports the new version.
 3. Merge the `tbd images` PR for `tbd-prod` once `Kubernetes checks` is green: its step `prod tags not ahead of staging` (INFRA-89) fails while the PR's tags are newer than `tbd-staging` on its tree. Update its branch if it is behind. The bound is the lowest `tbd-staging` tag, MCP image included (INFRA-147): if mcp did not move with the release, fix the tbd promote first.
    The step `image provenance` (INFRA-107) checks every image ref the PR adds: it must be `:vX.Y.Z@sha256:<digest>` and the digest must have a build attestation from the shared `build-image` workflow, made on `main` at the commit of tag `vX.Y.Z`. Red means the ref is unpinned, has no matching attestation, or the registry or API lookup failed (a registry authorization error is the package access grant in `docs/configuration-map.md`). Do not merge past it. Versions built before attestation existed (tbd v0.302.0 and older, ziftbook v0.26.1 and older) fail it by design.
+   Every app image ref under `clusters/` must carry a digest (K8S-03, `tests/test_ci_fences.py`).
 4. A release broken on staging is fixed forward: do not merge the prod PR, release the fix; a newer tag replaces the PR.
 5. The backend and MCP containers set `args` to the image's uvicorn command with a narrower `--forwarded-allow-ips`
    (INF-01). When a release changes that command in tbd `backend/Dockerfile` or `backend/Dockerfile.mcp`, change
@@ -363,7 +402,7 @@ Traffic path: Cloudflare (proxied), then the Cloudflare Tunnel `hetzner-k3s` (`c
 
 1. **DNS:** add a proxied CNAME to `<tunnel id>.cfargotunnel.com` in [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf) (the TBD `app` and `dev` records are entries of one map there; Ziftbook's are separate resources, copy the one for your zone).
 2. **Route:** the hostname -> Service rule lives in the tunnel config in [`terraform/cloudflare/tunnel.tf`](../terraform/cloudflare/tunnel.tf); `cloudflared` only runs it.
-3. **Also:** a staging `dev.*` host needs a Cloudflare Access app ([`terraform/cloudflare/access.tf`](../terraform/cloudflare/access.tf), INFRA-117) or it is public; a new zone must join `local.app_zones` in `main.tf` (zone settings and rate limit) and get a policy in [`terraform/cloudflare-tokens/main.tf`](../terraform/cloudflare-tokens/main.tf) first, or the `cloudflare` apply fails; the app namespace's NetworkPolicy must admit the `cloudflared` namespace (model: `clusters/hetzner/tbd-prod/networkpolicy.yaml`).
+3. **Also:** a staging `dev.*` host needs a Cloudflare Access app ([`terraform/cloudflare/access.tf`](../terraform/cloudflare/access.tf), INFRA-117) or it is public; a new zone must join `local.app_zones` in `main.tf` (zone settings and rate limit) and get a policy in [`terraform/cloudflare-tokens/main.tf`](../terraform/cloudflare-tokens/main.tf) first, or the `cloudflare` apply fails; the app namespace's NetworkPolicy must admit the `cloudflared` namespace (model: `clusters/hetzner/tbd-prod/networkpolicy.yaml`); and a route to a Service that is new to the tunnel needs an egress rule for its pods and port in the `cloudflared` NetworkPolicy ([`clusters/hetzner/cloudflared/cloudflared.yaml`](../clusters/hetzner/cloudflared/cloudflared.yaml)), in the same PR (`tests/test_network_policies.py` fails until it has one). Approve the `cloudflare` apply only once Flux has applied that policy (`kubectl -n cloudflared get networkpolicy cloudflared -o yaml`), or the route answers 502 meanwhile.
 4. **Check** after the `cloudflare` workspace apply: `curl -sI https://<host> | head -1`.
 
 ## Mail (Mailgun)
@@ -566,8 +605,9 @@ kept equal. Account controls, the manual run and the rotation procedure: owner p
 `dev.thebetterdecision.com` needs a login (INFRA-117): Cloudflare Access, email one-time PIN, allow-list = the owner
 (`local.access_allow_emails` in `terraform/cloudflare/access.tf`), 24 h session. Only `GET /health` and `GET /robots.txt`
 are open, for the [post-deploy smoke](#post-deploy-smoke), plus what an MCP client calls without a browser
-(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included) and `/api/v1/oauth/*`. The consent
-page `/oauth/authorize` stays behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
+(INFRA-147): `/mcp`, the two `/.well-known/oauth-*` documents (subpaths included), `/api/v1/oauth/register` and
+`/api/v1/oauth/token`. The consent page `/oauth/authorize` and the API calls it makes (`/api/v1/oauth/authorize`,
+`.../authorize/context`) stay behind Access: the browser gets the PIN prompt, then the app login and step-up. Staging
 is therefore not indexable. Every other path, `/api`
 included, needs the session cookie; the frontend and API share the host, so the browser carries it. Google SSO is off
 on staging, so there is no external callback to break. Staging mail links open only in a browser that has logged in.
@@ -583,8 +623,9 @@ so the order never breaks it.
 answers 302 to `*.cloudflareaccess.com`; `/health` and `/robots.txt` answer 200; `/api/` answers 302.
 MCP paths: `curl -s https://dev.thebetterdecision.com/.well-known/oauth-protected-resource/mcp` returns the backend's
 JSON, `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://dev.thebetterdecision.com/mcp` answers 401 from the MCP
-server (not 302), `curl -s -X POST https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
-(not 302), and `/api/v1/auth/me` still answers 302.
+server (not 302), `curl -s -d '' https://dev.thebetterdecision.com/api/v1/oauth/token` answers 400 `invalid_request`
+(not 302; `-d ''` sends `Content-Length: 0`, a bare `-X POST` sends no length and gets the body rule's 403), and
+`/api/v1/auth/me` and `/api/v1/oauth/authorize/context` still answer 302.
 **Lockout:** applications edited in the dashboard are drift that the next apply reverts; to open staging again, remove
 `cloudflare_zero_trust_access_application.tbd_staging` in a PR.
 
@@ -641,7 +682,7 @@ the bootstrap token (Account API Tokens: Edit), the only token made by hand and 
 One Grafana Alloy DaemonSet in `observability` (INFRA-85, design in [architecture.md](architecture.md), Telemetry)
 sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s (one screen for all of it: dashboard **Platform overview**, `/d/platform-overview`, INFRA-199):
 
-- **Node:** CPU, memory, load, pressure, disk I/O, OOM kills (`job="node"`), from the host's `/proc` and `/sys` (recursive
+- **Node:** CPU, memory, load, pressure, disk I/O, OOM kills, boot time (`job="node"`), from the host's `/proc` and `/sys` (recursive
   read-only mounts; the host's `/` is not mounted).
 - **Pods and k3s:** per-container CPU, memory, throttling, OOM events and pod network from cAdvisor, plus the whole node
   (`id="/"`) and the k3s service (`id="/system.slice/k3s.service"`) (`job="cadvisor"`). Disk space is
@@ -724,6 +765,12 @@ uncordoned. Uncordon, and wait until `kubectl get deploy -A` shows every prod ba
 CoreDNS at 2/2, before draining the other app node. Draining it earlier still evicts every pod without a PDB (Flux, the
 scheduler, the worker, staging) and then times out on the PDB-covered ones, leaving it cordoned: uncordon it.
 Meanwhile `rollout status` times out and READY shows 1/2 for those Deployments; that is the cordon, not the release.
+
+**Reboot age.** Rule `NodeRebootOverdue` (group `node-reboot`, INFRA-219, applied as in [Memory alerts](#memory-alerts))
+mails the owner daily for each node that has run over 35 days since its last boot (`node_boot_time_seconds`): the
+monthly `reboot.yml` run is overdue. `reboot.yml` clears it once the node is back up. It skips a node without
+`/var/run/reboot-required`, whose alert then stays: silence `instance=<node>` until the next run, or rerun with
+`-e reboot_force=true` (every server, db-1 included).
 
 **Lost node** (NotReady, not planned):
 
@@ -842,6 +889,7 @@ passes through `read -rs` and curl's stdin, never its arguments:
 read -rs T; G=https://<stack>.grafana.net
 api() { printf 'Authorization: Bearer %s\n' "$T" | curl -sS --fail-with-body -H @- -H 'Content-Type: application/json' -X "$1" "$G$2" --data-binary "@$3" && echo; }
 api PUT /api/v1/provisioning/folder/platform/rule-groups/node-memory grafana/node-memory.rules.json
+api PUT /api/v1/provisioning/folder/platform/rule-groups/node-reboot grafana/node-reboot.rules.json
 api PUT /api/v1/provisioning/contact-points/owner-email grafana/contact-point.json
 api POST /api/dashboards/db grafana/node-memory.dashboard.json
 api POST /api/dashboards/db grafana/platform-overview.dashboard.json
@@ -1059,7 +1107,9 @@ backoff limit is 99 and finished jobs live 900 s (`SYSTEM_UPGRADE_JOB_BACKOFF_LI
 hours; `k3s-app` has a 1800 s deadline.
 
 A roll happens only on a version change (or when a node's `plan.upgrade.cattle.io/<plan>` label is removed). Editing a
-Plan's prepare script or drain flags does not re-run anything: the edit applies to the next roll.
+Plan's prepare script, drain flags or images does not re-run anything: the Plan hash covers only the version, the
+service account and Secrets, and the edit applies to the next roll. Merge such an edit while both Plans are complete
+(`kubectl -n system-upgrade get plans`): during a roll the controller replaces the running job with the edited one.
 
 **Before merging**
 1. Every node Ready and nothing cordoned: `kubectl get nodes -L role`. No `ansible/reboot.yml` run in progress.
@@ -1100,27 +1150,35 @@ release, or restore the etcd snapshot.
 ([Hetzner nodes](#hetzner-nodes-ansible-rebuild-break-glass)).
 
 **Minors** (Renovate waits for a tick on the Dependency Dashboard): read the release notes, one minor at a time, and
-change in the same PR the k3s-ansible pin (`ansible/requirements.yml`) and the kubectl image in
+change in the same PR the k3s-ansible pin (`ansible/requirements.yml`) and the kubectl image, tag and digest, in
 `system-upgrade/kustomization.yaml` (it must stay within one minor of the server). A rebuilt node installs
 `k3s_version` and is upgraded on join.
 
-**Supply chain.** `rancher/k3s-upgrade` is a mutable Docker Hub tag, pulled per version and run privileged as host
-root; a digest pin is impossible by design (the controller appends the tag), and the 7-day release age is the
-mitigation. The controller image is pinned by digest in `system-upgrade/kustomization.yaml`; a new controller tag
-means re-vendoring `crd.yaml` and `system-upgrade-controller.yaml` by hand. `rancher/kubectl` in that file is tag-only
-and bumped by hand with k3s minors: no Renovate manager sees it, so its patch releases are not tracked.
+**Supply chain.** The Plans run `rancher/k3s-upgrade` privileged as host root, so every `prepare` and `upgrade` image is
+pinned as `rancher/k3s-upgrade:<version with - for +>@sha256:<multi-arch index digest>` (K8S-02). The controller appends
+the version only to an untagged image; a tagged one runs as written. Renovate moves the tag and digest of all four lines
+with `version` in the k3s PR, under the same 7-day release age and minor approval, and never proposes a digest-only
+change, so a tag pushed again is not followed. `tests/test_upgrade_image_pins.py` fails a PR whose images and `version`
+disagree. To set one by hand: `docker buildx imagetools inspect rancher/k3s-upgrade:<tag>`, the top `Digest:` line. The
+controller image is pinned by digest in `system-upgrade/kustomization.yaml`; a new controller tag means re-vendoring
+`crd.yaml` and `system-upgrade-controller.yaml` by hand. `rancher/kubectl` in that file is pinned by tag and digest (the
+multi-arch index: `docker buildx imagetools inspect rancher/kubectl:<tag>`, top-level `Digest`) and bumped by hand with
+k3s minors: no Renovate manager sees it, so its patch releases are not tracked. The controller reads it at start, so a
+change reaches the Jobs after the controller's next restart.
 
 ## Hetzner nodes: Ansible, rebuild, break-glass
 
 Host config and k3s live in `ansible/`, run by hand from that directory; the procedures are in
 [`ansible/README.md`](../ansible/README.md): "Steady-state run" (any Ansible change), "Rolling reboot" (kernel
 updates), "Rebuilding one node" (app node, node-1 and db-1 each have their own steps) and "Volume-missing drill
-(db-1)", which also shows what the mount guard does. For a tunnel hostname, see [Add a public hostname for an
-app](#add-a-public-hostname-for-an-app).
+(db-1)", which also shows what the mount guard does. Who did what on the API: "API audit log" there (each server
+keeps its own log; it starts after a `-e k3s_reconfigure=true` run). The cluster's Pod Security defaults for namespaces
+without their own labels: "Pod Security defaults" there (they too start after that run; do its dry-run check first).
+For a tunnel hostname, see [Add a public hostname for an app](#add-a-public-hostname-for-an-app).
 
 **Break-glass**, when kubectl over NetBird is gone: `ssh root@<public IPv4> k3s kubectl ...` on any server, from an
 address in the `hetzner` workspace variable `ssh_allowed_cidrs` (a new home address means updating that variable and
-applying first). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
+applying first; each entry must be a /24 or narrower). With SSH gone too, use the Hetzner Cloud Console, your project > Servers > the server: Power
 (power cycle) and Console (VNC). The servers have no root password (SSH key only), so the console login first needs
 Rescue > Reset root password (only on a running OS with the qemu guest agent), or Rescue > Enable rescue & power cycle
 to mount the root disk from the rescue system. Afterwards lock root's password again: `passwd -l root`.
@@ -1220,8 +1278,9 @@ Commit the file in a PR and merge (no kustomization lists it: Flux picks up ever
    No login-expiration change: it applies only to peers added by SSO login, not by setup key.
 
 **5. Flux (lead).** v2.9.6, source and kustomize controllers,
-applied once by hand, then Flux manages itself (the memory patch in `flux-system/kustomization.yaml` lands on its first
-apply). Not `apply -k`: the encrypted Secrets in the folder fail kubectl validation.
+applied once by hand, then Flux manages itself (the patches and digest pins in `flux-system/kustomization.yaml` land
+on its first apply, which restarts both controllers). Not `apply -k`: the encrypted Secrets in the folder fail kubectl
+validation.
 
 ```bash
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-components.yaml
@@ -1229,16 +1288,28 @@ ssh root@$N1 k3s kubectl -n flux-system wait --for=condition=Available deploy --
 ssh root@$N1 k3s kubectl apply -f - < clusters/hetzner/flux-system/gotk-sync.yaml
 ```
 
-**6. kubeconfig over NetBird (owner).** The CA comes from the admin kubeconfig Ansible fetched; the token is
-`netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
+Upgrading Flux later (Renovate ignores `flux-system/`): regenerate the components, and in the same PR move `newTag`
+and `digest` of both `images:` entries in `flux-system/kustomization.yaml` (index digest, as for kubectl in
+[Upgrade k3s](#upgrade-k3s)). `tests/test_platform_hardening.py` fails while a tag differs from the generated file
+or a controller pod falls outside Pod Security restricted, which `flux-system` enforces (a rejected pod would stop
+Flux); a render error `testing value /rules/<n> failed` means the RBAC patch's rule moved: fix its index.
+
+```bash
+flux install --export --components=source-controller,kustomize-controller > clusters/hetzner/flux-system/gotk-components.yaml
+```
+
+**6. kubeconfig over NetBird (owner).** The CA is `~/.kube/hetzner-ca.crt`, which the Ansible k3s play writes from
+the admin kubeconfig it fetches (it then deletes that kubeconfig: its `system:masters` client certificate cannot be
+revoked); the token is `netbird/owner-admin` (90 days; revoke it as below). `ssh` writes it straight into a 0600
 file that the kubeconfig names as `tokenFile` (kubectl reads it on every call), so it never sits in a variable or
 argv. Renewing is that one `ssh` line again. The server is the peer's NetBird name; its certificate is the API
 server's, which names `kubernetes`, hence `--tls-server-name`.
 
 ```bash
 export KUBECONFIG=~/.kube/hetzner
-kubectl config view --raw --kubeconfig ~/.kube/fjc-hetzner.yaml -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
-  | base64 -d > ~/.kube/hetzner-ca.crt && grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt   # 1
+# 1. Missing (the play fetches only when k3s rewrites its kubeconfig): the CA is public, read it over ssh:
+# ssh root@$N1 cat /var/lib/rancher/k3s/server/tls/server-ca.crt > ~/.kube/hetzner-ca.crt
+grep -c 'BEGIN CERTIFICATE' ~/.kube/hetzner-ca.crt
 kubectl config set-cluster hetzner --server=https://hetzner-k3s.netbird.cloud:6443 --tls-server-name=kubernetes \
   --certificate-authority="$HOME/.kube/hetzner-ca.crt" --embed-certs
 (umask 077; ssh root@$N1 k3s kubectl -n netbird create token owner-admin --duration=2160h > ~/.kube/hetzner-token)

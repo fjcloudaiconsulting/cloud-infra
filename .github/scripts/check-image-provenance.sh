@@ -6,11 +6,15 @@
 # Inputs (env): BASE (git ref to diff against), GH_TOKEN. Needs `gh` and a checkout with BASE's history.
 # Extraction is deliberately broad (any case, optional :443, any path under the org); the strict regex below then
 # rejects every spelling that is not the canonical one. Fails CLOSED: any parse, API or verify failure exits non-zero.
+# The diff is read as text, so first the whole tree must be in manifest_fence.py's canonical form (GHA-03): no
+# escaped or tagged image values, no kustomize image overrides, and app namespaces run only their app's GHCR images.
 set -euo pipefail
 
 ORG=fjcloudaiconsulting
 SAN="https://github.com/$ORG/.github/.github/workflows/build-image.yml@refs/tags/v1"
 : "${BASE:?BASE is required}"
+
+python3 -I "$(dirname "${BASH_SOURCE[0]}")/manifest_fence.py" clusters
 
 diff="$(git diff --no-renames --text -U0 "$BASE...HEAD" -- clusters)"
 refs="$(grep -E '^\+' <<<"$diff" | grep -vE '^\+\+\+' \
