@@ -10,7 +10,8 @@ metadata:
   namespace: ziftbook-staging
 data:
   OTEL_RESOURCE_ATTRIBUTES: service.namespace=ziftbook,deployment.environment.name=staging
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy.observability.svc:4318
+  # Alloy's staging receiver: only the staging namespaces reach 4319, and Alloy labels what arrives there staging.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy.observability.svc:4319
   OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
   OTEL_PROPAGATORS: tracecontext
   OTEL_METRIC_EXPORT_INTERVAL: "60000"

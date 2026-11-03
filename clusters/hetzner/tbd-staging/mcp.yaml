@@ -10,7 +10,8 @@
 # failed auth then counts each visitor, not the Cloudflare address that connects (INF-02).
 # Memory: request 96Mi, limit 256Mi (the scheduler, a comparable non-HTTP import of the app, works at ~120Mi).
 # DB pool 1+1, the minimum (the rate limiter's own engine adds a fixed 2+5): MCP opens at most 9 connections as MySQL
-# user tbd_staging, whose MAX_USER_CONNECTIONS is 20; with the backend's 15+7 the worst case is 31.
+# user tbd_staging, whose MAX_USER_CONNECTIONS is 30; with the backend's 19 the worst case is 28 (INFRA-194,
+# MySqlConnectionBudget in tests/test_tbd_manifests.py).
 # Image tag moves with backend.yaml (one Renovate group, renovate.json). tbd must publish and promote the mcp image on
 # every release: check-prod-tags.py bounds the tbd-prod tags by the LOWEST tbd-staging tag, so an mcp tag left behind
 # would block the tbd-prod bump.
@@ -52,7 +53,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.302.0
+          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.305.0@sha256:655aba8acfcba43b02017020703a3c4645d19c42a6544a8ef76d7919d8c4dc18
           # The image CMD (tbd backend/Dockerfile.mcp) with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
           args: [uvicorn, "app.mcp_main:app", --host, 0.0.0.0, --port, "8001", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:

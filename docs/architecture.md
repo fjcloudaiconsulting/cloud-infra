@@ -2,7 +2,8 @@
 
 How the FJ Consulting apps (TBD, Ziftbook) run, end to end. This page is the map; each section
 links to the README or manifest that holds the detail. Change the diagram in the same PR as the
-infrastructure it describes.
+infrastructure it describes: `tests/test_architecture_diagram.py` fails when a Terraform stack, Namespace or Flux
+object has no node (edges are checked in review).
 
 ```mermaid
 flowchart LR
@@ -19,6 +20,8 @@ flowchart LR
       cfd["cloudflared: Cloudflare Tunnel, the only ingress"]
       flux["Flux (clusters/hetzner/flux-system)"]
       netbird["NetBird peer (clusters/hetzner/netbird)"]
+      alloy["Grafana Alloy (clusters/hetzner/observability)"]
+      suc["system-upgrade-controller, k3s Plans (clusters/hetzner/system-upgrade)"]
       subgraph ns_tbdp["tbd-prod"]
         tbdprod["TBD production (INFRA-48, here since INFRA-175)"]
       end
@@ -47,6 +50,7 @@ flowchart LR
     bucket[("S3 Object Lock bucket + KMS")]
   end
   hbackup -->|"put-only key"| bucket
+  alloy -->|"metrics, traces, logs"| grafana(["Grafana Cloud"])
   probe -->|"list-only role"| bucket
 
   subgraph control["Control plane"]
@@ -54,8 +58,12 @@ flowchart LR
     tfc["HCP Terraform (org FlamaCorp)<br/>AWS via OIDC roles, Cloudflare via API token"]
     ghcr["GHCR images"]
     probe["Freshness probe (GitHub Actions)"]
+    cftok["Cloudflare API tokens (terraform/cloudflare-tokens)"]
   end
-  gh --> tfc --> aws_backups & cloudflare
+  subgraph netbird_cloud["NetBird (terraform/netbird)"]
+    nbpolicy["owner devices to the cluster peer, TCP 6443"]
+  end
+  gh --> tfc --> aws_backups & cloudflare & cftok & netbird_cloud
   gh -->|"main"| flux
   ghcr -->|"ghcr-pull secret"| hk3s
   owner([Owner Mac]) -->|"NetBird, TCP 6443 only"| netbird
@@ -73,7 +81,8 @@ domains are attached by hand ([configuration-map.md](configuration-map.md#worker
 The tunnel is the only way in to the TBD workloads (INF-01). In `tbd-prod` and `tbd-staging` only `cloudflared` reaches the backend
 and MCP pods, and their uvicorn reads `X-Forwarded-For` and `X-Forwarded-Proto` from the pod network only. The TBD
 processes take the visitor's address from `CF-Connecting-IP` (`CLIENT_IP_HEADER`). `tests/test_tbd_manifests.py` and
-`tests/test_tbd_edge.py` hold these in place.
+`tests/test_tbd_edge.py` hold these in place. `cloudflared` itself reaches only cluster DNS, the pods and ports the
+tunnel routes to, and Cloudflare's edge; `tests/test_network_policies.py` keeps its egress in step with `tunnel.tf`.
 
 Both app zones rate-limit the apps' sign-in and token endpoints at the edge (INFRA-123), and ziftbook.com also its
 unauthenticated database probe `/api/health/dependencies` (INFRA-140): more than 20 requests in 10 s
@@ -82,7 +91,8 @@ address can send to them. The zones are on the Free plan, which allows one such 
 so the rule covers every proxied host of the zone. Each app keeps its own per-account and per-address limits behind it.
 
 A zone custom rule caps request bodies on the TBD app hosts (`app.` and `dev.`, BE-13): a request that declares a
-`Content-Length` over 16 MiB gets Cloudflare's 403 block page. The largest upload TBD accepts is 5 MiB.
+`Content-Length` over 16 MiB gets Cloudflare's 403 block page, and so does a chunked request or a POST, PUT or PATCH
+that declares no length (EDGE-02; exactly `/mcp` on `dev.`, the MCP server, is exempt). The largest upload TBD accepts is 5 MiB.
 
 - Terraform: [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf), rate limit in
   [`terraform/cloudflare/rate_limit.tf`](../terraform/cloudflare/rate_limit.tf), body cap in
@@ -99,15 +109,18 @@ Three Hetzner CAX21 ARM64 servers in nbg1 run k3s HA (`terraform/hetzner`, host 
 | `tbd-prod` | TBD production (`app.thebetterdecision.com`, INFRA-48); on the Hetzner cluster since INFRA-175 | 1856Mi / 3200Mi | Pod Security restricted; no priority class; backend and frontend 2 replicas, one per app node (INFRA-177); scheduler: exactly one pod |
 | `tbd-staging` | TBD staging (`dev.thebetterdecision.com`) and the MCP server (`/mcp`, INFRA-147); on the Hetzner cluster since INFRA-173 | 384Mi / 960Mi | PriorityClass `staging`, enforced by a quota; no scheduler pod (INFRA-67); behind Cloudflare Access, owner login only (INFRA-117), except the smoke paths and the MCP client's OAuth paths (INFRA-147) |
 | `ziftbook-staging` | Ziftbook staging (`dev.ziftbook.com`); on the Hetzner cluster since INFRA-173 | 512Mi / 1Gi | PriorityClass `staging` (-100, never preempts), enforced by a quota |
-| `ziftbook-prod` | Ziftbook production (`app.ziftbook.com`, INFRA-82); on the Hetzner cluster since INFRA-181 | 1280Mi / 2560Mi | Pod Security restricted; no priority class; image bumps are a PR, never automerged; backend and frontend 2 replicas, one per app node (INFRA-177) |
+| `ziftbook-prod` | Ziftbook production (`app.ziftbook.com`, INFRA-82); on the Hetzner cluster since INFRA-181 | 1280Mi / 3328Mi | Pod Security restricted; no priority class; image bumps are a PR, never automerged; backend and frontend 2 replicas, one per app node (INFRA-177) |
 | `data` | MySQL and Postgres with the backups  | 1Gi / 1536Mi | The Namespace object is excluded from Flux pruning (its contents are not) |
 | `netbird` | NetBird peer, `owner-admin` | none | Pod Security privileged (hostNetwork) |
 | `observability` | Grafana Alloy (metrics to Grafana Cloud, INFRA-85) | none (request 128Mi, limit 256Mi) | Pod Security privileged (read-only hostPath for node metrics) |
 | `system-upgrade` | system-upgrade-controller and the two k3s upgrade Plans (INFRA-179) | none | Pod Security privileged (upgrade jobs run privileged with the host mounted) |
 
-The app namespaces enforce Pod Security restricted, `data` baseline. Every app namespace has a LimitRange with default memory limits, and its `default`
+The app namespaces, `data` and `flux-system` enforce Pod Security restricted. Every app namespace has a LimitRange with default memory limits, and its `default`
 ServiceAccount pulls from GHCR through `ghcr-pull`. Manifests:
 [`clusters/hetzner/namespaces/`](../clusters/hetzner/namespaces/).
+Their egress (`egress-no-imds` in each `networkpolicy.yaml`) reaches every pod and Service and the internet, except
+instance metadata and the node network: no app pod uses the Kubernetes API or a node address. A workload that
+needs one must get its own egress rule first.
 
 ## Data stores
 
@@ -118,9 +131,16 @@ All run in `data` on the Hetzner cluster as StatefulSets on local-path volumes, 
 | MySQL 8.4 | TBD production (`tbd`, users `tbd_app`, `tbd_backup`); TBD staging (`tbd_staging`, user `tbd_staging`, grants on its own database only, 20 connections at most) | buffer pool 128M, performance_schema off, binlog off |
 | Postgres 18 | Ziftbook staging (`ziftbook`) and production (`ziftbook_prod`); the roles are shared and created by Ziftbook's pinned `bootstrap.sql`, run as a Job per database; production logs in as its own roles, and each environment's logins open only its own database (checked at the end of both Jobs) | shared_buffers 64MB, no parallel workers; 100 connections: staging's logins capped at 40, 26 reserved for production's logins |
 
-A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts `tbd-prod`
-and `tbd-staging`, Postgres (Hetzner only since INFRA-181) `ziftbook-staging` and
-`ziftbook-prod`, and the backup and bootstrap pods reach their databases inside `data`.
+A NetworkPolicy denies ingress to `data` by default, for the namespaces it hosts: MySQL accepts the pods of `tbd-prod`
+and `tbd-staging` that hold a database URL (backend and scheduler, backend and MCP), Postgres (Hetzner only since
+INFRA-181) the backend and worker of `ziftbook-staging` and `ziftbook-prod`, and the backup and bootstrap pods reach
+their databases inside `data`. Frontends are not admitted. A new workload that connects needs its `app` label in that
+policy; `tests/test_network_policies.py` derives the list from the manifests.
+Egress from `data` is deny-by-default too (K8S-06). The servers get no egress rule: they only answer, and look up no
+client names. The backup reaches cluster DNS, both servers and HTTPS on public addresses (S3); the Ziftbook bootstrap
+Jobs cluster DNS, Postgres and HTTPS on public addresses (the pinned `bootstrap.sql`). Nothing there reaches the node
+network, the Kubernetes API or instance metadata. A new pod in `data` has no network until it gets its own egress rule;
+`tests/test_data_egress.py` checks every pod template.
 Database auth and the NetBird ACL complete the controls.
 Manifests and comments: [`clusters/hetzner/data/`](../clusters/hetzner/data/).
 
@@ -189,7 +209,9 @@ reach every replica), and then gets one per environment, never shared.
   locked for 7 days (GOVERNANCE).
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
-- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md), restore drill (steps 1-5) passed 2026-10-02 (INFRA-31).
+- Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
+  (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
+  when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
 Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
@@ -252,7 +274,7 @@ Environment for every process (`<role>` is `api`, `worker`, `scheduler` or `migr
 |---|---|
 | `OTEL_SERVICE_NAME` | `<app>-<role>` |
 | `OTEL_RESOURCE_ATTRIBUTES` | `service.namespace=<app>,deployment.environment.name=<prod or staging>,service.version=<version>` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | the in-cluster collector (INFRA-85); `http://127.0.0.1:4318` for the local LGTM stack |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | the in-cluster collector (INFRA-85) on the environment's port: `http://alloy.observability.svc:4318` in production, `:4319` in staging (EDGE-04); `http://127.0.0.1:4318` for the local LGTM stack |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` |
 | `OTEL_PROPAGATORS` | `tracecontext` |
 | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` |
@@ -273,6 +295,13 @@ credentials (a write-only access policy token for an EU stack) live in one SOPS 
 copies during a rollout. Not the `k8s-monitoring` Helm chart, which deploys several Alloys plus node-exporter and
 kube-state-metrics. Measured by INFRA-85 against the real cAdvisor payload: 52 to 100 MiB working set (request 128Mi,
 limit 256Mi).
+
+Each source has its own receiver (EDGE-04): production apps on 4318, staging apps on 4319, the log-retention heartbeat
+on 4320, and the NetworkPolicy admits each only to its own port. On the app receivers Alloy sets
+`deployment.environment.name` from the port, whatever the app sent; drops app metrics named like the platform's own
+series, which the alert rules read (`up`, `scrape_*`, `node_*`, `machine_*`, `container_*`, `probe_*`,
+`log_retention_*`); caps a request body at 4 MiB; and refuses app data (the SDK retries) while its heap is high. The
+heartbeat receiver takes the one heartbeat gauge only.
 
 The collector is the second line of defense, not the first:
 
@@ -310,6 +339,7 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 | Signal | Source | Goes to |
 |---|---|---|
 | Stale backup | freshness probe | GitHub issue `[backup-stale]` |
+| No restore drill in 100 days | restore drill probe | GitHub issue `[restore-drill]` |
 
 Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts are Grafana Cloud rules (`grafana/`, [runbooks.md](runbooks.md)); INFRA-85 added the Alloy collector from [Telemetry](#telemetry).
 

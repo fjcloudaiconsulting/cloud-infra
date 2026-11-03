@@ -35,9 +35,10 @@ class ZiftbookApiAndWebEnv(unittest.TestCase):
             self.assertNotIn("ZIF_MIGRATE_DATABASE_URL", env, where(f, d, c))
 
     def test_web_env(self):
-        for ns in APP_HOST:
+        for ns, host in APP_HOST.items():
             f, d, c, env = container(ns, "frontend")
             self.assertEqual(env["ZIF_CLIENT_IP_HEADER"].get("value"), "cf-connecting-ip", where(f, d, c))
+            self.assertEqual(env["ZIF_CSP_REPORT_URL"].get("value"), f"https://{host}/api/csp-reports", where(f, d, c))
             self.assertEqual(env["ZIF_TURNSTILE_SITE_KEY"]["valueFrom"]["secretKeyRef"]["name"], "ziftbook-turnstile")
 
 

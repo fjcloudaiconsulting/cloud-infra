@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.31.0@sha256:893fe4e97caa0c9fd0e54c9e0ea70834ce4f2ddbd29ffb212316ae3627e2afe1
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.32.0@sha256:91f40a42cb3a9966eefb0375bbe01ed12c8f84e0d5b09d5a907f94766bbfea02
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -67,7 +67,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.31.0@sha256:ec754adc68119fd2095a47ead00b8dd7eb9f5eed46d78296ff650d94dcc5f7cf
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.32.0@sha256:cfe9b97753fc1513c17b79573a8c5a2d822a520a8ef8a89ff1c865c4899dc713
           ports:
             - containerPort: 8000
           envFrom:
@@ -121,7 +121,8 @@ spec:
                   key: database-url
             # Service photos in R2 (ZIF-133, docs/runbooks.md "R2 for Ziftbook photos"). EU buckets answer only on the .eu
             # endpoint. The env's own R2 token is in Secret ziftbook-storage; optional: uploads answer 503 until it exists.
-            # ZIF_S3_UPLOADS_BUCKET is left out on purpose until ziftbook 0.31.0 (ZIF-214): photo uploads answer 503.
+            - name: ZIF_S3_UPLOADS_BUCKET
+              value: ziftbook-uploads-staging
             - name: ZIF_S3_MEDIA_BUCKET
               value: ziftbook-media-staging
             - name: ZIF_MEDIA_URL
@@ -163,7 +164,7 @@ spec:
               cpu: 50m
               memory: 128Mi
             limits:
-              memory: 384Mi # image decode at Save: 152 MB baseline plus up to 83 MB (ZIF-133)
+              memory: 448Mi # photo decode in a child process (ZIF-230): API 160 + child RLIMIT_AS 208 + 2 x 4 + 16 = 392Mi minimum, plus headroom
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

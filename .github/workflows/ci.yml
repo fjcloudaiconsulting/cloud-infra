@@ -68,7 +68,7 @@ jobs:
       - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
         if: steps.changes.outputs.terraform == 'true'
         with:
-          tflint_version: v0.64.0
+          tflint_version: v0.65.0
       - name: tflint every stack
         if: steps.changes.outputs.terraform == 'true'
         env:
@@ -89,8 +89,13 @@ jobs:
     env:
       KUBECONFORM_VERSION: v0.8.0
       KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
-      # datreeio/CRDs-catalog commit, pinned so schemas change only with a repo change.
+      # Schema repo commits (yannh/kubernetes-json-schema for built-in kinds, datreeio/CRDs-catalog), pinned so schemas
+      # change only with a repo change. Bump by hand; tests/test_ci_fences.py keeps both pinned.
+      K8S_SCHEMA_SHA: f7d855e49c34b039c9ef2196444910275e31e09e
       CRDS_CATALOG_SHA: d373c2da9702bc9509a004db83e57263fe3bdfc1
+      # The kustomize release Flux's kustomize-controller embeds (v1.9.6 pins v5.8.1): bump it with a Flux upgrade.
+      KUSTOMIZE_VERSION: v5.8.1
+      KUSTOMIZE_SHA256: 029a7f0f4e1932c52a0476cf02a0fd855c0bb85694b82c338fc648dcb53a819d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,6 +104,17 @@ jobs:
       - name: every Secret is SOPS-encrypted
         # clusters/ Secrets and ansible/ *.sops.yaml vars files.
         run: python3 .github/scripts/check-sops-secrets.py clusters ansible
+      - name: rendered manifests
+        # GHA-03: render what Flux applies (offline, nothing decrypted) and check the objects; then the check's tests,
+        # which fail here instead of skipping without kustomize.
+        run: |
+          set -euo pipefail
+          curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$KUSTOMIZE_VERSION/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          echo "$KUSTOMIZE_SHA256  kustomize.tgz" | sha256sum -c -
+          tar -xzf kustomize.tgz kustomize
+          export KUSTOMIZE="$PWD/kustomize" RENDER_CHECK_REQUIRED=1
+          python3 .github/scripts/check-rendered-manifests.py clusters
+          python3 -m unittest discover -s tests -p test_render_check.py
       - name: prod tags not ahead of staging
         # INFRA-89: every <app>-prod image tag must be <= the same app's <app>-staging tags.
         run: python3 .github/scripts/check-prod-tags.py clusters
@@ -122,6 +138,6 @@ jobs:
           # Flux custom resources validate against the CRDs catalog. Non-strict: SOPS adds a sops: field.
           ./kubeconform -summary -kubernetes-version 1.36.0 -skip CustomResourceDefinition \
             -ignore-filename-pattern 'kustomization\.yaml$' \
-            -schema-location default \
+            -schema-location "https://raw.githubusercontent.com/yannh/kubernetes-json-schema/$K8S_SCHEMA_SHA/{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json" \
             -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/$CRDS_CATALOG_SHA/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" \
             clusters/

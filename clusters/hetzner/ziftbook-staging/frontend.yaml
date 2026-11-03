@@ -39,7 +39,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.31.0@sha256:6dac5f1c005bc741271e64c02a1ddace83e05cebe6601548abca7a0057e1310c
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.32.0@sha256:9bc5bf4e49ff94e54a71f91123c942b052a8bc1975579ee4aa66c06339a89e9f
           ports:
             - containerPort: 3000
           env:
@@ -47,6 +47,10 @@ spec:
               value: http://backend:8000
             - name: ZIF_CLIENT_IP_HEADER
               value: cf-connecting-ip
+            # CSP violation reports (ZIF-236): the web adds report-uri/report-to only when the request's Host is
+            # this URL's host, and accepts exactly https://<host>[:port]/api/csp-reports. Older images ignore it.
+            - name: ZIF_CSP_REPORT_URL
+              value: https://dev.ziftbook.com/api/csp-reports
             # Dev-only version line in the UI (ziftbook #312); prod leaves it unset.
             - name: ZIF_SHOW_VERSION
               value: "true"
