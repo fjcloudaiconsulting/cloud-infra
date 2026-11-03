@@ -115,19 +115,26 @@ def release_age(config, dep):
     return age, behaviour
 
 
-def dashboard_approval(config, dep):
-    """dependencyDashboardApproval as Renovate resolves it for dep (same rule order and matchers as release_age)."""
-    approval = config.get("dependencyDashboardApproval", False)
+def resolved(config, dep, key, default):
+    """packageRules option `key` as Renovate resolves it for dep (same rule order and matchers as release_age)."""
+    value = config.get(key, default)
     for i, rule in enumerate(config.get("packageRules", [])):
-        if "dependencyDashboardApproval" not in rule:
+        if key not in rule:
             continue
         unknown = [k for k in rule if k.startswith(("match", "exclude")) and k not in MATCHERS]
         if unknown:
-            raise AssertionError(f"packageRules[{i}] sets dependencyDashboardApproval with unmodelled matchers "
-                                 f"{unknown}")
-        if all(matches(dep.get(field), rule[key]) for key, field in MATCHERS.items() if key in rule):
-            approval = rule["dependencyDashboardApproval"]
-    return approval
+            raise AssertionError(f"packageRules[{i}] sets {key} with unmodelled matchers {unknown}")
+        if all(matches(dep.get(field), rule[k]) for k, field in MATCHERS.items() if k in rule):
+            value = rule[key]
+    return value
+
+
+def dashboard_approval(config, dep):
+    return resolved(config, dep, "dependencyDashboardApproval", False)
+
+
+def pr_priority(config, dep):
+    return resolved(config, dep, "prPriority", 0)
 
 
 # ---- what Renovate reads ------------------------------------------------------------------------------------------
@@ -376,6 +383,28 @@ class TerraformCliUpgradesArePlanned(unittest.TestCase):
         dep = {"manager": "terraform", "depName": "hetznercloud/hcloud", "packageName": "hetznercloud/hcloud",
                "datasource": "terraform-provider", "fileName": "terraform/hetzner/versions.tf", "updateType": "minor"}
         self.assertIs(dashboard_approval(renovate(), dep), False)
+
+
+class StagingBumpsFirst(unittest.TestCase):
+    """check-prod-tags.py fails a prod tag above staging's, so when Renovate rate-limits branch and PR creation the
+    staging bump must be created before its prod PR: a higher prPriority goes first (docs.renovatebot.com,
+    configuration-options prPriority)."""
+
+    def test_every_staging_app_image_outranks_every_prod_one(self):
+        config = renovate()
+        seen = set()
+        for app in ("tbd", "ziftbook"):
+            prio = {"staging": set(), "prod": set()}
+            for rel, manager, name in cluster_images(config):
+                env = re.search(rf"/{app}-(staging|prod)/", rel)
+                if env and name.lower().startswith(ORG_IMAGES):
+                    for t in ("patch", "minor", "major"):
+                        prio[env[1]].add(pr_priority(config, image_dep(rel, manager, name, t)))
+            with self.subTest(app=app):
+                self.assertTrue(prio["staging"] and prio["prod"], prio)
+                self.assertGreater(min(prio["staging"]), max(prio["prod"]), prio)
+                seen.add(app)
+        self.assertEqual(seen, {"tbd", "ziftbook"})
 
 
 class PipInstallsArePinnedByHash(unittest.TestCase):
