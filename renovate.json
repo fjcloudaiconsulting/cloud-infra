@@ -58,6 +58,17 @@
       "enabled": false
     },
     {
+      "description": "Each database engine gets its own PR (the org preset's weekly `docker non-major` group would otherwise bundle them with the other images): merging one restarts that database, so it needs its own window (runbooks.md, MySQL for TBD, Postgres for Ziftbook).",
+      "matchPackageNames": ["mysql"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "mysql"
+    },
+    {
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "postgres"
+    },
+    {
       "description": "App images (contract section 8): production references are `:vX.Y.Z@sha256:<digest>`. Track release tags, ignore sha- tags, pin the digest (CI verifies its attestation). Merging the bump PR is still the deploy.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
@@ -72,13 +83,13 @@
       "enabled": false
     },
     {
-      "description": "Staging follows releases (INFRA-36): bumps of manifests under a ziftbook-staging/ directory, majors included, merge without a PR once CI passes on the branch. Own branch prefix so a staging bump never shares a branch (and its automerge) with a production bump, which stays a PR. One group, so backend, frontend and migrations move together (a Renovate run while promote is retagging can still propose a partial set; the next run completes it).",
+      "description": "Staging follows releases (INFRA-36): bumps of manifests under a ziftbook-staging/ directory, majors included, merge without a PR once CI passes on the branch. Own branch prefix so a staging bump never shares a branch (and its automerge) with a production bump, which stays a PR. One group, so backend, frontend and migrations move together (a Renovate run while promote is retagging can still propose a partial set; the next run completes it). prPriority 6, above production's 5: under the hourly or concurrent limits the staging bump is created first, since check-prod-tags.py fails a prod tag above staging's.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
       "matchFileNames": ["clusters/**/ziftbook-staging/**"],
       "additionalBranchPrefix": "ziftbook-staging-",
       "groupName": "ziftbook images",
-      "prPriority": 5,
+      "prPriority": 6,
       "automerge": true,
       "automergeType": "branch"
     },
@@ -93,13 +104,13 @@
       "automerge": false
     },
     {
-      "description": "TBD staging follows releases (INFRA-91), same as ziftbook-staging above: one grouped branch of backend, migrations, frontend and mcp, automerged by branch, own prefix so it never shares a branch with the tbd-prod PR.",
+      "description": "TBD staging follows releases (INFRA-91), same as ziftbook-staging above: one grouped branch of backend, migrations, frontend and mcp, automerged by branch, own prefix so it never shares a branch with the tbd-prod PR. prPriority 6 so it is created before the tbd-prod PR, as for ziftbook-staging.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
       "matchFileNames": ["clusters/**/tbd-staging/**"],
       "additionalBranchPrefix": "tbd-staging-",
       "groupName": "tbd staging images",
-      "prPriority": 5,
+      "prPriority": 6,
       "automerge": true,
       "automergeType": "branch"
     },
