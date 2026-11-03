@@ -23,12 +23,7 @@ def selected(spec):
 
 
 class ZiftbookIngress(unittest.TestCase):
-    def test_default_deny_ingress(self):
-        for ns in NAMESPACES:
-            deny = [s for s in policies(ns).values() if s.get("podSelector") == {}
-                    and "Ingress" in s["policyTypes"] and not s.get("ingress")]
-            self.assertTrue(deny, f"{ns}: no default-deny ingress policy")
-
+    # The default-deny ingress policy is fenced for every app environment in test_app_env_manifests.py.
     def test_web_only_from_the_tunnel_API_only_from_the_web_worker_from_nothing(self):
         want = {"frontend": ([TUNNEL], [{"port": 3000}]), "backend": ([WEB], [{"port": 8000}])}
         for ns in NAMESPACES:
