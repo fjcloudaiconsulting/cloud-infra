@@ -358,7 +358,7 @@ PW=$(sops -d --extract '["stringData"]["database-url"]' clusters/hetzner/tbd-sta
 [[ $PW =~ ^[0-9a-f]{64}$ ]] && sed "s/@PW@/$PW/g" <<'SQL' | kubectl -n data exec -i mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot'
 CREATE DATABASE IF NOT EXISTS tbd_staging;
 CREATE USER IF NOT EXISTS 'tbd_staging'@'%' IDENTIFIED BY '@PW@';
-ALTER USER 'tbd_staging'@'%' IDENTIFIED BY '@PW@' WITH MAX_USER_CONNECTIONS 20;
+ALTER USER 'tbd_staging'@'%' IDENTIFIED BY '@PW@' WITH MAX_USER_CONNECTIONS 30;
 GRANT ALL PRIVILEGES ON tbd_staging.* TO 'tbd_staging'@'%';
 SQL
 echo "exit $?"; unset PW
@@ -375,9 +375,13 @@ GRANT ALL PRIVILEGES ON `tbd_staging`.* TO `tbd_staging`@`%`
 In a database grant `_` is still a (deprecated) wildcard, so `tbd_staging` also matches `tbd` + any one character +
 `staging`: no other database has such a name. It is left unescaped on purpose: the nightly grants dump would double an
 escaping backslash, and the replayed grant would name a different database. The password reaches
-`mysql` on stdin, so it is never on a command line in the pod (locally it is briefly in `sed`'s). The cap (20) keeps staging from
-using up `max_connections` (120) that production needs. The backend (15 + 7) and mcp (9, `tbd-staging/mcp.yaml`)
-add up to 31 at full pools: under load staging hits its own cap, never production's. Nothing here touches `tbd` or its users, and the MySQL pod
+`mysql` on stdin, so it is never on a command line in the pod (locally it is briefly in `sed`'s). The cap (30) keeps staging from
+using up `max_connections` (120) that production needs: production's pools hold up to 87 (3 pods × 29), plus 1 for the
+dump job. Staging's backend (pool 2 + 3 from env, plus the two engines tbd hardcodes at 2 + 5 for rate limits and
+sessions: 19) and mcp (9, `tbd-staging/mcp.yaml`) add up to 28 at full pools, so under load staging stays under its
+cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
+pools, cap or `max_connections` drift apart). To change only the cap on a running user, without the password:
+`ALTER USER 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS 30;` as root. Nothing here touches `tbd` or its users, and the MySQL pod
 does not restart. The nightly grants dump includes the new user, so a restore brings it back.
 
 **First account.** TBD makes the first user of an empty database a superadmin with a verified email, and skips the

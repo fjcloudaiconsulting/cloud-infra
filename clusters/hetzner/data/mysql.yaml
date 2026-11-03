@@ -18,9 +18,9 @@ data:
     # 8.4 defaults: 64M log buffer and a 1G in-memory temptable pool, both too big for 640Mi.
     innodb_log_buffer_size = 8M
     temptable_max_ram = 64M
-    # A TBD pod holds up to 22 (pool 5 + overflow 10, rate-limit pool 2 + 5): 2 prod backends and the scheduler = 66,
-    # tbd_staging capped at 20 (runbooks.md), plus migrate and the dump job (INFRA-177). Read at start (subPath
-    # mount): a change applies at the next MySQL restart.
+    # A TBD pod holds up to 29 (pool 5 + overflow 10, rate-limit and session pools 2 + 5 each): 2 prod backends and the
+    # scheduler = 87, tbd_staging capped at 30 (runbooks.md), plus the dump job (INFRA-177, INFRA-194; fenced by
+    # tests/test_tbd_manifests.py). Read at start (subPath mount): a change applies at the next MySQL restart.
     max_connections = 120
     # Default 4000 open-table handles; TBD has under 100 tables.
     table_open_cache = 400
