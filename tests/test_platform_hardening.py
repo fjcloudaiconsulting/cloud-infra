@@ -12,11 +12,11 @@ import shutil
 import subprocess
 import unittest
 
+from test_app_env_manifests import APP_NAMESPACES
 from test_tbd_manifests import ROOT, CLUSTERS, WORKLOAD_KINDS, _Parser, containers, hand_written, load_all, pod_spec
 
 FLUX_NS = "flux-system"
 FLUX_CONTROLLERS = ("source-controller", "kustomize-controller")
-APP_NAMESPACES = ("tbd-prod", "tbd-staging", "ziftbook-prod", "ziftbook-staging")
 # repo:tag@sha256:<64 hex>: the tag for people, the digest for the kubelet.
 PINNED = re.compile(r"^[a-z0-9][a-z0-9./_-]*:[\w][\w.-]*@sha256:[0-9a-f]{64}$")
 # The only ServiceAccounts whose pods talk to the API and so mount a token (namespace, name): Alloy's discovery, the

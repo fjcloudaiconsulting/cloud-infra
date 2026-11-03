@@ -13,6 +13,7 @@ import re
 import unittest
 import urllib.parse
 
+from test_app_env_manifests import APP_NAMESPACES
 from test_tbd_manifests import load_all
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -22,8 +23,8 @@ CONFIG = ALLOY_DIR / "config.alloy"
 HEARTBEAT_SCRIPT = HETZNER / "observability/log-retention/log-retention.sh"
 EXPORTER = "otelcol.exporter.otlphttp.grafana_cloud"
 PORTS = {"production": 4318, "staging": 4319, "heartbeat": 4320}
-PROD_NAMESPACES = {"tbd-prod", "ziftbook-prod"}
-STAGING_NAMESPACES = {"tbd-staging", "ziftbook-staging"}
+PROD_NAMESPACES = {ns for ns in APP_NAMESPACES if ns.endswith("-prod")}
+STAGING_NAMESPACES = {ns for ns in APP_NAMESPACES if ns.endswith("-staging")}
 LOG_RETENTION_PEER = {"podSelector": {"matchLabels": {"app": "log-retention"}}}
 ENV_KEY = "deployment.environment.name"
 

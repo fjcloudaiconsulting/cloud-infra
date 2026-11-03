@@ -9,10 +9,10 @@ import ipaddress
 import re
 import unittest
 
+from test_app_env_manifests import APP_NAMESPACES
 from test_tbd_edge import TF, resource_body, tunnel_rules
 from test_tbd_manifests import POD_CIDR, containers, manifests, workloads
 
-APP_NAMESPACES = ("tbd-prod", "tbd-staging", "ziftbook-prod", "ziftbook-staging")
 IMDS = ipaddress.ip_network("169.254.169.254/32")
 NS_LABEL = "kubernetes.io/metadata.name"
 # The server each app's namespaces use. The URLs sit in SOPS Secrets, so the engine is not read from them.
