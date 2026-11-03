@@ -152,6 +152,12 @@ spec:
             # pen test).
             - name: MCP_OAUTH_ENABLED
               value: "true"
+            # DB pool 2+3 (tbd default 5+10): with the two hardcoded 2+5 engines (rate limits, sessions) the pod holds at
+            # most 19, and with mcp's 9 staging stays under its MAX_USER_CONNECTIONS 30 (runbooks.md, INFRA-194).
+            - name: DB_POOL_SIZE
+              value: "2"
+            - name: DB_MAX_OVERFLOW
+              value: "3"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

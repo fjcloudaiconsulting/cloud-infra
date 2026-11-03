@@ -449,5 +449,46 @@ class ProductionMode(unittest.TestCase):
                          ("tbd-staging", "backend", "backend"), ("tbd-staging", "mcp", "mcp")} <= seen, seen)
 
 
+class MySqlConnectionBudget(unittest.TestCase):
+    """INFRA-194: the most connections each TBD process can hold fits the MySQL caps. Per process: the async engine
+    (DB_POOL_SIZE + DB_MAX_OVERFLOW, tbd defaults 5 + 10) plus the sync engines hardcoded in tbd at 2 + 5 each: the
+    rate limiter (rate_limit_db) and the session store (state_db). mcp imports state_db but no MCP tool reaches it, so
+    only its rate-limit engine counts (tbd v0.305.0; recount when tbd changes its engines). The migrate init container
+    (one connection, NullPool) runs before its pod's app container, and Recreate keeps a second pod from overlapping."""
+
+    FIXED = {"backend": 14, "mcp": 7}
+    DUMP = 1  # data/db-backup, as tbd_backup; prod and staging dumps run one after the other
+
+    def processes(self, namespace):
+        for f, d in workloads(namespace):
+            for c in containers(d, init=False):
+                img = tbd_image(c)
+                if img in (None, "frontend"):
+                    continue
+                self.assertIn(img, self.FIXED, f"{where(f, d, c)}: count this image's engines in FIXED")
+                self.assertEqual(d["spec"].get("strategy"), {"type": "Recreate"}, where(f, d, c))
+                pool = {}
+                for name, default in (("DB_POOL_SIZE", 5), ("DB_MAX_OVERFLOW", 10)):
+                    try:
+                        pool[name] = int(env_value(c, name))
+                    except KeyError:
+                        pool[name] = default
+                yield d["spec"].get("replicas", 1) * (sum(pool.values()) + self.FIXED[img])
+
+    def test_staging_fits_its_user_cap_and_production_fits_beside_it(self):
+        mysql = (CLUSTERS / "hetzner/data/mysql.yaml").read_text()
+        cap = int(re.search(r"(?m)^\s*ALTER USER IF EXISTS 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS (\d+);$",
+                            mysql).group(1))
+        runbook = int(re.search(r"'tbd_staging'@'%' IDENTIFIED BY '@PW@' WITH MAX_USER_CONNECTIONS (\d+);",
+                                (ROOT / "docs/runbooks.md").read_text()).group(1))
+        self.assertEqual(runbook, cap, "runbook cap differs from init.sql in data/mysql.yaml")
+        self.assertRegex(mysql, r"(?m)^\s*init_file = /etc/mysql/init.sql$")
+        self.assertIn("mountPath: /etc/mysql/init.sql", mysql)
+        max_connections = int(re.search(r"(?m)^\s*max_connections = (\d+)$", mysql).group(1))
+        staging, prod = sum(self.processes("tbd-staging")), sum(self.processes("tbd-prod"))
+        self.assertLessEqual(staging, cap, "tbd-staging pools exceed MAX_USER_CONNECTIONS of tbd_staging")
+        self.assertLessEqual(prod + cap + self.DUMP, max_connections, "tbd-prod pools + staging cap + dump")
+
+
 if __name__ == "__main__":
     unittest.main()
