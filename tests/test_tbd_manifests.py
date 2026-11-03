@@ -336,13 +336,7 @@ class OriginOnlyThroughTheTunnel(unittest.TestCase):
         self.assertRegex(cfg, r'(?m)^  disable: \["traefik", "servicelb"\]$')
         self.assertNotIn("cluster-cidr", cfg, f"POD_CIDR ({POD_CIDR}) assumes the k3s default; update it and the args")
 
-    def test_every_tbd_namespace_denies_ingress_by_default(self):
-        for ns in TBD_NAMESPACES:
-            pols = [d for _, d in manifests(ns) if d.get("kind") == "NetworkPolicy"]
-            deny = [p for p in pols if p["spec"].get("podSelector") == {} and "Ingress" in p["spec"]["policyTypes"]
-                    and not p["spec"].get("ingress")]
-            self.assertTrue(deny, f"{ns}: no default-deny ingress policy")
-
+    # The default-deny ingress policy is fenced for every app environment in test_app_env_manifests.py.
     def test_only_cloudflared_reaches_backend_and_mcp(self):
         tunnel = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "cloudflared"}},
                   "podSelector": {"matchLabels": {"app": "cloudflared"}}}
