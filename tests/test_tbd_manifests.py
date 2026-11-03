@@ -476,10 +476,15 @@ class MySqlConnectionBudget(unittest.TestCase):
                 yield d["spec"].get("replicas", 1) * (sum(pool.values()) + self.FIXED[img])
 
     def test_staging_fits_its_user_cap_and_production_fits_beside_it(self):
-        cap = int(re.search(r"'tbd_staging'@'%' IDENTIFIED BY '@PW@' WITH MAX_USER_CONNECTIONS (\d+);",
-                            (ROOT / "docs/runbooks.md").read_text()).group(1))
-        max_connections = int(re.search(r"(?m)^\s*max_connections = (\d+)$",
-                                        (CLUSTERS / "hetzner/data/mysql.yaml").read_text()).group(1))
+        mysql = (CLUSTERS / "hetzner/data/mysql.yaml").read_text()
+        cap = int(re.search(r"(?m)^\s*ALTER USER IF EXISTS 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS (\d+);$",
+                            mysql).group(1))
+        runbook = int(re.search(r"'tbd_staging'@'%' IDENTIFIED BY '@PW@' WITH MAX_USER_CONNECTIONS (\d+);",
+                                (ROOT / "docs/runbooks.md").read_text()).group(1))
+        self.assertEqual(runbook, cap, "runbook cap differs from init.sql in data/mysql.yaml")
+        self.assertRegex(mysql, r"(?m)^\s*init_file = /etc/mysql/init.sql$")
+        self.assertIn("mountPath: /etc/mysql/init.sql", mysql)
+        max_connections = int(re.search(r"(?m)^\s*max_connections = (\d+)$", mysql).group(1))
         staging, prod = sum(self.processes("tbd-staging")), sum(self.processes("tbd-prod"))
         self.assertLessEqual(staging, cap, "tbd-staging pools exceed MAX_USER_CONNECTIONS of tbd_staging")
         self.assertLessEqual(prod + cap + self.DUMP, max_connections, "tbd-prod pools + staging cap + dump")

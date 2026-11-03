@@ -19,7 +19,7 @@ data:
     innodb_log_buffer_size = 8M
     temptable_max_ram = 64M
     # A TBD pod holds up to 29 (pool 5 + overflow 10, rate-limit and session pools 2 + 5 each): 2 prod backends and the
-    # scheduler = 87, tbd_staging capped at 30 (runbooks.md), plus the dump job (INFRA-177, INFRA-194; fenced by
+    # scheduler = 87, tbd_staging capped at 30 (init.sql below), plus the dump job (INFRA-177, INFRA-194; fenced by
     # tests/test_tbd_manifests.py). Read at start (subPath mount): a change applies at the next MySQL restart.
     max_connections = 120
     # Default 4000 open-table handles; TBD has under 100 tables.
@@ -29,6 +29,13 @@ data:
     collation-server = utf8mb4_0900_ai_ci
     # TBD-416: never wait 365 days on a metadata lock.
     lock_wait_timeout = 30
+    # INFRA-194: init.sql below runs at every start, so per-user limits come from git. A failing statement is logged
+    # and MySQL still starts (checked on 8.4.11).
+    init_file = /etc/mysql/init.sql
+  # Every start, as root (init_file above). IF EXISTS: tbd_staging is created by hand later (runbooks.md "MySQL database
+  # per app environment"), so a new datadir boots without it.
+  init.sql: |
+    ALTER USER IF EXISTS 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS 30;
   # Runs once, on an empty datadir only; a failed first boot needs the PVC deleted before it runs again.
   # The image creates tbd and tbd_app (ALL on tbd.*, no GRANT OPTION). Its entrypoint has no SQL escape helper, so escape \ and ' here.
   # tbd_backup gets what mysqldump --single-transaction --routines --triggers --events needs (PROCESS for tablespaces);
@@ -149,6 +156,9 @@ spec:
             - name: config
               mountPath: /etc/mysql/conf.d/tbd.cnf
               subPath: tbd.cnf
+            - name: config
+              mountPath: /etc/mysql/init.sql
+              subPath: init.sql
             - name: config
               mountPath: /docker-entrypoint-initdb.d/10-backup-user.sh
               subPath: 10-backup-user.sh
