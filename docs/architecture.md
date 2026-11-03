@@ -2,7 +2,8 @@
 
 How the FJ Consulting apps (TBD, Ziftbook) run, end to end. This page is the map; each section
 links to the README or manifest that holds the detail. Change the diagram in the same PR as the
-infrastructure it describes.
+infrastructure it describes: `tests/test_architecture_diagram.py` fails when a Terraform stack, Namespace or Flux
+object has no node (edges are checked in review).
 
 ```mermaid
 flowchart LR
@@ -19,6 +20,8 @@ flowchart LR
       cfd["cloudflared: Cloudflare Tunnel, the only ingress"]
       flux["Flux (clusters/hetzner/flux-system)"]
       netbird["NetBird peer (clusters/hetzner/netbird)"]
+      alloy["Grafana Alloy (clusters/hetzner/observability)"]
+      suc["system-upgrade-controller, k3s Plans (clusters/hetzner/system-upgrade)"]
       subgraph ns_tbdp["tbd-prod"]
         tbdprod["TBD production (INFRA-48, here since INFRA-175)"]
       end
@@ -47,6 +50,7 @@ flowchart LR
     bucket[("S3 Object Lock bucket + KMS")]
   end
   hbackup -->|"put-only key"| bucket
+  alloy -->|"metrics, traces, logs"| grafana(["Grafana Cloud"])
   probe -->|"list-only role"| bucket
 
   subgraph control["Control plane"]
@@ -54,8 +58,12 @@ flowchart LR
     tfc["HCP Terraform (org FlamaCorp)<br/>AWS via OIDC roles, Cloudflare via API token"]
     ghcr["GHCR images"]
     probe["Freshness probe (GitHub Actions)"]
+    cftok["Cloudflare API tokens (terraform/cloudflare-tokens)"]
   end
-  gh --> tfc --> aws_backups & cloudflare
+  subgraph netbird_cloud["NetBird (terraform/netbird)"]
+    nbpolicy["owner devices to the cluster peer, TCP 6443"]
+  end
+  gh --> tfc --> aws_backups & cloudflare & cftok & netbird_cloud
   gh -->|"main"| flux
   ghcr -->|"ghcr-pull secret"| hk3s
   owner([Owner Mac]) -->|"NetBird, TCP 6443 only"| netbird
