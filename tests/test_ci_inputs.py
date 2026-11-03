@@ -407,6 +407,19 @@ class StagingBumpsFirst(unittest.TestCase):
         self.assertEqual(seen, {"tbd", "ziftbook"})
 
 
+class DatabaseImagesGetTheirOwnPr(unittest.TestCase):
+    # The org preset groups non-major Docker updates into one weekly PR (INFRA-143); merging that would restart both
+    # databases with the other images. Each engine keeps its own group, so each update gets its own window.
+    def test_each_engine_has_its_own_group(self):
+        config = renovate()
+        for name in ("mysql", "postgres"):
+            for t in ("minor", "patch", "digest"):
+                dep = {"datasource": "docker", "packageName": name, "depName": name, "manager": "kubernetes",
+                       "fileName": "clusters/hetzner/data/db-backup.yaml", "updateType": t}
+                with self.subTest(image=name, update=t):
+                    self.assertEqual(resolved(config, dep, "groupName", None), name)
+
+
 class PipInstallsArePinnedByHash(unittest.TestCase):
     def setUp(self):
         self.installs = pip_installs()

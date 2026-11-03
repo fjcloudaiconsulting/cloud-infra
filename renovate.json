@@ -58,6 +58,17 @@
       "enabled": false
     },
     {
+      "description": "Each database engine gets its own PR (the org preset's weekly `docker non-major` group would otherwise bundle them with the other images): merging one restarts that database, so it needs its own window (runbooks.md, MySQL for TBD, Postgres for Ziftbook).",
+      "matchPackageNames": ["mysql"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "mysql"
+    },
+    {
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "postgres"
+    },
+    {
       "description": "App images (contract section 8): production references are `:vX.Y.Z@sha256:<digest>`. Track release tags, ignore sha- tags, pin the digest (CI verifies its attestation). Merging the bump PR is still the deploy.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/fjcloudaiconsulting/**"],
