@@ -164,7 +164,7 @@ spec:
               cpu: 50m
               memory: 128Mi
             limits:
-              memory: 384Mi # image decode at Save: 152 MB baseline plus up to 83 MB (ZIF-133)
+              memory: 448Mi # photo decode in a child process (ZIF-230): API 160 + child RLIMIT_AS 208 + 2 x 4 + 16 = 392Mi minimum, plus headroom
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

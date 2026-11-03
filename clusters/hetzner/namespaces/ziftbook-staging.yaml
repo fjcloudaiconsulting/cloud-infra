@@ -28,8 +28,8 @@ metadata:
   namespace: ziftbook-staging
 spec:
   hard:
-    # backend, worker, frontend: 3 x 128Mi requests (INFRA-46); limits 384Mi + 2 x 256Mi = 896Mi (backend 384Mi since
-    # ZIF-133). Every Deployment uses Recreate, so a rollout never needs room for a second pod.
+    # backend, worker, frontend: 3 x 128Mi requests (INFRA-46); limits 448Mi + 2 x 256Mi = 960Mi (backend 448Mi since
+    # ZIF-230). Every Deployment uses Recreate, so a rollout never needs room for a second pod.
     requests.memory: 512Mi
     limits.memory: 1Gi
 ---
