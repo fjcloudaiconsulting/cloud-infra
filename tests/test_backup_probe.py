@@ -18,13 +18,14 @@ PREFIX = "tbd-mysql/2026/08/27"
 NOW = 1000000000
 
 
-def night(age_hours, *, prefix=PREFIX, manifest=True, grants=True, dump=True, dump_size=620000, db="tbd", stamp="x"):
+def night(age_hours, *, prefix=PREFIX, manifest=True, grants=True, dump=True, dump_size=620000, db="tbd", stamp="x",
+          ext="sql.gz"):
     ts = datetime.datetime.fromtimestamp(
         NOW - age_hours * 3600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     objs = []
     if dump:
-        objs.append({"Key": f"{prefix}/{db}_{stamp}.sql.gz", "Size": dump_size, "LastModified": ts})
+        objs.append({"Key": f"{prefix}/{db}_{stamp}.{ext}", "Size": dump_size, "LastModified": ts})
     if grants:
         objs.append({"Key": f"{prefix}/grants_{stamp}.sql.gz", "Size": 800, "LastModified": ts})
     if manifest:
@@ -60,6 +61,12 @@ class Verdicts(unittest.TestCase):
         r = probe(listing(2, manifest=False))
         self.assertEqual(r.returncode, 1)
         self.assertIn("manifest", r.stdout)
+
+    def test_custom_format_dump_counts_as_the_dump(self):
+        # INFRA-235: Postgres dumps are <db>_<stamp>.dump; the probe must see them, and still apply the floor.
+        self.assertEqual(probe(listing(2, ext="dump")).returncode, 0)
+        self.assertEqual(probe(listing(2, ext="dump", dump_size=12)).returncode, 1)
+        self.assertEqual(probe(listing(2, ext="dump.tmp")).returncode, 1)
 
     def test_stale_when_grants_are_missing(self):
         self.assertEqual(probe(listing(2, grants=False)).returncode, 1)
