@@ -171,6 +171,8 @@ def selectors(expr):
 def grafana_selectors():
     def exprs(node):
         if isinstance(node, dict):
+            if node.get("datasourceUid") == "grafanacloud-logs":
+                return  # LogQL: it names no series
             for k, v in node.items():
                 if k == "expr" and isinstance(v, str):
                     yield v
