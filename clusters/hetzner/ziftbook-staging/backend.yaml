@@ -141,6 +141,10 @@ spec:
                   name: ziftbook-storage
                   key: secret-access-key
                   optional: true
+            # Erasure ledger (ZIF-58, INFRA-267): the API only checks the bucket is set (unset, erasure answers 503) and never
+            # holds a ledger key; the worker writes the entries.
+            - name: ZIF_ERASURE_LEDGER_BUCKET
+              value: ziftbook-ledger-staging
             # X-Forwarded-For is believed only from pods: the frontend sets it from cf-connecting-ip, and
             # networkpolicy.yaml admits only the frontend. Cluster CIDR, not the node's podCIDR, which changes
             # if the node re-registers. Node-local traffic (source 10.42.0.1) is owner-only (NetBird).
