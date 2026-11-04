@@ -979,7 +979,7 @@ The test alert's series (the 404 URL) then stops and resolves by itself. Finally
 
 Rule group `ziftbook-app` (folder Platform, ZIF-89) watches Ziftbook production through the metrics the app already
 exports over OTLP. Grafana Cloud promotes `service.name` and `deployment.environment.name` to labels, so the queries
-select `deployment_environment_name="production"`; staging raises nothing. A pod's counters start a new series
+select `deployment_environment_name="production"`; staging raises nothing, except `ZiftbookFrontendDown`. A pod's counters start a new series
 (`service.instance.id` is per process), so the two counter rules take "now minus the last value seen up to a day before the
 window, or 0 if the series is newer" instead of `increase()`, which never counts a series' first jump; looking back a
 day, not one sample, keeps an export gap from counting a pod's lifetime total as new. A dead or stuck worker is first
@@ -992,6 +992,7 @@ also fires about 2 min later, because its no-data case is what catches a worker 
 | `ZiftbookJobsGaveUp` | any job given up after its 5th attempt in the last hour, per kind (`ziftbook_job_runs_total{job_outcome="gave_up"}`). Never retried by the worker | warning, daily |
 | `ZiftbookRefundFailed` | a refund did not reach the client in the last hour, per `payment_kind` (`ziftbook_payment_outcomes_total{payment_outcome="refund_failed"}`): Stripe refused the refund (a disputed charge, a closed account) or an issued refund failed later. Counted once; the booking is flagged for the business | warning, daily |
 | `ZiftbookJobQueueStuck` | the oldest due job of a kind waited over 10 min for 5 min (`ziftbook_job_queue_oldest_age_seconds`; the worker polls every 30 s), or no queue metric at all: the worker reports every kind every minute, 0 when empty | critical, every 4 h |
+| `ZiftbookFrontendDown` | no `frontend` container running in `ziftbook-prod` or `ziftbook-staging` for 10 min, per namespace (`absent_over_time` on cAdvisor's `container_memory_working_set_bytes` over 5 min, then 5 min pending). The frontend has no OTel of its own; the same check as `TbdProcessDown`'s frontend. A frontend crash-looping with the 5 min back-off can flap it | warning, daily |
 
 When one fires:
 
@@ -1013,29 +1014,48 @@ Explore that `count by (__name__, service_name) ({__name__=~"http_server_request
 returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-prod has the same HTTP metric): a
 misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
-API traffic.
+API traffic. For `ZiftbookFrontendDown` (and the TBD frontends), `count by (namespace) (container_memory_working_set_bytes{job="cadvisor", container="frontend"})`
+returns the four app namespaces.
 
 ### TBD app alerts
 
-Rule group `tbd-app` (folder Platform) watches the TBD backend's CSP report sink in production
+Rule group `tbd-app` (folder Platform) watches that every TBD process runs and the TBD backend's CSP report sink in production
 (`tbd_security_csp_reports_total`, service `tbd-api`; the counter exists once prod runs a tbd release that includes it, expected 0.303.1). A series appears only on the
 first report with that `outcome`, so the rules count new reports the same way as the Ziftbook counter rules (now
 minus the last value seen up to a day before the window, or 0 if the series is newer) and treat no data as OK.
+
+Liveness (INFRA-200): every backend-image process exports `tbd_process_up` = 1 every 60 s, traffic or not (TBD-649,
+tbd 0.302.0 on), labelled `service_name` and `deployment_environment_name`. The frontend has no OTel, so its check is
+cAdvisor's `container_memory_working_set_bytes{container="frontend"}` in the namespace, relabelled `tbd-frontend`. Each
+expected process is named in the rule, so `absent_over_time(...[5m])` returns one series per missing one: 5 min with no
+sample, then 5 min pending, about 10 min after the last export. A rollout (the scheduler and staging are `Recreate`)
+is back within 2 min. The migrate Job is short-lived and has no rule. When Alloy or a node's cAdvisor is down these can
+fire alongside `NodeMetricsAbsent`.
 
 | Alert | Fires when | Severity, repeat |
 |---|---|---|
 | `TbdCspReportsDropped` | any CSP report dropped in the last hour because the global budget was spent (`outcome="global_budget"`): later reports in that window are not stored | warning, daily |
 | `TbdCspReportSinkFailing` | any CSP report not stored in the last hour because the counter store or the write failed (`outcome` `counter_unavailable` or `write_failed`); the sink fails open | warning, daily |
+| `TbdProcessDown` | a production process reported nothing for 10 min: `tbd-api`, `tbd-scheduler` (`tbd_process_up`) or `tbd-frontend` (cAdvisor, namespace `tbd-prod`). The scheduler has no other alarm; a dead `tbd-api` also trips `ProdEndpointDown` | critical, every 4 h |
+| `TbdStagingProcessDown` | the same on staging: `tbd-api`, `tbd-mcp` and `tbd-frontend` (namespace `tbd-staging`). Staging has no scheduler pod | warning, daily |
 
 When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
 of dropped reports is either a real CSP regression (a release that blocks its own assets) or someone flooding the
 report endpoint; the app decides which, not infra.
+
+When a process alert fires: `kubectl -n tbd-prod get pods` (or `tbd-staging`) for a pod that is not Running or keeps
+restarting, then its `kubectl logs --previous`. All pods Running: the process runs but its export fails, so check the
+`otel` ConfigMap and [Metrics to Grafana Cloud](#metrics-to-grafana-cloud-alloy).
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/tbd-app grafana/tbd-app.rules.json`. The metric name is
 not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
 `count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
 returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
+Before applying the process rules, check that
+`count by (service_name, deployment_environment_name) (tbd_process_up)` returns the four pairs `tbd-api` and
+`tbd-scheduler` in production, `tbd-api` and `tbd-mcp` in staging: a different name or label fires the rule for that
+process at once (it fails loud, not silent).
 
 ### Find a request's logs
 
