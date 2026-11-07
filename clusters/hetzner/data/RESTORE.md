@@ -2,7 +2,9 @@
 
 The nightly `db-backup` CronJob writes one set per night to
 `tbd-mysql-backups-884686184019`: `<prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>`. The manifest
-carries the table count and the SHA256 of the dump and grants files.
+carries the table count and the SHA256 of the dump and grants files. A Postgres dump is a custom-format archive,
+`<db>_<stamp>.dump` (INFRA-235); MySQL dumps, grants files and the Postgres dumps written before INFRA-235 are gzipped
+SQL, `.sql.gz`.
 
 | prefix | database | written by |
 |---|---|---|
@@ -30,9 +32,9 @@ cd "$(mktemp -d)"   # keeps manifest.json out of the repo
 export KUBECONFIG=~/.kube/hetzner AWS_PROFILE=fjc   # every set lives on Hetzner
 B=tbd-mysql-backups-884686184019
 PREFIX=tbd-mysql   # or tbd-staging-mysql, ziftbook-postgres, ziftbook-prod-postgres
-# Ziftbook only: the database, the app namespace and the bootstrap Job that go with the set.
-ZDB=ziftbook ZNS=ziftbook-staging ZJOB=ziftbook-bootstrap                 # ziftbook-postgres
-# ZDB=ziftbook_prod ZNS=ziftbook-prod ZJOB=ziftbook-prod-bootstrap        # ziftbook-prod-postgres
+# Ziftbook only: the database, the app namespace, the bootstrap Job and the restore login that go with the set.
+ZDB=ziftbook ZNS=ziftbook-staging ZJOB=ziftbook-bootstrap ZLOGIN=ziftbook_migrate                 # ziftbook-postgres
+# ZDB=ziftbook_prod ZNS=ziftbook-prod ZJOB=ziftbook-prod-bootstrap ZLOGIN=ziftbook_prod_migrate   # ziftbook-prod-postgres
 M=$(aws s3api list-objects-v2 --bucket "$B" --prefix "$PREFIX/" \
   --query 'reverse(sort_by(Contents[?contains(Key, `/manifest_`)], &LastModified))[0].Key' --output text)
 aws s3 cp "s3://$B/$M" manifest.json && jq . manifest.json   # date, tables, both keys and SHA256s
@@ -116,17 +118,20 @@ my() { kubectl -n "$NS" exec -i "$POD" -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD
 pg() { kubectl -n "$NS" exec -i "$POD" -- psql -U postgres -XAtq -v ON_ERROR_STOP=1 "$@"; }
 for k in dump grants; do
   key=$(jq -r ".$k.key" manifest.json) sha=$(jq -r ".$k.sha256" manifest.json)
-  aws s3 cp "s3://$B/$key" - | kubectl -n "$NS" exec -i "$POD" -- sh -c "cat >/tmp/$k.sql.gz"
-  kubectl -n "$NS" exec "$POD" -- sh -c "echo '$sha  /tmp/$k.sql.gz' | sha256sum -c && gzip -t /tmp/$k.sql.gz"
+  f=/tmp/$k.${key#*.}   # the key's extension: sql.gz, or dump for a custom-format Postgres dump
+  aws s3 cp "s3://$B/$key" - | kubectl -n "$NS" exec -i "$POD" -- sh -c "cat >$f"
+  kubectl -n "$NS" exec "$POD" -- sh -c "echo '$sha  $f' | sha256sum -c && case $f in *.gz) gzip -t $f; esac"
 done
 ```
 
-Expect `/tmp/dump.sql.gz: OK` and `/tmp/grants.sql.gz: OK`. Anything else: stop, try an older night.
+Expect `/tmp/grants.sql.gz: OK` and `/tmp/dump.sql.gz: OK` (`/tmp/dump.dump: OK` for a custom-format Postgres
+dump). Anything else: stop, try an older night.
 
 The manifest's SHA256 proves the file is the copy the manifest names, not who wrote it: the same
 identity writes the dump, its hash and the manifest, so a set written while the cluster was
 compromised can still check out here (DATA-04). This is why step 1 prefers a set from before the
-incident, MySQL replays with `--binary-mode`, and the Postgres files are scanned before replay.
+incident, MySQL replays with `--binary-mode`, and a Postgres dump is restored by a login that is not a
+superuser (a plain one from before INFRA-235 is scanned before replay).
 
 ## 4. Restore
 
@@ -144,12 +149,45 @@ kubectl -n "$NS" exec "$POD" -- sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
   gzip -dc /tmp/dump.sql.gz | mysql --binary-mode -uroot tbd && echo restored'
 ```
 
-**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). `psql` acts on a backslash meta-command
-anywhere in a line (`\!` runs a shell command), and as superuser can reach the server's files
+**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). The dump's key (`jq -r .dump.key manifest.json`)
+picks the procedure.
+
+*Custom-format dump (`.dump`, INFRA-235).* `pg_restore` loads it into an existing, empty database, logged in as a
+Ziftbook role that is not a superuser: whatever the archive holds runs with the owner role's rights only, and
+`pg_restore` runs no client commands. `--no-owner --role=ziftbook_migrate` makes `ziftbook_migrate` own every object,
+as the migrations do; `--single-transaction --exit-on-error`: on any error nothing is restored. The roles, the
+database and its grants come from git (the bootstrap Jobs), never from the backup: the grants file is not replayed.
+
+Drill only: create on the scratch server what the bootstrap Jobs create (no passwords: the restore logs in over the
+pod's socket).
+
+```bash
+ZLOGIN=ziftbook_migrate   # the drill logs in as the owner role itself
+pg -d postgres <<SQL
+CREATE ROLE ziftbook_migrate LOGIN;
+CREATE ROLE ziftbook_app;
+CREATE ROLE ziftbook_worker IN ROLE ziftbook_app;
+CREATE DATABASE $ZDB;
+GRANT CONNECT, CREATE, TEMPORARY ON DATABASE $ZDB TO ziftbook_migrate;
+SQL
+pg -d "$ZDB" -c 'GRANT CREATE ON SCHEMA public TO ziftbook_migrate'
+```
+
+Restore:
+
+```bash
+kubectl -n "$NS" exec "$POD" -- pg_restore -U "$ZLOGIN" --role=ziftbook_migrate --no-owner \
+  --single-transaction --exit-on-error -d "$ZDB" /tmp/dump.dump && echo restored
+```
+
+Expect only `restored`.
+
+*Plain dump (`.sql.gz`, written before INFRA-235).* Restore these the old way until the last one expires (8 days
+after the first custom-format night), then delete this procedure and its scan. `psql` acts on a backslash
+meta-command anywhere in a line (`\!` runs a shell command), and as superuser can reach the server's files
 (`COPY ... FROM/TO PROGRAM` or a path, `lo_import`, `pg_read_file`) and load code (`CREATE EXTENSION`,
 untrusted languages). The scan below is a guard against statements a `pg_dump`/`pg_dumpall` backup
 should never contain, not a guarantee, so still choose a set from before the incident (step 1).
-Custom-format dumps restored by a non-superuser role are planned to replace it (#272).
 Scan the grants and the dump, each in its own mode, and abort if either is refused. Load the scanner
 into the pod (its quotes do not survive a nested `sh -c`):
 
@@ -159,8 +197,8 @@ kubectl -n "$NS" exec -i "$POD" -- sh -c 'cat >/tmp/scan.awk' <<'AWK'
 # A guard, not a guarantee: it refuses a gunzipped Postgres backup that carries anything psql would
 # act on beyond what pg_dump/pg_dumpall 18 emit for these databases. Select the scan with -v scan=grants
 # (pg_dumpall --globals-only: a fixed allowlist of line shapes) or -v scan=dump (pg_dump --create: a
-# quote-aware lexer). Custom-format dumps restored by a non-superuser role are planned to replace it
-# (#272). Exit non-zero on the first refusal.
+# quote-aware lexer). Only for plain dumps written before INFRA-235: custom-format dumps restore with
+# pg_restore as a non-superuser instead. Exit non-zero on the first refusal.
 function refuse(why) { printf "SCAN REFUSED (%s): %s\n", why, $0 > "/dev/stderr"; bad = 1; exit 1 }
 function refusel(why, ln) { printf "SCAN REFUSED (%s): %s\n", why, ln > "/dev/stderr"; bad = 1; exit 1 }
 
@@ -372,13 +410,28 @@ volume). A MySQL dump replaces every table it contains (`DROP TABLE IF EXISTS`).
 2. Steps 1 and 3 with `NS=data` and `POD=mysql-0` (or `postgres-0`, on the Hetzner cluster: `KUBECONFIG=~/.kube/hetzner`).
 3. Gate: step 5's table-count query (the first statement of the `my` or `pg -d "$ZDB"` block) must
    print `0`. Anything else: stop and decide; never drop a database on reflex.
-4. Postgres only: the entrypoint (`ziftbook`) or the bootstrap Job (`ziftbook_prod`) created an empty `$ZDB` that the dump's `CREATE DATABASE`
-   would collide with. With the gate at `0`: `pg -d postgres -c "DROP DATABASE $ZDB"`. The other
-   Ziftbook database on the same server stays as it is.
+4. Postgres only.
+   - Custom-format dump: the restore goes into the empty `$ZDB` and needs the roles and grants first. Rerun both
+     bootstrap Jobs from a checkout of main (`REPO`: its root), staging's first (production's revokes CONNECT on
+     `ziftbook`). They are idempotent and set every password from the Secrets; production's creates `ziftbook_prod`.
+     Then the gate again for `$ZDB` (on a fresh volume `ziftbook_prod` exists only from here).
+
+     ```bash
+     for f in postgres-bootstrap postgres-bootstrap-prod; do
+       j=$(awk '$1 == "name:" { print $2; exit }' "$REPO/clusters/hetzner/data/$f.yaml")
+       kubectl -n data delete job "$j" --ignore-not-found
+       kubectl apply -f "$REPO/clusters/hetzner/data/$f.yaml"
+       kubectl -n data wait --for=condition=complete --timeout=10m "job/$j" || break
+     done
+     ```
+   - Plain dump: the entrypoint (`ziftbook`) or the bootstrap Job (`ziftbook_prod`) created an empty `$ZDB` that the
+     dump's `CREATE DATABASE` would collide with. With the gate at `0`: `pg -d postgres -c "DROP DATABASE $ZDB"`.
+   The other Ziftbook database on the same server stays as it is.
 5. Step 4.
    - MySQL: the entrypoint and `10-backup-user.sh` created `tbd_app` and `tbd_backup` from the
      `mysql` secret, and `IF NOT EXISTS` leaves them as they are.
-   - Postgres: the entrypoint creates only `postgres`, so the globals bring back every role **with
+   - Postgres, custom-format dump: the roles are the ones item 4's Jobs made, with the Secrets' passwords.
+   - Postgres, plain dump: the entrypoint creates only `postgres`, so the globals bring back every role **with
      its password as of that night**, `postgres` included. Make the secrets authoritative again:
      `kubectl -n data delete job "$ZJOB"` (Flux recreates it on resume and it resets the
      app passwords). If `admin-password` changed after that night, set it from
@@ -388,7 +441,7 @@ volume). A MySQL dump replaces every table it contains (`DROP TABLE IF EXISTS`).
      kubectl -n data exec postgres-0 -- sh -c \
        'echo "ALTER ROLE postgres PASSWORD :'\''pw'\''" | psql -U postgres -Xq -v pw="$POSTGRES_PASSWORD"'
      ```
-6. Step 5's checks, then remove the copies: `kubectl -n data exec "$POD" -- rm /tmp/dump.sql.gz /tmp/grants.sql.gz`.
+6. Step 5's checks, then remove the copies: `kubectl -n data exec "$POD" -- sh -c 'rm -f /tmp/dump.* /tmp/grants.sql.gz'`.
 7. Revoke what the dump brings back: sessions signed out after it, and links used or revoked after
    it. Everyone signs in again; owners resend open invites, and pending sign-ups and resets start over.
    Postgres (`POD=postgres-0`):

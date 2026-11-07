@@ -451,13 +451,25 @@ class ProductionMode(unittest.TestCase):
 
 class MySqlConnectionBudget(unittest.TestCase):
     """INFRA-194: the most connections each TBD process can hold fits the MySQL caps. Per process: the async engine
-    (DB_POOL_SIZE + DB_MAX_OVERFLOW, tbd defaults 5 + 10) plus the sync engines hardcoded in tbd at 2 + 5 each: the
-    rate limiter (rate_limit_db) and the session store (state_db). mcp imports state_db but no MCP tool reaches it, so
-    only its rate-limit engine counts (tbd v0.305.0; recount when tbd changes its engines). The migrate init container
-    (one connection, NullPool) runs before its pod's app container, and Recreate keeps a second pod from overlapping."""
+    (DB_POOL_SIZE + DB_MAX_OVERFLOW, tbd defaults 5 + 10) plus the sync engines in SIDE: the rate limiter
+    (RATE_LIMIT_DB_*) and the session store (STATE_DB_*), 2 + 5 each, from env since tbd v0.306.0 (TBD-785) and
+    hardcoded before. mcp imports state_db but no MCP tool reaches it, so only its rate-limit engine counts (tbd
+    v0.306.0; recount when tbd changes its engines). The migrate init container (one connection, NullPool) runs before
+    its pod's app container, and Recreate keeps a second pod from overlapping."""
 
-    FIXED = {"backend": 14, "mcp": 7}
+    SIDE = {"backend": ("RATE_LIMIT_DB_", "STATE_DB_"), "mcp": ("RATE_LIMIT_DB_",)}
+    SIDE_FROM_ENV = (0, 306, 0)
     DUMP = 1  # data/db-backup, as tbd_backup; prod and staging dumps run one after the other
+
+    @staticmethod
+    def pool(c, prefix, size, overflow):
+        total = 0
+        for name, default in ((prefix + "POOL_SIZE", size), (prefix + "MAX_OVERFLOW", overflow)):
+            try:
+                total += int(env_value(c, name))
+            except KeyError:
+                total += default
+        return total
 
     def processes(self, namespace):
         for f, d in workloads(namespace):
@@ -465,15 +477,13 @@ class MySqlConnectionBudget(unittest.TestCase):
                 img = tbd_image(c)
                 if img in (None, "frontend"):
                     continue
-                self.assertIn(img, self.FIXED, f"{where(f, d, c)}: count this image's engines in FIXED")
+                self.assertIn(img, self.SIDE, f"{where(f, d, c)}: count this image's engines in SIDE")
                 self.assertEqual(d["spec"].get("strategy"), {"type": "Recreate"}, where(f, d, c))
-                pool = {}
-                for name, default in (("DB_POOL_SIZE", 5), ("DB_MAX_OVERFLOW", 10)):
-                    try:
-                        pool[name] = int(env_value(c, name))
-                    except KeyError:
-                        pool[name] = default
-                yield d["spec"].get("replicas", 1) * (sum(pool.values()) + self.FIXED[img])
+                tag = re.search(r":v(\d+)\.(\d+)\.(\d+)@", c["image"])
+                self.assertIsNotNone(tag, f"{where(f, d, c)}: image needs a vX.Y.Z tag")
+                from_env = tuple(map(int, tag.groups())) >= self.SIDE_FROM_ENV
+                side = sum(self.pool(c, p, 2, 5) if from_env else 7 for p in self.SIDE[img])
+                yield d["spec"].get("replicas", 1) * (self.pool(c, "DB_", 5, 10) + side)
 
     def test_staging_fits_its_user_cap_and_production_fits_beside_it(self):
         mysql = (CLUSTERS / "hetzner/data/mysql.yaml").read_text()
