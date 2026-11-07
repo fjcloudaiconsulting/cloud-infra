@@ -177,6 +177,18 @@ Setup, once:
    grep -cE '^ +AWS_[A-Z_]+: ENC\[' "$F"   # must print 2 (a plain ': ENC' count also matches sops' own mac line)
    ```
 
+4. **Probe token**: R2 > Manage API tokens > Create, name `db-backups-probe`, Object Read only, bucket `db-backups`
+   only, no expiry. Store it and the endpoint as repository secrets (each command prompts for the value):
+
+   ```sh
+   gh secret set R2_PROBE_ACCESS_KEY_ID -R fjcloudaiconsulting/cloud-infra
+   gh secret set R2_PROBE_SECRET_ACCESS_KEY -R fjcloudaiconsulting/cloud-infra
+   gh secret set R2_BACKUP_ENDPOINT -R fjcloudaiconsulting/cloud-infra   # https://<account id>.eu.r2.cloudflarestorage.com
+   ```
+
+   The freshness probe (04:17 UTC) lists the bucket with it and opens `[backup-stale]` when a set is missing, old or
+   too small. A missing secret reads as "could not run", which also opens the issue.
+
 Check after a night (`E=https://<account id>.eu.r2.cloudflarestorage.com`, a read token in the AWS env vars):
 `aws s3 ls --endpoint-url "$E" s3://db-backups/ --recursive | grep "$(date -u +%Y/%m/%d)"` lists, per set, a
 `.sql.gz.gpg` (or `.dump.gpg`), a `grants_*.gpg` and a `manifest_*.json`. To read one:

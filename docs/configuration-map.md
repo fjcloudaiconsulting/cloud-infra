@@ -383,6 +383,7 @@ commit body only.
 | NetBird `owner-admin` token | 90 days from the mint | [Bootstrap runbook](runbooks.md#hetzner-cluster-bootstrap) step 6 |
 | `k3s-backup-uploader` access key | no expiry, rotate on suspicion | Cluster section |
 | R2 token `db-backups-uploader` | no expiry, rotate on suspicion | Cluster section |
+| R2 token `db-backups-probe` (repository secrets `R2_PROBE_ACCESS_KEY_ID`, `R2_PROBE_SECRET_ACCESS_KEY`; endpoint in `R2_BACKUP_ENDPOINT`) | no expiry, rotate on suspicion | [runbook](runbooks.md#backups-to-r2) step 4 |
 | Grafana Cloud token `alloy-platform-node` | no expiry, rotate on suspicion | Grafana Cloud section |
 | Cloudflare account-owned tokens (all managed by `cloudflare-tokens`) | per token; `expires_on` in `terraform/cloudflare-tokens` | [runbook](runbooks.md#cloudflare-api-tokens). A token Terraform made gets a replace run, its consumer is rewritten in the same apply; an imported one needs its consumer wired in Terraform first |
 | Cloudflare bootstrap token, HCP Terraform team token `cloudflare-tokens` | no expiry, rotate on suspicion | [runbook](runbooks.md#cloudflare-api-tokens) |
