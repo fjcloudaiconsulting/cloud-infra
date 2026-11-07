@@ -10,7 +10,7 @@ TF = pathlib.Path(__file__).resolve().parent.parent / "terraform" / "cloudflare"
 REQUIRED = {
     "/api/session", "/api/admin/session", "/api/admin/session/second-factor", "/api/sign-up",
     "/api/sign-up/complete", "/api/password-reset", "/api/password-reset/complete", "/api/invites/accept",
-    "/api/health/dependencies",
+    "/api/health/dependencies", "/api/setup",
 }
 
 
