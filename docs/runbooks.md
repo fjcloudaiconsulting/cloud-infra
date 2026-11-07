@@ -377,9 +377,9 @@ In a database grant `_` is still a (deprecated) wildcard, so `tbd_staging` also 
 escaping backslash, and the replayed grant would name a different database. The password reaches
 `mysql` on stdin, so it is never on a command line in the pod (locally it is briefly in `sed`'s). The cap (30) keeps staging from
 using up `max_connections` (120) that production needs: production's pools hold up to 87 (3 pods × 29), plus 1 for the
-dump job. Staging's backend (pool 2 + 3 from env, plus the two engines tbd hardcodes at 2 + 5 for rate limits and
-sessions: 19) and mcp (9, `tbd-staging/mcp.yaml`) add up to 28 at full pools, so under load staging stays under its
-cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
+dump job. Staging's backend (pool 5 + 10, plus the rate-limit and session engines at 1 + 1 each, all from env: 19)
+and mcp (pool 1 + 1 and rate-limit engine 1 + 1: 4, `tbd-staging/mcp.yaml`) add up to 23 at full pools, so under load
+staging stays under its cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
 pools, cap or `max_connections` drift apart). The cap is also in `init.sql` in `data/mysql.yaml`, which MySQL runs at every start, so a cap
 changed there in git applies at the next MySQL restart; keep it equal to the one above (the test checks). To apply it
 sooner without a restart, run `ALTER USER 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS 30;` as root. Nothing here touches `tbd` or its users, and the MySQL pod
