@@ -73,7 +73,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.305.0@sha256:6ba660057c0040a0eb560d3d97fec7ea1b672306c6d53ca6bf7f5e5cf6a403ec
+          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.306.0@sha256:ae705ed265e0eb47631972d05ce390648a54f60fc4cb57501562b17bd2855689
           env:
             - name: APP_ENV
               value: production
@@ -108,7 +108,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.305.0@sha256:4ddfc418b8387b04892a79180d45faa7a18246becafb6f0723967184047d0ec1
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.306.0@sha256:eaee0e5d626c2f905751697acb2d8bc83433f4e76c5b8733e69f92ae433390bb
           args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8000
@@ -177,6 +177,13 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it.
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tbd
+                  key: setup-token
+                  optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

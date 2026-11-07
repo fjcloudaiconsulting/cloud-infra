@@ -17,6 +17,14 @@ class DbBackupManifest(unittest.TestCase):
         self.assertIsNotNone(vol, "backup emptyDir volume not found")
         self.assertRegex(vol.group(1), r"medium: Memory")
 
+    def test_postgres_dump_is_custom_format(self):
+        """INFRA-235: a plain SQL dump would be restored through psql as a superuser; the archive is restored by
+        pg_restore as the owner role (RESTORE.md)."""
+        script = re.search(r"^  pg-dump\.sh: \|\n((?:    .*\n|\n)+)", self.text, re.M).group(1)
+        self.assertRegex(script, r"(?m)^\s*DUMP=\$\{DUMP%\.sql\.gz\}\.dump$")
+        self.assertRegex(script, r'(?m)^\s*pg_dump -Fc -f "\$DUMP" "\$DB"$')
+        self.assertNotRegex(script, r"pg_dump [^\n]*\|")
+
 
 if __name__ == "__main__":
     unittest.main()
