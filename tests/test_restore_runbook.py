@@ -92,6 +92,24 @@ class TestRestoreRunbook(unittest.TestCase):
         self.assertIn("ON_ERROR_STOP=1", line)
         self.assertRegex(self.text, r'grep -v "\^CREATE ROLE postgres;\$"')
 
+    # ---- INFRA-235: custom-format Postgres dumps restore through pg_restore, never as a superuser ----
+
+    def test_custom_format_dump_restores_with_pg_restore_as_the_owner_role(self):
+        restores = re.findall(r"pg_restore -(?:[^\n\\]|\\\n)*", self.text)  # with its continuation lines
+        self.assertTrue(restores, "RESTORE.md has no pg_restore step")
+        for cmd in restores:
+            for flag in ('-U "$ZLOGIN"', "--role=ziftbook_migrate", "--no-owner", "--single-transaction",
+                         "--exit-on-error", "/tmp/dump.dump"):
+                self.assertIn(flag, cmd, msg=f"pg_restore step without {flag}: {cmd!r}")
+        # The login is a Ziftbook role, never the superuser, in every place it is set.
+        logins = re.findall(r"\bZLOGIN=(\S+)", self.text)
+        self.assertGreaterEqual(len(logins), 3, "expected ZLOGIN for both sets and the drill")
+        self.assertTrue(all(v.startswith("ziftbook_") for v in logins), logins)
+
+    def test_custom_format_dump_never_reaches_psql(self):
+        self.assertNotRegex(self.text, r"/tmp/dump\.dump[^\n]*\|[^\n]*psql")
+        self.assertNotRegex(self.text, r"psql[^\n]*/tmp/dump\.dump")
+
     # ---- DATA-04: the runbook states the checksum proves transport, not authorship ---------------
 
     def test_runbook_notes_checksum_proves_copy_not_author(self):

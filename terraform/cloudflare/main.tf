@@ -50,6 +50,11 @@ locals {
 
     google_verification = { name = "thebetterdecision.com", type = "TXT", content = "\"google-site-verification=n5V8oSnk53Vi4UraYvoNiWv6FrBVeYkSGDAD9VsMTPY\"", ttl = 60 }
 
+    # Nothing sends as the apex (mail is From m.thebetterdecision.com, below), so it refuses all mail in its name (INFRA-228).
+    # sp=reject covers subdomains with no _dmarc of their own; m. keeps its own record. Strict alignment: only the apex itself aligns.
+    apex_spf   = { name = "thebetterdecision.com", type = "TXT", content = "\"v=spf1 -all\"", ttl = 300 }
+    apex_dmarc = { name = "_dmarc.thebetterdecision.com", type = "TXT", content = "\"v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s\"", ttl = 300 }
+
     # TBD production (INFRA-48). On the Hetzner cluster since INFRA-175: the Cloudflare Tunnel (tunnel.tf), which needs
     # the proxied CNAME to <tunnel id>.cfargotunnel.com. Staying a CNAME keeps this an in-place update.
     app = { name = "app.thebetterdecision.com", type = "CNAME", content = "${cloudflare_zero_trust_tunnel_cloudflared.hetzner_k3s.id}.cfargotunnel.com", ttl = 1, proxied = true }
@@ -277,6 +282,9 @@ locals {
     dmarc    = { type = "TXT", name = "_dmarc.m.ziftbook.com", content = "\"v=DMARC1; p=none; pct=100; fo=1; ri=3600; rua=mailto:ebe10ff8@dmarc.mailgun.org,mailto:e05f9325@inbox.ondmarc.com; ruf=mailto:ebe10ff8@dmarc.mailgun.org,mailto:e05f9325@inbox.ondmarc.com;\"" }
     dkim     = { type = "TXT", name = "email._domainkey.m.ziftbook.com", content = "\"k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC1X2888qHqW4D/8t8+ye5xRPQJoFrq02xHeV3XAg5jMUH69ZIYFoFomXtAMYOdO17uXdTb4cXvWI9VpN1DLREJvHgVPrf3QvVC9BRaLWum5hemIsuLZLIoe0WC/nyyHwB92n0r1jDV49fh+ZdDQiFZdTxVTJpagi3bI6jp+lyF7wIDAQAB\"" }
     tracking = { type = "CNAME", name = "email.m.ziftbook.com", content = "eu.mailgun.org" }
+    # The apex sends nothing (INFRA-228), as for thebetterdecision.com above. Its google-site-verification TXT is outside Terraform.
+    apex_spf   = { type = "TXT", name = "ziftbook.com", content = "\"v=spf1 -all\"" }
+    apex_dmarc = { type = "TXT", name = "_dmarc.ziftbook.com", content = "\"v=DMARC1; p=reject; sp=reject; adkim=s; aspf=s\"" }
   }
 }
 
