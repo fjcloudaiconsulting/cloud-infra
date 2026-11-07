@@ -1,7 +1,8 @@
 # Restoring the database dumps
 
-The nightly `db-backup` CronJob writes one set per night to
-`tbd-mysql-backups-884686184019`: `<prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>`. The manifest
+The nightly `db-backup` CronJob writes one set per night to the backup bucket `db-backups`:
+`<prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>`, the dump and grants as `<name>.gpg`, encrypted to the owner's
+backup key; the manifest names the files inside. The manifest
 carries the table count and the SHA256 of the dump and grants files. A Postgres dump is a custom-format archive,
 `<db>_<stamp>.dump` (INFRA-235); MySQL dumps, grants files and the Postgres dumps written before INFRA-235 are gzipped
 SQL, `.sql.gz`.
@@ -13,10 +14,11 @@ SQL, `.sql.gz`.
 | `ziftbook-postgres/` | Postgres `ziftbook` (Ziftbook staging) | `data/db-backup` on the Hetzner cluster (INFRA-173) |
 | `ziftbook-prod-postgres/` | Postgres `ziftbook_prod` (Ziftbook production, INFRA-82) | `data/db-backup` on the Hetzner cluster (INFRA-181) |
 
-Only an account admin can read the dumps: the uploaders are put-only and the probe is list-only
-(`terraform/tbd-backups`). Run everything from a Mac with admin AWS credentials (private ops notes) and the NetBird
-kubeconfig. Dumps stream from S3 straight into the pod; nothing lands on the Mac except the
-manifest. Never print table contents or the grants file (it holds password hashes).
+Only the owner's backup key can read a dump: the uploader and the probe see ciphertext at most. Run everything from
+the Mac that holds that key (docs/runbooks.md "Backups to R2"), with the cluster kubeconfig and a read-only token for the
+bucket (R2 > Manage API tokens, Object Read, `db-backups` only; delete it after a drill). Each file is decrypted on the
+Mac and streams straight into the pod; nothing lands on the Mac except the manifest. Never print table contents or the
+grants file (it holds password hashes).
 
 There are two targets:
 
@@ -29,15 +31,17 @@ There are two targets:
 
 ```bash
 cd "$(mktemp -d)"   # keeps manifest.json out of the repo
-export KUBECONFIG=~/.kube/hetzner AWS_PROFILE=fjc   # every set lives on Hetzner
-B=tbd-mysql-backups-884686184019
+export KUBECONFIG=~/.kube/hetzner AWS_REGION=auto
+read -rsp 'Access Key ID: ' AWS_ACCESS_KEY_ID; echo; read -rsp 'Secret Access Key: ' AWS_SECRET_ACCESS_KEY; echo
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+E=https://<account id>.eu.r2.cloudflarestorage.com B=db-backups
 PREFIX=tbd-mysql   # or tbd-staging-mysql, ziftbook-postgres, ziftbook-prod-postgres
 # Ziftbook only: the database, the app namespace, the bootstrap Job and the restore login that go with the set.
 ZDB=ziftbook ZNS=ziftbook-staging ZJOB=ziftbook-bootstrap ZLOGIN=ziftbook_migrate                 # ziftbook-postgres
 # ZDB=ziftbook_prod ZNS=ziftbook-prod ZJOB=ziftbook-prod-bootstrap ZLOGIN=ziftbook_prod_migrate   # ziftbook-prod-postgres
-M=$(aws s3api list-objects-v2 --bucket "$B" --prefix "$PREFIX/" \
+M=$(aws s3api list-objects-v2 --endpoint-url "$E" --bucket "$B" --prefix "$PREFIX/" \
   --query 'reverse(sort_by(Contents[?contains(Key, `/manifest_`)], &LastModified))[0].Key' --output text)
-aws s3 cp "s3://$B/$M" manifest.json && jq . manifest.json   # date, tables, both keys and SHA256s
+aws s3 cp --endpoint-url "$E" "s3://$B/$M" manifest.json && jq . manifest.json   # date, tables, both keys and SHA256s
 ```
 
 For an older night, set `M` to that night's manifest key. For a real restore, check that `date`
@@ -119,7 +123,8 @@ pg() { kubectl -n "$NS" exec -i "$POD" -- psql -U postgres -XAtq -v ON_ERROR_STO
 for k in dump grants; do
   key=$(jq -r ".$k.key" manifest.json) sha=$(jq -r ".$k.sha256" manifest.json)
   f=/tmp/$k.${key#*.}   # the key's extension: sql.gz, or dump for a custom-format Postgres dump
-  aws s3 cp "s3://$B/$key" - | kubectl -n "$NS" exec -i "$POD" -- sh -c "cat >$f"
+  # Decrypted on the Mac (gpg asks for the backup key's passphrase once), never written to its disk.
+  aws s3 cp --endpoint-url "$E" "s3://$B/$key.gpg" - | gpg --decrypt --quiet | kubectl -n "$NS" exec -i "$POD" -- sh -c "cat >$f"
   kubectl -n "$NS" exec "$POD" -- sh -c "echo '$sha  $f' | sha256sum -c && case $f in *.gz) gzip -t $f; esac"
 done
 ```
@@ -386,11 +391,13 @@ FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDE
 SQL
 ```
 
-Remove the drill (this deletes the restored data with it) and the manifest:
+Remove the drill (this deletes the restored data with it), the manifest and the token from the shell:
 
 ```bash
-kubectl delete namespace "$NS" && rm manifest.json
+kubectl delete namespace "$NS" && rm manifest.json; unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 ```
+
+Then delete the read token in R2 > Manage API tokens.
 
 Once both engines have passed, set the drill's date in [`docs/restore-drill.md`](../../../docs/restore-drill.md) in a PR.
 
