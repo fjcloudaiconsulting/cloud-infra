@@ -290,6 +290,12 @@ class AlarmWiring(unittest.TestCase):
         wf = WORKFLOW.read_text()
         self.assertNotRegex(wf, r"detail=[^\n]*err\.txt")
         self.assertIn("secrets.R2_BACKUP_ENDPOINT", wf)
+        self.assertIn('echo "::add-mask::$host"', wf)
+
+    def test_the_probe_job_reads_its_secrets_from_the_main_only_environment(self):
+        # Kills: repository-wide secrets, readable by a workflow pushed to any branch.
+        job = re.search(r"\n  probe:\n(.*?)(?=\n  \S|\Z)", WORKFLOW.read_text(), re.S)
+        self.assertRegex(job.group(1), r"\n    environment: backup-probe\n")
 
     def test_the_workflow_runs_this_repos_probe(self):
         # A wrong path exits 127 and reads as could-not-run every night.

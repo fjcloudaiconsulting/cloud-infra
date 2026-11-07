@@ -37,6 +37,9 @@ jobs:
   probe:
     name: Backup Freshness
     runs-on: ubuntu-26.04
+    # The R2 secrets are environment secrets: only main may deploy to backup-probe, so a workflow on another branch
+    # cannot read them (the role this replaced trusted refs/heads/main only).
+    environment: backup-probe
     permissions:
       contents: read
       issues: write
@@ -60,6 +63,9 @@ jobs:
             echo "detail=the probe's secrets are not set (docs/runbooks.md, Backups to R2)." >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Masking covers the whole secret only: mask the host and the account id too, which an error may print alone.
+          host=${R2_ENDPOINT#https://}; host=${host%%/*}
+          echo "::add-mask::$host"; echo "::add-mask::${host%%.*}"
           # ⚠ The listing and the verdict are separate steps on purpose: a listing
           # failure here must read as "could not run" (exit 2), not as "stale",
           # and must not be mistaken for a healthy empty bucket.

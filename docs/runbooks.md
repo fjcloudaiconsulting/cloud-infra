@@ -178,12 +178,15 @@ Setup, once:
    ```
 
 4. **Probe token**: R2 > Manage API tokens > Create, name `db-backups-probe`, Object Read only, bucket `db-backups`
-   only, no expiry. Store it and the endpoint as repository secrets (each command prompts for the value):
+   only, no expiry. Store it and the endpoint as secrets of the environment `backup-probe`, which only `main` may deploy
+   to (each `gh secret set` prompts for the value):
 
    ```sh
-   gh secret set R2_PROBE_ACCESS_KEY_ID -R fjcloudaiconsulting/cloud-infra
-   gh secret set R2_PROBE_SECRET_ACCESS_KEY -R fjcloudaiconsulting/cloud-infra
-   gh secret set R2_BACKUP_ENDPOINT -R fjcloudaiconsulting/cloud-infra   # https://<account id>.eu.r2.cloudflarestorage.com
+   R=repos/fjcloudaiconsulting/cloud-infra/environments/backup-probe
+   gh api -X PUT $R -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST $R/deployment-branch-policies -f name=main -f type=branch
+   for s in R2_PROBE_ACCESS_KEY_ID R2_PROBE_SECRET_ACCESS_KEY R2_BACKUP_ENDPOINT; do
+     gh secret set $s --env backup-probe -R fjcloudaiconsulting/cloud-infra; done   # endpoint: https://<account id>.eu.r2.cloudflarestorage.com
    ```
 
    The freshness probe (04:17 UTC) lists the bucket with it and opens `[backup-stale]` when a set is missing, old or
