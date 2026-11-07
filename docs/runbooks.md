@@ -595,7 +595,7 @@ Ziftbook records every erasure (ZIF-58) outside its database, so a restored back
 `python -m app.ledger reapply`. One private bucket per environment, `ziftbook-ledger-staging` and
 `ziftbook-ledger-prod`, EU jurisdiction, in `terraform/cloudflare/r2.tf` (INFRA-267): no CORS, no custom domain, r2.dev
 off. Objects under `erasures/` are locked for 14 days (no overwrite, no delete) and deleted after 15. The lock must be
-at least the backups' retention (8 days plus 1 day of old versions, `terraform/tbd-backups`):
+at least the backups' retention (deleted after 8 days, the backup bucket in the same file):
 `tests/test_erasure_ledger.py` fails otherwise. If backup retention grows, raise the lock first.
 
 | Pod | Ledger env | R2 key |

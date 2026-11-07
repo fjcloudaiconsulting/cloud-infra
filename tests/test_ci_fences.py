@@ -72,7 +72,7 @@ class KubeconformSchemasPinned(unittest.TestCase):
 
 # GHA-08: paths whose change reaches CI, cluster-admin, the backup chain or the hosts.
 TIER0 = (".github/", "renovate.json", "clusters/hetzner/flux-system/", "clusters/hetzner/system-upgrade/",
-         "clusters/hetzner/netbird/", "terraform/", "aws/", "ansible/", ".sops.yaml")
+         "clusters/hetzner/netbird/", "terraform/", "ansible/", ".sops.yaml")
 OWNER = re.compile(r"@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:/[A-Za-z0-9._-]+)?|[^@\s]+@[^@\s]+\.[a-z]+")
 
 

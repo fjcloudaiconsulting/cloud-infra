@@ -90,7 +90,7 @@ class Verdicts(unittest.TestCase):
 
     def test_stale_for_a_genuinely_empty_bucket(self):
         # list-objects-v2 omits Contents for an empty result.
-        r = probe('{"KeyCount": 0, "Name": "tbd-mysql-backups-884686184019"}')
+        r = probe('{"KeyCount": 0, "Name": "db-backups"}')
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("empty", r.stdout.lower())
 

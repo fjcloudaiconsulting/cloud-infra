@@ -34,15 +34,15 @@ Probe run: ${RUN_URL}
 
 ---
 
-**What this means.** The nightly dumps (\`tbd-mysql/\` and \`ziftbook-postgres/\` from the k3s \`db-backup\` CronJob) are
-the durability floor, and the copy in S3 is the only part that survives losing
-the machine. A \`stale\` verdict means at least one night has not completed end
+**What this means.** The nightly dumps (every set of the \`db-backup\` CronJob) are
+the durability floor, and the copy in the backup bucket is the only part that survives losing
+the cluster. A \`stale\` verdict means at least one night has not completed end
 to end. A \`could-not-run\` verdict means the probe could not answer the question
 at all, which is not evidence of health.
 
 **Where to look.**
 1. \`kubectl -n data get jobs\` and the failed job's logs.
-2. Whether the \`FlamaCorp/tbd-backups\` workspace has been applied.
+2. Whether the uploader's bucket token is still valid (docs/runbooks.md, "Backups to R2").
 
 ⚠ Do not silence this by widening the probe's thresholds.
 BODY_EOF
