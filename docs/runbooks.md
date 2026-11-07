@@ -174,7 +174,7 @@ Setup, once:
    read -r ID; read -rs SK; kubectl create secret generic backup-r2 -n data --from-literal=AWS_ACCESS_KEY_ID="$ID" \
      --from-literal=AWS_SECRET_ACCESS_KEY="$SK" --dry-run=client -o yaml \
      | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F"; unset ID SK
-   grep -c ': ENC' "$F"   # must print 2
+   grep -cE '^ +AWS_[A-Z_]+: ENC\[' "$F"   # must print 2 (a plain ': ENC' count also matches sops' own mac line)
    ```
 
 Check after a night (`E=https://<account id>.eu.r2.cloudflarestorage.com`, a read token in the AWS env vars):
