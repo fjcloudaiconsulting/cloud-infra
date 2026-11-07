@@ -110,7 +110,7 @@ spec:
   policyTypes: [Egress]
 ---
 # The nightly dumps (db-backup.yaml, and a run created from the CronJob by hand): cluster DNS, the two servers, and the
-# bucket's S3 endpoint over HTTPS. The uploader signs with static keys (Secret backup-s3): no STS, no instance metadata.
+# bucket's S3 endpoint over HTTPS. The uploader signs with static keys (Secret backup-r2): no STS, no instance metadata.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -150,7 +150,7 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-    # S3 has no address range that stays put in git, so HTTPS goes to any public address. The excepted ranges hold the
+    # The bucket endpoint has no fixed address range, so HTTPS goes to any public address. The excepted ranges hold the
     # node network (the Kubernetes API and the kubelets), the pod and Service ranges, NetBird's range (100.64.0.0/10)
     # and instance metadata (link-local). IPv4 only: the cluster is single-stack.
     - to:
