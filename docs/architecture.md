@@ -207,6 +207,9 @@ reach every replica), and then gets one per environment, never shared.
   grants, manifest last) to the Object Lock bucket under `tbd-mysql/`, `tbd-staging-mysql/`, `ziftbook-postgres/` (Ziftbook staging) and `ziftbook-prod-postgres/`, all from the Hetzner cluster since INFRA-175.
   It uses a put-only IAM user (`k3s-backup-uploader`), SSE-KMS and a SHA256 checksum. Objects are
   locked for 7 days (GOVERNANCE).
+- Since INFRA-203 the same sets also go to the R2 bucket `db-backups` (EU, every object locked for 7 days), the dump and
+  grants gpg-encrypted to the owner's backup key before upload, the manifest in plaintext. S3 stays until the probe and
+  a restore are proven on R2; then the AWS chain is removed.
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
 - Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill

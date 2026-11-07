@@ -79,9 +79,18 @@ data:
     publish
   # One PUT per object: multipart needs kms:Decrypt (denied). The uploader's policy requires both SSE
   # headers. CLI 2.37 sends a CRC64NVME checksum by default; SHA256 is what the manifests record.
+  # With R2_ENDPOINT set (INFRA-203) it uploads to R2 instead: the dump and grants are gpg-encrypted to the owner's
+  # backup key first (<key>.gpg), so the uploader cannot read them back; the manifest stays plaintext for the probe.
   upload.sh: |
     set -uo pipefail
     rc=0
+    if [ -n "${R2_ENDPOINT:-}" ]; then
+      # Never upload a plaintext dump: no key, no upload.
+      [ -s /scripts/backups.pub.asc ] || { echo "!! no backup encryption key in /scripts/backups.pub.asc" >&2; exit 1; }
+      dest=(--endpoint-url "$R2_ENDPOINT")
+    else
+      dest=(--server-side-encryption aws:kms --ssekms-key-id "$KMS_KEY_ARN")
+    fi
     # The sets this cluster hosts (env DUMP_SETS, space-separated); empty must fail, not upload nothing.
     read -ra sets <<<"${DUMP_SETS:-}"
     [ "${#sets[@]}" -gt 0 ] || { echo "!! DUMP_SETS is empty or unset: no sets to upload" >&2; exit 1; }
@@ -93,13 +102,36 @@ data:
         echo "!! $set: no verified dump" >&2; rc=1; continue
       fi
       for key in "${keys[@]}"; do
-        aws s3api put-object --bucket "$BUCKET" --key "$key" --body "/backup/$key" \
-          --server-side-encryption aws:kms --ssekms-key-id "$KMS_KEY_ARN" \
+        if [ -n "${R2_ENDPOINT:-}" ] && [[ "${key##*/}" != manifest_* ]]; then
+          # A --recipient-file key needs no trust setting (the image's gnupg2-minimal has no --trust-model).
+          gpg --batch --no-tty --recipient-file /scripts/backups.pub.asc \
+            --output "/backup/$key.gpg" --encrypt "/backup/$key" || { echo "!! $set: encrypt $key failed" >&2; rc=1; break; }
+          key=$key.gpg
+        fi
+        aws s3api put-object --bucket "$BUCKET" --key "$key" --body "/backup/$key" "${dest[@]}" \
           --checksum-algorithm SHA256 --no-cli-pager >/dev/null || { echo "!! $set: put $key failed" >&2; rc=1; break; }
         echo "uploaded $key"
       done
     done
     exit $rc
+  # The owner's backup key, public half (INFRA-203): FJC database backups <flamarion@fjconsulting.io>, fingerprint
+  # 037EF649967C4D1DA4982B8BA38C8AAA409FDED8, encryption subkey 7E6481DB5AC4A488A3F05424DF3FF6DD2C98FB6F. The private half
+  # is offline (docs/runbooks.md "Backups to R2"); upload-r2 encrypts every dump and grants file to it.
+  backups.pub.asc: |
+    -----BEGIN PGP PUBLIC KEY BLOCK-----
+    Comment: GPGTools - https://gpgtools.org
+
+    mDMEau7TkBYJKwYBBAHaRw8BAQdAkvyGwvaRasT2d63q5s3MZzVJv5DUoFJ64JOS
+    kV5l21W0MEZKQyBkYXRhYmFzZSBiYWNrdXBzIDxmbGFtYXJpb25AZmpjb25zdWx0
+    aW5nLmlvPoiQBBMWCgA4FiEEA372SZZ8TR2kmCuLo4yKqkCf3tgFAmru05ACGwMF
+    CwkIBwMFFQoJCAsFFgIDAQACHgECF4AACgkQo4yKqkCf3timuQEAyFnwJRvxqpzl
+    HC5OYcTpe9vjUirkTUNl1wE/WVmoX3EBAMzyd32pMHspTqF0hO1SKUY9nfUpFThJ
+    24aHj8ZcluQEuDgEau7TkBIKKwYBBAGXVQEFAQEHQDXg84fxEDyfe1ipW7YGJwNF
+    XO4J265SJMlCHrGVhbdVAwEIB4h4BBgWCgAgFiEEA372SZZ8TR2kmCuLo4yKqkCf
+    3tgFAmru05ACGwwACgkQo4yKqkCf3th1XgD7Bx0Aaf9NnSkaxOxo/bYF2B16U11T
+    QUH+E4wtN6VonaoA/jSOp2DEvjX4HtMsMaaBX7Ur4O7wijC5QgH0/iC7o8oJ
+    =iHwQ
+    -----END PGP PUBLIC KEY BLOCK-----
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -286,6 +318,43 @@ spec:
               envFrom:
                 - secretRef:
                     name: backup-s3 # k3s-backup-uploader: put + KMS encrypt only
+              securityContext:
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: scripts
+                  mountPath: /scripts
+            # INFRA-203: the same sets to R2 (terraform/cloudflare/r2.tf), alongside S3 until the move is proven. Runs
+            # beside upload, so a failure here never stops the S3 copy; it fails the Job, which reruns both once.
+            - name: upload-r2
+              image: amazon/aws-cli:2.39.3@sha256:d557b3524475d70dd3104cf44d96568ee3188897b73a6ece2b37aa50e1af362f
+              command: [bash, /scripts/upload.sh]
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: DUMP_SETS
+                  value: tbd-mysql tbd-staging-mysql ziftbook-postgres ziftbook-prod-postgres
+                - name: BUCKET
+                  value: db-backups
+                # EU buckets answer only on the .eu endpoint.
+                - name: R2_ENDPOINT
+                  value: https://fb5eb042529f2621c6de3f34c6801174.eu.r2.cloudflarestorage.com
+                - name: AWS_REGION
+                  value: auto
+              envFrom:
+                - secretRef:
+                    name: backup-r2 # token db-backups-uploader: Object Read & Write, bucket db-backups only
+                    optional: true # missing, only this container fails: the pod still starts and S3 still gets the dumps
               securityContext:
                 runAsUser: 1000
                 allowPrivilegeEscalation: false

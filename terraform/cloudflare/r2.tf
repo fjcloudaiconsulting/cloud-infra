@@ -128,3 +128,47 @@ resource "cloudflare_r2_bucket_lifecycle" "ziftbook_ledger" {
     },
   ]
 }
+
+# Nightly database backups (INFRA-203): replaces the S3 Object Lock bucket in terraform/tbd-backups with the same
+# retention, every object locked for 7 days and deleted after 8. Private, EU jurisdiction, no CORS, no custom domain,
+# r2.dev off (the default). The dumps arrive gpg-encrypted to the owner's backup key (clusters/hetzner/data/db-backup.yaml);
+# the uploader's token is made by hand (docs/runbooks.md "Backups to R2").
+locals {
+  backup_lock_days = 7
+}
+
+resource "cloudflare_r2_bucket" "backups" {
+  account_id   = var.account_id
+  name         = "db-backups"
+  jurisdiction = "eu"
+}
+
+resource "cloudflare_r2_bucket_lock" "backups" {
+  account_id   = var.account_id
+  bucket_name  = cloudflare_r2_bucket.backups.name
+  jurisdiction = "eu"
+  rules = [{
+    id        = "lock-all"
+    enabled   = true
+    prefix    = ""
+    condition = { type = "Age", max_age_seconds = local.backup_lock_days * 86400 }
+  }]
+}
+
+# A day after the lock ends. Like ziftbook_uploads, this replaces R2's default rule, so the multipart one is kept.
+resource "cloudflare_r2_bucket_lifecycle" "backups" {
+  account_id   = var.account_id
+  bucket_name  = cloudflare_r2_bucket.backups.name
+  jurisdiction = "eu"
+  rules = [{
+    id         = "expire-after-8-days"
+    enabled    = true
+    conditions = { prefix = "" }
+    delete_objects_transition = {
+      condition = { type = "Age", max_age = (local.backup_lock_days + 1) * 86400 }
+    }
+    abort_multipart_uploads_transition = {
+      condition = { type = "Age", max_age = 86400 }
+    }
+  }]
+}
