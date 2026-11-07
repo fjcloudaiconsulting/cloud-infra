@@ -177,12 +177,13 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
-            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it.
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it. Its own
+            # Secret, so it is written with the public SOPS key alone (runbooks.md "Write or rotate a Kubernetes Secret").
             - name: SETUP_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: tbd
-                  key: setup-token
+                  name: tbd-setup-token
+                  key: token
                   optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
