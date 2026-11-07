@@ -59,6 +59,11 @@ class BackupUpload(unittest.TestCase):
 
     def test_r2_gets_only_ciphertext_and_a_plaintext_manifest(self):
         (self.scripts / "backups.pub.asc").write_bytes(self.pub)
+        # In the pod the set directories belong to the dump containers' user: the uploader cannot write there.
+        dirs = [d for d in (self.backup / SET).rglob("*") if d.is_dir()] + [self.backup / SET]
+        for d in dirs:
+            d.chmod(0o555)
+        self.addCleanup(lambda: [d.chmod(0o755) for d in dirs])
         r = self.run_upload(R2_ENDPOINT="https://r2.invalid")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.uploaded(), sorted([KEYS[0] + ".gpg", KEYS[1] + ".gpg", KEYS[2]]))
