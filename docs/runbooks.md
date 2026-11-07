@@ -146,11 +146,10 @@ repo. Deployments from `main` only can read them. Rotating them is part of [TBD 
 
 ## Backups to R2
 
-INFRA-203 moves the nightly backups from the AWS Object Lock bucket to the R2 bucket `db-backups`
-(`terraform/cloudflare/r2.tf`, EU jurisdiction, every object locked for 7 days and deleted after 8). During the move the
-`db-backup` Job uploads every set to both: container `upload` to S3, container `upload-r2` to R2. `upload-r2` encrypts
-each dump and grants file with gpg to the owner's backup key (`<key>.gpg`) and uploads the manifest in plaintext, so the
-probe can read it without the key. It refuses to upload at all without the public key.
+The nightly backups go to the R2 bucket `db-backups` (`terraform/cloudflare/r2.tf`, EU jurisdiction, every object locked
+for 7 days and deleted after 8). The `db-backup` Job's container `upload` encrypts each dump and grants file with gpg to
+the owner's backup key (`<key>.gpg`) and uploads the manifest in plaintext, so the probe can read it without the key. It
+refuses to upload at all without the public key.
 
 Setup, once:
 

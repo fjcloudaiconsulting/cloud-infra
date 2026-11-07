@@ -11,6 +11,7 @@ flowchart LR
 
   subgraph cloudflare["Cloudflare (terraform/cloudflare)"]
     cf["DNS and proxy<br/>thebetterdecision.com: Full strict"]
+    r2[("R2 backup bucket, 7-day lock<br/>dumps gpg-encrypted to the owner's key")]
   end
   worker["Workers ziftbook-landing, tbd-landing<br/>ziftbook.com apex and www, thebetterdecision.com apex<br/>(code in the app repos)"]
   cf --> worker
@@ -47,11 +48,11 @@ flowchart LR
   hbackup --> hmysql & hpostgres
 
   subgraph aws_backups["AWS (terraform/tbd-backups)"]
-    bucket[("S3 Object Lock bucket + KMS")]
+    bucket[("S3 Object Lock bucket + KMS<br/>retired: no new sets")]
   end
-  hbackup -->|"put-only key"| bucket
+  hbackup -->|"write token"| r2
   alloy -->|"metrics, traces, logs"| grafana(["Grafana Cloud"])
-  probe -->|"list-only role"| bucket
+  probe -->|"read token, main only"| r2
 
   subgraph control["Control plane"]
     gh["GitHub fjcloudaiconsulting/cloud-infra"]
@@ -204,19 +205,18 @@ reach every replica), and then gets one per environment, never shared.
 ## Backups and restore
 
 - Nightly at 02:00 UTC, CronJob `db-backup` dumps MySQL then Postgres and uploads each set (dump,
-  grants, manifest last) to the Object Lock bucket under `tbd-mysql/`, `tbd-staging-mysql/`, `ziftbook-postgres/` (Ziftbook staging) and `ziftbook-prod-postgres/`, all from the Hetzner cluster since INFRA-175.
-  It uses a put-only IAM user (`k3s-backup-uploader`), SSE-KMS and a SHA256 checksum. Objects are
-  locked for 7 days (GOVERNANCE).
-- Since INFRA-203 the same sets also go to the R2 bucket `db-backups` (EU, every object locked for 7 days), the dump and
-  grants gpg-encrypted to the owner's backup key before upload, the manifest in plaintext. S3 stays until the probe and
-  a restore are proven on R2; then the AWS chain is removed.
+  grants, manifest last) to the R2 bucket `db-backups` under `tbd-mysql/`, `tbd-staging-mysql/`, `ziftbook-postgres/`
+  (Ziftbook staging) and `ziftbook-prod-postgres/`, with a SHA256 checksum. The dump and grants are gpg-encrypted to
+  the owner's backup key before upload, the manifest stays plaintext for the probe. Every object is locked for 7 days
+  and deleted after 8.
+- The AWS Object Lock bucket gets no new sets; it and its stack are removed next.
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
 - Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
   (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
   when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
-Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
+Bucket, key and tokens: [runbooks.md](runbooks.md#backups-to-r2). The retired AWS chain: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
 
 ## Access

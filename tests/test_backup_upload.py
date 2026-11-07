@@ -79,10 +79,12 @@ class BackupUpload(unittest.TestCase):
         self.assertIn("no backup encryption key", r.stderr)
         self.assertEqual(self.uploaded(), [])
 
-    def test_s3_still_gets_the_plain_keys(self):
+    def test_without_the_endpoint_uploads_nothing(self):
+        (self.scripts / "backups.pub.asc").write_bytes(self.pub)
+        # The old S3 settings are no destination: without the R2 endpoint nothing leaves, plaintext least of all.
         r = self.run_upload(KMS_KEY_ARN="arn:aws:kms:eu-central-1:0:key/x")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.uploaded(), sorted(KEYS))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.uploaded(), [])
 
 
 if __name__ == "__main__":
