@@ -646,7 +646,7 @@ One-time owner steps, per environment, staging first:
    ```sh
    echo probe > /tmp/p; k=erasures/infra-267-probe
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: OK
-   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: 412 PreconditionFailed
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: refused (locked)
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p                       # worker key: refused (locked)
    aws s3api delete-object --endpoint-url $E --bucket $b --key $k                                  # worker key: refused (locked)
    aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # worker key: OK
@@ -654,6 +654,9 @@ One-time owner steps, per environment, staging first:
    aws s3api head-object --endpoint-url $E --bucket $b --key $k                                    # photo key: 403
    rm /tmp/p
    ```
+
+   R2 checks the lock before the condition, so the second write answers ObjectLockedByBucketPolicy, not 412; the worker
+   treats any refused write for a key that is there as written.
 
    The probe is not an erasure and stays until the lifecycle removes it (15 days): a staging reapply in that window
    refuses it (`ledger entry refused`) unless run with `--skip-key` for it.
