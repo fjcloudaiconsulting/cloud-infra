@@ -73,7 +73,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.305.0@sha256:6ba660057c0040a0eb560d3d97fec7ea1b672306c6d53ca6bf7f5e5cf6a403ec
+          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.307.0@sha256:4be4d6feae62750a8c6f815f8abaadb771f6e4e3aa57bfb21849d1ca5ee34d26
           env:
             - name: APP_ENV
               value: production
@@ -108,7 +108,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.305.0@sha256:4ddfc418b8387b04892a79180d45faa7a18246becafb6f0723967184047d0ec1
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.307.0@sha256:5bae5ee6d98c6825dad8fc439d59b9a28a8717c54e9011c0e51278670c8dea84
           args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8000
@@ -177,6 +177,14 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it. Its own
+            # Secret, so it is written with the public SOPS key alone (runbooks.md "Write or rotate a Kubernetes Secret").
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tbd-setup-token
+                  key: token
+                  optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

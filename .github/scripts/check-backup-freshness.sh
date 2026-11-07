@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Decide whether the off-host database backups are fresh, from S3 object
-# METADATA only (TBD-400, INFRA-30).
+# Decide whether the off-host database backups are fresh, from object METADATA only.
 #
 # Usage: check-backup-freshness.sh PREFIX=MIN_DUMP_BYTES...
-# Reads an `aws s3api list-objects-v2` JSON document on STDIN (one listing, or
+# Reads an S3-API `list-objects-v2` JSON document on STDIN (one listing, or
 # several merged into one Contents array) and writes a verdict to stdout.
 #
 #   exit 0  fresh   -- last night's backup is present, complete and plausible
@@ -108,7 +107,8 @@ def age_hours(obj):
     return (now - int(parsed.timestamp())) / 3600.0
 
 def base(o):
-    return str(o.get("Key", "")).rpartition("/")[2]
+    # The dump and grants arrive gpg-encrypted as <name>.gpg (db-backup.yaml): judged by the name inside.
+    return str(o.get("Key", "")).rpartition("/")[2].removesuffix(".gpg")
 
 def judge(contents, min_dump_bytes):
     manifests = [o for o in contents
@@ -143,13 +143,14 @@ def judge(contents, min_dump_bytes):
     # ⚠ MATCH THE STAMP, NOT JUST THE DAY DIRECTORY. A retry or a manual Job
     # writes a second set into the same day; matching by directory let the
     # earlier set's big dump vouch for a broken newer one (INFRA-72).
-    # Layout: <prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>.
+    # Layout: <prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>. The dump is .sql.gz, or .dump for a
+    # custom-format Postgres archive (INFRA-235); the grants are always .sql.gz.
     prefix = str(newest.get("Key", "")).rpartition("/")[0]
     stamp = base(newest).removeprefix("manifest_").removesuffix(".json")
     siblings = [o for o in contents if str(o.get("Key", "")).rpartition("/")[0] == prefix]
 
     grants = [o for o in siblings if base(o) == f"grants_{stamp}.sql.gz"]
-    dumps = [o for o in siblings if base(o).endswith(f"_{stamp}.sql.gz")
+    dumps = [o for o in siblings if base(o).endswith((f"_{stamp}.sql.gz", f"_{stamp}.dump"))
              and base(o) != f"grants_{stamp}.sql.gz"]
 
     if not dumps:

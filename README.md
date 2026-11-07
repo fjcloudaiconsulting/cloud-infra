@@ -1,6 +1,6 @@
 # cloud-infra
 
-Infrastructure of FJ Consulting apps (TBD, Ziftbook). It runs on Hetzner (INFRA-164); AWS keeps the backup chain and account-level resources. App repos keep app code,
+Infrastructure of FJ Consulting apps (TBD, Ziftbook). It runs on Hetzner (INFRA-164). App repos keep app code,
 Dockerfiles and their own CI; everything about where and how the apps run lives here.
 
 ## Architecture
@@ -8,7 +8,7 @@ Dockerfiles and their own CI; everything about where and how the apps run lives 
 The end-to-end map (diagram, ingress, data, backups, access, monitoring, cost):
 [`docs/architecture.md`](docs/architecture.md).
 
-Settings that live outside git (GitHub Apps, rulesets, Renovate, HCP Terraform, AWS, Cloudflare, out-of-band
+Settings that live outside git (GitHub Apps, rulesets, Renovate, HCP Terraform, Cloudflare, out-of-band
 secrets) and what breaks when one is wrong: [`docs/configuration-map.md`](docs/configuration-map.md).
 
 How to do the recurring changes (write or rotate a Secret, add a hostname or zone, add a dev environment's mail):
@@ -22,16 +22,12 @@ How a release reaches staging and then production, with diagrams: [`docs/release
 |---|---|---|
 | `terraform/<stack>/` | One Terraform root per HCP Terraform workspace (org `FlamaCorp`) | HCP Terraform VCS flow: plan on PR, apply on merge after approval in the TFC UI |
 | `clusters/<cluster>/` | Kubernetes manifests | Flux, reconciling `main` |
-| `aws/bootstrap/` | IAM trust and permission documents for the HCP Terraform roles (a workspace never manages its own role) | Root, once by CLI; see each stack's README |
 | `grafana/` | Grafana Cloud alert rules, contact point and dashboard (API payloads) | By hand through the Grafana API after merge, see [runbooks](docs/runbooks.md#memory-alerts) |
 
 ## Rules
 
 - Terraform runs through HCP Terraform only. CLI plan/apply is for debugging.
 - Terraform version is pinned to the one in `.github/workflows/ci.yml`; workspaces use the same.
-- Do not rename a workspace whose name is pinned in an AWS trust policy (e.g. `tbd-backups`). If a
-  rename is ever unavoidable: add a trust statement for the new name, apply, rename, then remove the
-  old statement. The same add-apply-remove order applies to any trust policy edit.
 - Secrets never land in plain text: Terraform variables are sensitive TFC variables, Kubernetes
   secrets are SOPS-encrypted.
 
@@ -68,9 +64,5 @@ Then
 `kubectl apply -f clusters/hetzner/flux-system/gotk-components.yaml`, wait for the controllers, and
 `kubectl apply -f clusters/hetzner/flux-system/gotk-sync.yaml`.
 Not `apply -k`: the encrypted Secrets in the folder fail kubectl validation; Flux applies them.
-
-## Backups on AWS
-
-AWS holds the backup chain (`terraform/tbd-backups`).
 
 Work is tracked in Jira project [INFRA](https://fjconsulting.atlassian.net/jira/software/c/projects/INFRA/).

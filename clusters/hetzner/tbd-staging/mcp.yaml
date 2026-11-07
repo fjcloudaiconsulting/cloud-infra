@@ -9,8 +9,9 @@
 # backend's (OAuth issuer and resource metadata URL). CLIENT_IP_HEADER as in backend.yaml: the per-IP ceiling on
 # failed auth then counts each visitor, not the Cloudflare address that connects (INF-02).
 # Memory: request 96Mi, limit 256Mi (the scheduler, a comparable non-HTTP import of the app, works at ~120Mi).
-# DB pool 1+1, the minimum (the rate limiter's own engine adds a fixed 2+5): MCP opens at most 9 connections as MySQL
-# user tbd_staging, whose MAX_USER_CONNECTIONS is 30; with the backend's 19 the worst case is 28 (INFRA-194,
+# DB pool 1+1, the minimum, and the rate limiter's own engine 1+1 (tbd default 2+5, from env since v0.306.0; the
+# session engine is never reached here, so STATE_DB_* is left unset): MCP opens at most 4 connections as MySQL user
+# tbd_staging, whose MAX_USER_CONNECTIONS is 30; with the backend's 19 the worst case is 23 (INFRA-194,
 # MySqlConnectionBudget in tests/test_tbd_manifests.py).
 # Image tag moves with backend.yaml (one Renovate group, renovate.json). tbd must publish and promote the mcp image on
 # every release: check-prod-tags.py bounds the tbd-prod tags by the LOWEST tbd-staging tag, so an mcp tag left behind
@@ -53,7 +54,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.306.0@sha256:c8605c35f4dc343fc2763ae9533e32538ba90d7e4e4782186d5b9d3dd34015ab
+          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.308.0@sha256:be4c7decaf8aec671a48c193917c7c1cc6d808b203fddb0a5cd6ea1c9b0ccdf7
           # The image CMD (tbd backend/Dockerfile.mcp) with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
           args: [uvicorn, "app.mcp_main:app", --host, 0.0.0.0, --port, "8001", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
@@ -85,6 +86,10 @@ spec:
             - name: DB_POOL_SIZE
               value: "1"
             - name: DB_MAX_OVERFLOW
+              value: "1"
+            - name: RATE_LIMIT_DB_POOL_SIZE
+              value: "1"
+            - name: RATE_LIMIT_DB_MAX_OVERFLOW
               value: "1"
             - name: DATABASE_URL
               valueFrom:

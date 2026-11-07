@@ -18,13 +18,14 @@ PREFIX = "tbd-mysql/2026/08/27"
 NOW = 1000000000
 
 
-def night(age_hours, *, prefix=PREFIX, manifest=True, grants=True, dump=True, dump_size=620000, db="tbd", stamp="x"):
+def night(age_hours, *, prefix=PREFIX, manifest=True, grants=True, dump=True, dump_size=620000, db="tbd", stamp="x",
+          ext="sql.gz"):
     ts = datetime.datetime.fromtimestamp(
         NOW - age_hours * 3600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     objs = []
     if dump:
-        objs.append({"Key": f"{prefix}/{db}_{stamp}.sql.gz", "Size": dump_size, "LastModified": ts})
+        objs.append({"Key": f"{prefix}/{db}_{stamp}.{ext}", "Size": dump_size, "LastModified": ts})
     if grants:
         objs.append({"Key": f"{prefix}/grants_{stamp}.sql.gz", "Size": 800, "LastModified": ts})
     if manifest:
@@ -61,6 +62,23 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("manifest", r.stdout)
 
+    def test_custom_format_dump_counts_as_the_dump(self):
+        # INFRA-235: Postgres dumps are <db>_<stamp>.dump; the probe must see them, and still apply the floor.
+        self.assertEqual(probe(listing(2, ext="dump")).returncode, 0)
+        self.assertEqual(probe(listing(2, ext="dump", dump_size=12)).returncode, 1)
+        self.assertEqual(probe(listing(2, ext="dump.tmp")).returncode, 1)
+
+    def test_encrypted_dump_and_grants_count(self):
+        # The dump and grants are uploaded gpg-encrypted (<name>.gpg); names and floors are judged as before.
+        objs = night(2, ext="sql.gz.gpg")
+        for o in objs:
+            if o["Key"].endswith("grants_x.sql.gz"):
+                o["Key"] += ".gpg"
+        self.assertEqual(probe(json.dumps({"Contents": objs})).returncode, 0)
+        self.assertEqual(probe(listing(2, ext="dump.gpg")).returncode, 0)
+        self.assertEqual(probe(listing(2, ext="sql.gz.gpg", dump_size=12)).returncode, 1)
+        self.assertEqual(probe(listing(2, ext="sql.gz.gpg.tmp")).returncode, 1)
+
     def test_stale_when_grants_are_missing(self):
         self.assertEqual(probe(listing(2, grants=False)).returncode, 1)
 
@@ -72,7 +90,7 @@ class Verdicts(unittest.TestCase):
 
     def test_stale_for_a_genuinely_empty_bucket(self):
         # list-objects-v2 omits Contents for an empty result.
-        r = probe('{"KeyCount": 0, "Name": "tbd-mysql-backups-884686184019"}')
+        r = probe('{"KeyCount": 0, "Name": "db-backups"}')
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("empty", r.stdout.lower())
 
@@ -266,6 +284,18 @@ class AlarmWiring(unittest.TestCase):
         self.assertTrue(step, "no 'Fail the job' step")
         cond = re.search(r"^\s+if: (.+)$", step.group(1), re.M)
         self.assertEqual(" ".join(cond.group(1).split()), "steps.check.outputs.verdict != 'fresh'")
+
+    def test_the_public_issue_never_carries_the_listing_error(self):
+        # The issue is public: an error can name the endpoint or account; it stays in the masked run log.
+        wf = WORKFLOW.read_text()
+        self.assertNotRegex(wf, r"detail=[^\n]*err\.txt")
+        self.assertIn("secrets.R2_BACKUP_ENDPOINT", wf)
+        self.assertIn('echo "::add-mask::$host"', wf)
+
+    def test_the_probe_job_reads_its_secrets_from_the_main_only_environment(self):
+        # Kills: repository-wide secrets, readable by a workflow pushed to any branch.
+        job = re.search(r"\n  probe:\n(.*?)(?=\n  \S|\Z)", WORKFLOW.read_text(), re.S)
+        self.assertRegex(job.group(1), r"\n    environment: backup-probe\n")
 
     def test_the_workflow_runs_this_repos_probe(self):
         # A wrong path exits 127 and reads as could-not-run every night.

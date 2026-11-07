@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.306.0@sha256:ae705ed265e0eb47631972d05ce390648a54f60fc4cb57501562b17bd2855689
+          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.308.0@sha256:ae91557d052c8df43401c826e3c35fa9bd30f2b28ced95e751f7e38dc3a19fa3
           env:
             - name: APP_ENV
               value: production
@@ -81,7 +81,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.306.0@sha256:eaee0e5d626c2f905751697acb2d8bc83433f4e76c5b8733e69f92ae433390bb
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.308.0@sha256:d63f366c99ab1cd2eabad8fe06dd784c091b94d364f8bf52170dee0e2d75b246
           # The image CMD with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
           args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
@@ -152,12 +152,21 @@ spec:
             # pen test).
             - name: MCP_OAUTH_ENABLED
               value: "true"
-            # DB pool 2+3 (tbd default 5+10): with the two hardcoded 2+5 engines (rate limits, sessions) the pod holds at
-            # most 19, and with mcp's 9 staging stays under its MAX_USER_CONNECTIONS 30 (runbooks.md, INFRA-194).
+            # DB pool at the tbd default 5+10; the rate-limit and session engines (tbd default 2+5 each, from env since
+            # v0.306.0) at 1+1: the pod holds at most 19, and with mcp's 4 staging stays under its MAX_USER_CONNECTIONS
+            # 30 (runbooks.md, INFRA-194).
             - name: DB_POOL_SIZE
-              value: "2"
+              value: "5"
             - name: DB_MAX_OVERFLOW
-              value: "3"
+              value: "10"
+            - name: RATE_LIMIT_DB_POOL_SIZE
+              value: "1"
+            - name: RATE_LIMIT_DB_MAX_OVERFLOW
+              value: "1"
+            - name: STATE_DB_POOL_SIZE
+              value: "1"
+            - name: STATE_DB_MAX_OVERFLOW
+              value: "1"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -168,6 +177,14 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it. Its own
+            # Secret, so it is written with the public SOPS key alone (runbooks.md "Write or rotate a Kubernetes Secret").
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tbd-setup-token
+                  key: token
+                  optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:

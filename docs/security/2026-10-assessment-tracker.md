@@ -5,8 +5,7 @@ the pull request that addresses it and what is left to do. Agents with Jira acce
 the Jira issues. Every agent working on this effort keeps it current, so the next one starts from the real state and
 nobody needs a live conversation to catch up.
 
-Last updated: 2026-10-25 by the cloud-infra security session, after recording every finding in Jira (none merged
-yet).
+Last updated: 2026-11-07 by the cloud-infra session, after the 2026-11-07 merge wave.
 
 ## Disclosure note
 
@@ -21,11 +20,13 @@ cross-references them.
 
 ## Current state
 
-Snapshot of 2026-11-03. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
+Snapshot of 2026-11-07. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
 column below is the assessment's 2026-10-25 verdict and is not updated here.
 
-- **Merged:** every fix PR in the table below (#286 to #303), and the follow-ups #304 to #311 and #319. The Merged and
-  Commit columns name the squash commits.
+- **Merged:** every fix PR in the table below (#286 to #303, #341 to #348), and the follow-ups #304 to #311 and #319.
+  The Merged and Commit columns name the squash commits.
+- **Confirmed and closed in Jira on 2026-11-07:** the post-merge checks of K8S-02, K8S-04, K8S-05, K8S-06, K8S-07,
+  K8S-08, ANS-07, EDGE-04, EDGE-05 and EDGE-07, among others.
 - **Open:** #312 (GHA-09: Renovate reads GHCR as a dedicated machine user), waiting on the owner's account steps in its
   description (INFRA-253).
 - **Waiting on the owner:** the post-merge checks in each PR description (most INFRA issues stay In Progress until
@@ -85,6 +86,10 @@ this file only when the owner asks, for example after a merge wave.
 | #299 | `security/terraform-iam-fences` | TF-01, TF-02, TF-05, TF-08 | CI at once; the `tbd-backups` plan-role change applies only after the owner approves | Merged 2026-11-01 (1479d11) |
 | #300 | `security/ci-fences` | GHA-03, K8S-03, GHA-07, GHA-09, GHA-08 | CI only | Merged 2026-11-01 (edc908c) |
 | #303 | `security/postgres-isolation` | DATA-02, DATA-03 | Restarts Postgres (window, with #262 and #247) and re-runs both bootstrap Jobs | Merged 2026-11-03 (b1473e3) |
+| #341 | `fix/infra-223-admin-rate-limit` | EDGE-05 | Edge rule change after the owner approves the apply | Merged 2026-11-07 (455954b) |
+| #342 | `fix/infra-228-apex-dmarc` | EDGE-03 (non-sending domains) | DNS records after the owner approves the apply | Merged 2026-11-07 (4f8af87) |
+| #344 | `fix/infra-231-caa-dnssec` | EDGE-08 | DNS signing and CA records after the owner approves the apply | Merged 2026-11-07 (eb22c0c) |
+| #348 | `fix/infra-235-restore-safety` | DATA-01 | The next nightly backup writes the new Postgres format | Merged 2026-11-07 (23d1da5) |
 
 ## Findings
 
@@ -132,14 +137,14 @@ elsewhere), **Accepted** (no change).
 | GHA-09 | CI input pinning and release age | Partial | #300, #307, #312 | 2026-11-01, 2026-11-01 | edc908c, 6c56b17 | Release age for images and actions (with #273) | INFRA-250 |
 | EDGE-01 | Access control for the Ziftbook staging host | Needs owner | | | | Decide the Access application and its bypasses | INFRA-224 |
 | EDGE-02 | Edge request body limits | Fixed | #290 | 2026-11-01 | 7ff2095 | Approve the `cloudflare` apply; post-apply checks in #290 | INFRA-234 |
-| EDGE-03 | Email sender authentication for the product domains | Needs owner | | | | Decide the mail-policy ramp | INFRA-228 |
+| EDGE-03 | Email sender authentication for the product domains | Needs owner | #342 | 2026-11-07 | 4f8af87 | One production mail check per app; decide the ramp for the sending domains | INFRA-228 |
 | EDGE-04 | Telemetry receiver isolation and limits | Partial | #296 | 2026-11-01 | 1f93fd5 | Pin the infrastructure alert rules to pipeline labels (Grafana) | INFRA-237 |
-| EDGE-05 | Edge rate-limit path coverage | Fixed | #290, #283 | 2026-11-01 | 7ff2095 | | INFRA-223 |
+| EDGE-05 | Edge rate-limit path coverage | Fixed | #290, #283, #341 | 2026-11-01, 2026-11-07 | 7ff2095, 455954b | | INFRA-223 |
 | EDGE-06 | TBD staging Access bypass | Fixed | #290 | 2026-11-01 | 7ff2095 | Apply the Access change in two steps | INFRA-238 |
 | EDGE-07 | Tunnel connector egress | Fixed | #287 | 2026-11-01 | 13edd6d | | INFRA-239 |
-| EDGE-08 | DNS zone hygiene | Needs owner | | | | | INFRA-231 |
+| EDGE-08 | DNS zone hygiene | Needs owner | #344 | 2026-11-07 | eb22c0c | Confirm the parent zone publishes the signing record, then validate | INFRA-231 |
 | EDGE-09 | Data processor inventory | Accepted | | | | Keep the privacy notices current | INFRA-104 |
-| DATA-01 | Restore procedure | Partial | #297 | 2026-11-01 | a4a922e | Decide the backup format change after #272 | INFRA-235 |
+| DATA-01 | Restore procedure | Partial | #297, #348 | 2026-11-01, 2026-11-07 | a4a922e, 23d1da5 | First night in the new format, a restore drill, then remove the old restore path | INFRA-235 |
 | DATA-02 | Postgres role isolation between environments | Fixed | #303 | 2026-11-03 | b1473e3 | | INFRA-211, INFRA-206 |
 | DATA-03 | Postgres connection limits per environment | Fixed | #303 | 2026-11-03 | b1473e3 | | INFRA-212 |
 | DATA-04 | Backup provenance and an independent copy | Needs owner | | | | Decide the second copy and retention | INFRA-208 |

@@ -8,9 +8,9 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 Database restores are
 [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
 set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
-runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
-against commands a backup should never carry; custom-format dumps restored by a non-superuser role
-are planned to replace the scan (#272).
+runbook replays MySQL with `--binary-mode` and restores the custom-format Postgres dumps with
+`pg_restore`, logged in as the owner role, never a superuser (INFRA-235); the plain Postgres dumps
+written before that are scanned before `psql` until they expire.
 
 ## Restore drill
 
@@ -143,6 +143,58 @@ outage means no smoke; the [synthetic uptime](#synthetic-uptime) check and the d
 
 The smoke account's credentials are the `tbd-prod` environment secrets `SMOKE_USERNAME` and `SMOKE_PASSWORD` in this
 repo. Deployments from `main` only can read them. Rotating them is part of [TBD smoke account](#tbd-smoke-account).
+
+## Backups to R2
+
+The nightly backups go to the R2 bucket `db-backups` (`terraform/cloudflare/r2.tf`, EU jurisdiction, every object locked
+for 7 days and deleted after 8). The `db-backup` Job's container `upload` encrypts each dump and grants file with gpg to
+the owner's backup key (`<key>.gpg`) and uploads the manifest in plaintext, so the probe can read it without the key. It
+refuses to upload at all without the public key.
+
+Setup, once:
+
+1. **Backup key**, on the owner's machine (set a passphrase at the prompt):
+
+   ```sh
+   gpg --quick-gen-key 'FJC database backups' future-default default never
+   FPR=$(gpg --list-keys --with-colons 'FJC database backups' | awk -F: '/^fpr/{print $10; exit}')
+   gpg --armor --export "$FPR" > backups.pub.asc          # public: goes into db-backup.yaml as backups.pub.asc
+   gpg --armor --export-secret-keys "$FPR" > backups.sec.asc
+   ```
+
+   Store `backups.sec.asc` and its passphrase in the password manager and one offline copy, then delete the file.
+   Without it no backup can be read.
+2. **Token**, after the `cloudflare` apply creates the bucket: R2 > Manage API tokens > Create, name
+   `db-backups-uploader`, Object Read & Write, bucket `db-backups` only, no expiry.
+3. **Secret**, a new file (public SOPS key only):
+
+   ```sh
+   F=clusters/hetzner/data/backup-r2.secret.yaml
+   read -r ID; read -rs SK; kubectl create secret generic backup-r2 -n data --from-literal=AWS_ACCESS_KEY_ID="$ID" \
+     --from-literal=AWS_SECRET_ACCESS_KEY="$SK" --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F"; unset ID SK
+   grep -cE '^ +AWS_[A-Z_]+: ENC\[' "$F"   # must print 2 (a plain ': ENC' count also matches sops' own mac line)
+   ```
+
+4. **Probe token**: R2 > Manage API tokens > Create, name `db-backups-probe`, Object Read only, bucket `db-backups`
+   only, no expiry. Store it and the endpoint as secrets of the environment `backup-probe`, which only `main` may deploy
+   to (each `gh secret set` prompts for the value):
+
+   ```sh
+   R=repos/fjcloudaiconsulting/cloud-infra/environments/backup-probe
+   gh api -X PUT $R -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST $R/deployment-branch-policies -f name=main -f type=branch
+   for s in R2_PROBE_ACCESS_KEY_ID R2_PROBE_SECRET_ACCESS_KEY R2_BACKUP_ENDPOINT; do
+     gh secret set $s --env backup-probe -R fjcloudaiconsulting/cloud-infra; done   # endpoint: https://<account id>.eu.r2.cloudflarestorage.com
+   ```
+
+   The freshness probe (04:17 UTC) lists the bucket with it and opens `[backup-stale]` when a set is missing, old or
+   too small. A missing secret reads as "could not run", which also opens the issue.
+
+Check after a night (`E=https://<account id>.eu.r2.cloudflarestorage.com`, a read token in the AWS env vars):
+`aws s3 ls --endpoint-url "$E" s3://db-backups/ --recursive | grep "$(date -u +%Y/%m/%d)"` lists, per set, a
+`.sql.gz.gpg` (or `.dump.gpg`), a `grants_*.gpg` and a `manifest_*.json`. To read one:
+`gpg --decrypt <file>.gpg > <file>`, then check its sha256 against the manifest.
 
 ## Write or rotate a Kubernetes Secret
 
@@ -377,9 +429,9 @@ In a database grant `_` is still a (deprecated) wildcard, so `tbd_staging` also 
 escaping backslash, and the replayed grant would name a different database. The password reaches
 `mysql` on stdin, so it is never on a command line in the pod (locally it is briefly in `sed`'s). The cap (30) keeps staging from
 using up `max_connections` (120) that production needs: production's pools hold up to 87 (3 pods × 29), plus 1 for the
-dump job. Staging's backend (pool 2 + 3 from env, plus the two engines tbd hardcodes at 2 + 5 for rate limits and
-sessions: 19) and mcp (9, `tbd-staging/mcp.yaml`) add up to 28 at full pools, so under load staging stays under its
-cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
+dump job. Staging's backend (pool 5 + 10, plus the rate-limit and session engines at 1 + 1 each, all from env: 19)
+and mcp (pool 1 + 1 and rate-limit engine 1 + 1: 4, `tbd-staging/mcp.yaml`) add up to 23 at full pools, so under load
+staging stays under its cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
 pools, cap or `max_connections` drift apart). The cap is also in `init.sql` in `data/mysql.yaml`, which MySQL runs at every start, so a cap
 changed there in git applies at the next MySQL restart; keep it equal to the one above (the test checks). To apply it
 sooner without a restart, run `ALTER USER 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS 30;` as root. Nothing here touches `tbd` or its users, and the MySQL pod
@@ -408,6 +460,7 @@ Traffic path: Cloudflare (proxied), then the Cloudflare Tunnel `hetzner-k3s` (`c
 1. **DNS:** add a proxied CNAME to `<tunnel id>.cfargotunnel.com` in [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf) (the TBD `app` and `dev` records are entries of one map there; Ziftbook's are separate resources, copy the one for your zone).
 2. **Route:** the hostname -> Service rule lives in the tunnel config in [`terraform/cloudflare/tunnel.tf`](../terraform/cloudflare/tunnel.tf); `cloudflared` only runs it.
 3. **Also:** a staging `dev.*` host needs a Cloudflare Access app ([`terraform/cloudflare/access.tf`](../terraform/cloudflare/access.tf), INFRA-117) or it is public; a new zone must join `local.app_zones` in `main.tf` (zone settings and rate limit) and get a policy in [`terraform/cloudflare-tokens/main.tf`](../terraform/cloudflare-tokens/main.tf) first, or the `cloudflare` apply fails; the app namespace's NetworkPolicy must admit the `cloudflared` namespace (model: `clusters/hetzner/tbd-prod/networkpolicy.yaml`); and a route to a Service that is new to the tunnel needs an egress rule for its pods and port in the `cloudflared` NetworkPolicy ([`clusters/hetzner/cloudflared/cloudflared.yaml`](../clusters/hetzner/cloudflared/cloudflared.yaml)), in the same PR (`tests/test_network_policies.py` fails until it has one). Approve the `cloudflare` apply only once Flux has applied that policy (`kubectl -n cloudflared get networkpolicy cloudflared -o yaml`), or the route answers 502 meanwhile.
+   A proxied hostname uses Cloudflare's edge certificate, which the zone's CAA already allows. A DNS-only hostname whose service brings its own certificate needs that CA in `caa_issuers` in [`terraform/cloudflare/dns_security.tf`](../terraform/cloudflare/dns_security.tf) (INFRA-231), unless its CNAME target publishes its own CAA. A new zone in `app_zones` also gets DNSSEC and CAA there and needs its name in `caa_zone_names`, or the plan fails.
 4. **Check** after the `cloudflare` workspace apply: `curl -sI https://<host> | head -1`.
 
 ## Mail (Mailgun)
@@ -535,6 +588,83 @@ One-time owner steps, in this order:
 Rotate: create a new token, redo step 3, merge, `kubectl -n ziftbook-<env> rollout restart deploy/backend
 deploy/worker`, then delete the old token. Until the Secret exists, uploads answer 503 and nothing else
 breaks.
+
+## Ziftbook erasure ledger
+
+Ziftbook records every erasure (ZIF-58) outside its database, so a restored backup can be erased again with
+`python -m app.ledger reapply`. One private bucket per environment, `ziftbook-ledger-staging` and
+`ziftbook-ledger-prod`, EU jurisdiction, in `terraform/cloudflare/r2.tf` (INFRA-267): no CORS, no custom domain, r2.dev
+off. Objects under `erasures/` are locked for 14 days (no overwrite, no delete) and deleted after 15. The lock must be
+at least the backups' retention (deleted after 8 days, the backup bucket in the same file):
+`tests/test_erasure_ledger.py` fails otherwise. If backup retention grows, raise the lock first.
+
+| Pod | Ledger env | R2 key |
+|---|---|---|
+| worker | `ZIF_S3_ENDPOINT`, `ZIF_ERASURE_LEDGER_BUCKET`, `ZIF_ERASURE_LEDGER_ACCESS_KEY_ID`, `ZIF_ERASURE_LEDGER_SECRET_ACCESS_KEY` | `ziftbook-<env>-ledger-worker`, Object Read & Write (it reads before each write, so a write-only key fails every job) |
+| reapply (short-lived, migrations image, only after a restore) | `ZIF_MIGRATE_DATABASE_URL`, `ZIF_APP_URL`, the four above | `ziftbook-<env>-ledger-operator`, Object Read only |
+| API | `ZIF_ERASURE_LEDGER_BUCKET` only (without it, erasure answers 503) | none, ever |
+
+The photo key (`ziftbook-storage`) is never scoped to a ledger bucket, and neither ledger key is mounted on the API.
+The endpoint is the photos' `.eu` one. Without the worker's settings, its `erasure.ledger` jobs give up and it logs
+`erasure ledger unset` as an ERROR; erasures still commit, and `python -m app.ledger backfill` queues the missing
+entries once it is fixed. Alert `ZiftbookErasureLedger` ([Ziftbook app alerts](#ziftbook-app-alerts)) fires on that
+and on the other ledger ERROR lines.
+
+One-time owner steps, per environment, staging first:
+
+1. Approve the `cloudflare` apply that creates the buckets, the lock and the lifecycle (the workspace token already
+   has "Workers R2 Storage Write").
+2. Approve the `cloudflare-tokens` apply that makes the worker tokens `ziftbook-<env>-ledger-worker` (both
+   environments at once): Object Read & Write on that environment's ledger bucket only.
+3. Write the worker's keys straight from the Terraform output into Secret `ziftbook-ledger-worker` (keys
+   `access-key-id`, `secret-access-key`), on a laptop logged in to HCP Terraform (`terraform login`), in bash from the
+   repo root. Nothing is printed but the count, `2`; anything else, or nothing, means the file was not written:
+
+   ```sh
+   env=staging   # then prod
+   F=clusters/hetzner/ziftbook-$env/ziftbook-ledger-worker.secret.yaml
+   terraform -chdir=terraform/cloudflare-tokens init -input=false >/dev/null
+   K=$(terraform -chdir=terraform/cloudflare-tokens output -json ziftbook_ledger_worker_keys)
+   kubectl create secret generic ziftbook-ledger-worker -n ziftbook-$env \
+     --from-file=access-key-id=<(jq -j --arg e $env '.[$e].access_key_id' <<<"$K") \
+     --from-file=secret-access-key=<(jq -j --arg e $env '.[$e].secret_access_key' <<<"$K") \
+     --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+     && mv "$F.tmp" "$F" && grep -cE '^ +(access-key-id|secret-access-key): ENC' "$F"
+   rm -f "$F.tmp"; unset K
+   ```
+
+   The manifest PR wires it in.
+4. The operator key is made only when a reapply is needed, and deleted after it: R2 > Manage API tokens > Create
+   Account API token, `ziftbook-<env>-ledger-operator`, **Object Read**, "Apply to specific buckets only" with
+   `ziftbook-ledger-<env>` alone. Write it into Secret `ziftbook-ledger-operator` with the command of
+   [R2 for Ziftbook photos](#r2-for-ziftbook-photos) step 3, `ziftbook-storage` replaced by that name in both places.
+5. Staging only, before its manifests merge: check the bucket with the AWS CLI. `E=https://<account id>.eu.r2.cloudflarestorage.com`,
+   `b=ziftbook-ledger-staging`, `AWS_REGION=auto`, and the key named in each comment exported as
+   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`:
+
+   ```sh
+   echo probe > /tmp/p; k=erasures/infra-267-probe
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: OK
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: 412 PreconditionFailed
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p                       # worker key: refused (locked)
+   aws s3api delete-object --endpoint-url $E --bucket $b --key $k                                  # worker key: refused (locked)
+   aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # worker key: OK
+   aws s3api get-object --endpoint-url $E --bucket ziftbook-ledger-prod --key $k /dev/null         # worker key: 403
+   aws s3api head-object --endpoint-url $E --bucket $b --key $k                                    # photo key: 403
+   rm /tmp/p
+   ```
+
+   The probe is not an erasure and stays until the lifecycle removes it (15 days): a staging reapply in that window
+   refuses it (`ledger entry refused`) unless run with `--skip-key` for it.
+
+The first time an operator key exists, check it the same way: `get-object` OK, `put-object` 403.
+
+Rotate the worker key: HCP Terraform > `cloudflare-tokens` > New run > Plan and apply, "Replace resources" set to
+`cloudflare_account_token.ziftbook_ledger_worker["<env>"]`, then step 3, merge, and
+`kubectl -n ziftbook-<env> rollout restart deploy/worker`. The old key stops working when the apply ends, so ledger jobs
+fail until the restart; `python -m app.ledger backfill` queues what they missed. An operator key is not rotated: it is
+deleted after its reapply.
 
 ## Ziftbook Turnstile (public bookings)
 
@@ -979,7 +1109,7 @@ The test alert's series (the 404 URL) then stops and resolves by itself. Finally
 
 Rule group `ziftbook-app` (folder Platform, ZIF-89) watches Ziftbook production through the metrics the app already
 exports over OTLP. Grafana Cloud promotes `service.name` and `deployment.environment.name` to labels, so the queries
-select `deployment_environment_name="production"`; staging raises nothing. A pod's counters start a new series
+select `deployment_environment_name="production"`; staging raises nothing, except `ZiftbookFrontendDown`. A pod's counters start a new series
 (`service.instance.id` is per process), so the two counter rules take "now minus the last value seen up to a day before the
 window, or 0 if the series is newer" instead of `increase()`, which never counts a series' first jump; looking back a
 day, not one sample, keeps an export gap from counting a pod's lifetime total as new. A dead or stuck worker is first
@@ -992,6 +1122,8 @@ also fires about 2 min later, because its no-data case is what catches a worker 
 | `ZiftbookJobsGaveUp` | any job given up after its 5th attempt in the last hour, per kind (`ziftbook_job_runs_total{job_outcome="gave_up"}`). Never retried by the worker | warning, daily |
 | `ZiftbookRefundFailed` | a refund did not reach the client in the last hour, per `payment_kind` (`ziftbook_payment_outcomes_total{payment_outcome="refund_failed"}`): Stripe refused the refund (a disputed charge, a closed account) or an issued refund failed later. Counted once; the booking is flagged for the business | warning, daily |
 | `ZiftbookJobQueueStuck` | the oldest due job of a kind waited over 10 min for 5 min (`ziftbook_job_queue_oldest_age_seconds`; the worker polls every 30 s), or no queue metric at all: the worker reports every kind every minute, 0 when empty | critical, every 4 h |
+| `ZiftbookErasureLedger` | an ERROR line of the [erasure ledger](#ziftbook-erasure-ledger) in the last hour, per `msg`, from the Loki data source (ZIF-58): `job gave up` with `job_kind` `erasure.ledger` (an erasure is missing from the ledger: fix the worker's ledger settings, then `python -m app.ledger backfill`), the worker's `erasure ledger unset` (same fix), `refund held after a reapply` (a refund waits for a person after a restore; the line carries `booking_id`), `ledger entry refused` (a reapply stopped; inspect the entry its `key` names), `contact hold purged late` | critical, every 4 h |
+| `ZiftbookFrontendDown` | no `frontend` container running in `ziftbook-prod` or `ziftbook-staging` for 10 min, per namespace (`absent_over_time` on cAdvisor's `container_memory_working_set_bytes` over 5 min, then 5 min pending). The frontend has no OTel of its own; the same check as `TbdProcessDown`'s frontend. A frontend crash-looping with the 5 min back-off can flap it | warning, daily |
 
 When one fires:
 
@@ -1014,28 +1146,51 @@ returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-p
 misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
+`ZiftbookErasureLedger` queries the stack's Loki data source by uid `grafanacloud-logs`: check it exists with
+`api GET /api/datasources/uid/grafanacloud-logs /dev/null`, and that its query, pasted into Explore, runs (no lines is
+the normal result).
+For `ZiftbookFrontendDown` (and the TBD frontends), `count by (namespace) (container_memory_working_set_bytes{job="cadvisor", container="frontend"})`
+returns the four app namespaces.
 
 ### TBD app alerts
 
-Rule group `tbd-app` (folder Platform) watches the TBD backend's CSP report sink in production
+Rule group `tbd-app` (folder Platform) watches that every TBD process runs and the TBD backend's CSP report sink in production
 (`tbd_security_csp_reports_total`, service `tbd-api`; the counter exists once prod runs a tbd release that includes it, expected 0.303.1). A series appears only on the
 first report with that `outcome`, so the rules count new reports the same way as the Ziftbook counter rules (now
 minus the last value seen up to a day before the window, or 0 if the series is newer) and treat no data as OK.
+
+Liveness (INFRA-200): every backend-image process exports `tbd_process_up` = 1 every 60 s, traffic or not (TBD-649,
+tbd 0.302.0 on), labelled `service_name` and `deployment_environment_name`. The frontend has no OTel, so its check is
+cAdvisor's `container_memory_working_set_bytes{container="frontend"}` in the namespace, relabelled `tbd-frontend`. Each
+expected process is named in the rule, so `absent_over_time(...[5m])` returns one series per missing one: 5 min with no
+sample, then 5 min pending, about 10 min after the last export. A rollout (the scheduler and staging are `Recreate`)
+is back within 2 min. The migrate Job is short-lived and has no rule. When Alloy or a node's cAdvisor is down these can
+fire alongside `NodeMetricsAbsent`.
 
 | Alert | Fires when | Severity, repeat |
 |---|---|---|
 | `TbdCspReportsDropped` | any CSP report dropped in the last hour because the global budget was spent (`outcome="global_budget"`): later reports in that window are not stored | warning, daily |
 | `TbdCspReportSinkFailing` | any CSP report not stored in the last hour because the counter store or the write failed (`outcome` `counter_unavailable` or `write_failed`); the sink fails open | warning, daily |
+| `TbdProcessDown` | a production process reported nothing for 10 min: `tbd-api`, `tbd-scheduler` (`tbd_process_up`) or `tbd-frontend` (cAdvisor, namespace `tbd-prod`). The scheduler has no other alarm; a dead `tbd-api` also trips `ProdEndpointDown` | critical, every 4 h |
+| `TbdStagingProcessDown` | the same on staging: `tbd-api`, `tbd-mcp` and `tbd-frontend` (namespace `tbd-staging`). Staging has no scheduler pod | warning, daily |
 
 When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
 of dropped reports is either a real CSP regression (a release that blocks its own assets) or someone flooding the
 report endpoint; the app decides which, not infra.
+
+When a process alert fires: `kubectl -n tbd-prod get pods` (or `tbd-staging`) for a pod that is not Running or keeps
+restarting, then its `kubectl logs --previous`. All pods Running: the process runs but its export fails, so check the
+`otel` ConfigMap and [Metrics to Grafana Cloud](#metrics-to-grafana-cloud-alloy).
 
 Apply as under [Memory alerts](#memory-alerts):
 `api PUT /api/v1/provisioning/folder/platform/rule-groups/tbd-app grafana/tbd-app.rules.json`. The metric name is
 not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
 `count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
 returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
+Before applying the process rules, check that
+`count by (service_name, deployment_environment_name) (tbd_process_up)` returns the four pairs `tbd-api` and
+`tbd-scheduler` in production, `tbd-api` and `tbd-mcp` in staging: a different name or label fires the rule for that
+process at once (it fails loud, not silent).
 
 ### Find a request's logs
 

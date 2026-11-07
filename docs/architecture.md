@@ -11,6 +11,7 @@ flowchart LR
 
   subgraph cloudflare["Cloudflare (terraform/cloudflare)"]
     cf["DNS and proxy<br/>thebetterdecision.com: Full strict"]
+    r2[("R2 backup bucket, 7-day lock<br/>dumps gpg-encrypted to the owner's key")]
   end
   worker["Workers ziftbook-landing, tbd-landing<br/>ziftbook.com apex and www, thebetterdecision.com apex<br/>(code in the app repos)"]
   cf --> worker
@@ -46,16 +47,13 @@ flowchart LR
   zifapp & zifprod --> hpostgres
   hbackup --> hmysql & hpostgres
 
-  subgraph aws_backups["AWS (terraform/tbd-backups)"]
-    bucket[("S3 Object Lock bucket + KMS")]
-  end
-  hbackup -->|"put-only key"| bucket
+  hbackup -->|"write token"| r2
   alloy -->|"metrics, traces, logs"| grafana(["Grafana Cloud"])
-  probe -->|"list-only role"| bucket
+  probe -->|"read token, main only"| r2
 
   subgraph control["Control plane"]
     gh["GitHub fjcloudaiconsulting/cloud-infra"]
-    tfc["HCP Terraform (org FlamaCorp)<br/>AWS via OIDC roles, Cloudflare via API token"]
+    tfc["HCP Terraform (org FlamaCorp)<br/>Cloudflare via API token"]
     ghcr["GHCR images"]
     probe["Freshness probe (GitHub Actions)"]
     cftok["Cloudflare API tokens (terraform/cloudflare-tokens)"]
@@ -63,7 +61,7 @@ flowchart LR
   subgraph netbird_cloud["NetBird (terraform/netbird)"]
     nbpolicy["owner devices to the cluster peer, TCP 6443"]
   end
-  gh --> tfc --> aws_backups & cloudflare & cftok & netbird_cloud
+  gh --> tfc --> cloudflare & cftok & netbird_cloud
   gh -->|"main"| flux
   ghcr -->|"ghcr-pull secret"| hk3s
   owner([Owner Mac]) -->|"NetBird, TCP 6443 only"| netbird
@@ -204,16 +202,17 @@ reach every replica), and then gets one per environment, never shared.
 ## Backups and restore
 
 - Nightly at 02:00 UTC, CronJob `db-backup` dumps MySQL then Postgres and uploads each set (dump,
-  grants, manifest last) to the Object Lock bucket under `tbd-mysql/`, `tbd-staging-mysql/`, `ziftbook-postgres/` (Ziftbook staging) and `ziftbook-prod-postgres/`, all from the Hetzner cluster since INFRA-175.
-  It uses a put-only IAM user (`k3s-backup-uploader`), SSE-KMS and a SHA256 checksum. Objects are
-  locked for 7 days (GOVERNANCE).
+  grants, manifest last) to the R2 bucket `db-backups` under `tbd-mysql/`, `tbd-staging-mysql/`, `ziftbook-postgres/`
+  (Ziftbook staging) and `ziftbook-prod-postgres/`, with a SHA256 checksum. The dump and grants are gpg-encrypted to
+  the owner's backup key before upload, the manifest stays plaintext for the probe. Every object is locked for 7 days
+  and deleted after 8.
 - A GitHub Actions probe at 04:17 UTC checks each backup prefix, each with its own size floor, and
   opens a `[backup-stale]` issue when one is stale.
 - Restore: [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). The last successful drill
   (steps 1-5) is recorded in [`restore-drill.md`](restore-drill.md); a weekly probe opens a `[restore-drill]` issue
   when it is older than 100 days or missing ([runbooks.md](runbooks.md#restore-drill)).
 
-Bucket, KMS, IAM boundaries and owner steps: [`terraform/tbd-backups/README.md`](../terraform/tbd-backups/README.md).
+Bucket, key and tokens: [runbooks.md](runbooks.md#backups-to-r2).
 Job: [`clusters/hetzner/data/db-backup.yaml`](../clusters/hetzner/data/db-backup.yaml).
 
 ## Access
@@ -327,12 +326,11 @@ sensitive HCP Terraform variables. Procedures never display secret values: see
 ## Infrastructure as code
 
 - **Terraform:** every `terraform/<stack>/` is an HCP Terraform workspace with VCS flow: plan on
-  the PR, apply on merge after approval in the TFC UI. The stacks are `hetzner` (servers), `cloudflare` (DNS, zone settings), `tbd-backups` (backup
-  chain) and `netbird`, among others. `tbd-backups` assumes OIDC roles whose policies root mints once from [`aws/bootstrap/`](../aws/bootstrap/), so that
-  workspace never manages its own roles. `cloudflare` uses an API token.
+  the PR, apply on merge after approval in the TFC UI. The stacks are `hetzner` (servers), `cloudflare` (DNS, zone settings, the backup bucket),
+  `cloudflare-tokens` and `netbird`. `cloudflare` uses an API token.
 - **Kubernetes:** Flux (source and kustomize controllers) applies `clusters/hetzner` from `main`.
 - **CI** ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)): `terraform fmt` and validate,
-  tflint, the tbd-backups fences check, kubeconform, the SOPS check and the Python tests.
+  tflint, kubeconform, the SOPS check and the Python tests.
 
 ## Monitoring and alerts
 
@@ -345,4 +343,4 @@ Node memory, node disk, log-retention, synthetic uptime and Ziftbook app alerts 
 
 ## Cost
 
-AWS holds the backup chain (`terraform/tbd-backups`). The servers are billed by Hetzner.
+The servers are billed by Hetzner.
