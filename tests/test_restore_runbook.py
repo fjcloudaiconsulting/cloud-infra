@@ -112,6 +112,11 @@ class TestRestoreRunbook(unittest.TestCase):
 
     # ---- DATA-04: the runbook states the checksum proves transport, not authorship ---------------
 
+    def test_real_restore_revokes_every_tbd_api_token(self):
+        # fence: a token revoked after the dump night must not come back live after a real restore.
+        self.assertIn("echo 'UPDATE api_tokens SET revoked_at = UTC_TIMESTAMP() WHERE revoked_at IS NULL;' | my tbd",
+                      self.text)
+
     def test_runbook_notes_checksum_proves_copy_not_author(self):
         self.assertRegex(self.text, r"(?i)not who wrote it")
 
