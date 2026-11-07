@@ -102,13 +102,16 @@ data:
         echo "!! $set: no verified dump" >&2; rc=1; continue
       fi
       for key in "${keys[@]}"; do
+        body=/backup/$key
         if [ -n "${R2_ENDPOINT:-}" ] && [[ "${key##*/}" != manifest_* ]]; then
+          # Under r2/: the set directories belong to the dump containers' user, and /backup itself is world-writable.
+          body=/backup/r2/$key.gpg
           # A --recipient-file key needs no trust setting (the image's gnupg2-minimal has no --trust-model).
-          gpg --batch --no-tty --recipient-file /scripts/backups.pub.asc \
-            --output "/backup/$key.gpg" --encrypt "/backup/$key" || { echo "!! $set: encrypt $key failed" >&2; rc=1; break; }
+          mkdir -p "${body%/*}" && gpg --batch --no-tty --recipient-file /scripts/backups.pub.asc \
+            --output "$body" --encrypt "/backup/$key" || { echo "!! $set: encrypt $key failed" >&2; rc=1; break; }
           key=$key.gpg
         fi
-        aws s3api put-object --bucket "$BUCKET" --key "$key" --body "/backup/$key" "${dest[@]}" \
+        aws s3api put-object --bucket "$BUCKET" --key "$key" --body "$body" "${dest[@]}" \
           --checksum-algorithm SHA256 --no-cli-pager >/dev/null || { echo "!! $set: put $key failed" >&2; rc=1; break; }
         echo "uploaded $key"
       done
