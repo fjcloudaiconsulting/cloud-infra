@@ -477,6 +477,13 @@ volume). A MySQL dump replaces every table it contains (`DROP TABLE IF EXISTS`).
    ```bash
    echo 'UPDATE api_tokens SET revoked_at = UTC_TIMESTAMP() WHERE revoked_at IS NULL;' | my tbd
    ```
+
+   And revoke every open TBD invitation: one revoked after the dump would come back with a working link. Owners
+   resend the invitations they still want.
+
+   ```bash
+   echo 'UPDATE invitations SET revoked_at = UTC_TIMESTAMP() WHERE accepted_at IS NULL AND revoked_at IS NULL;' | my tbd
+   ```
 8. Resume (`suspend` was set by hand, so Flux does not clear it):
 
    ```bash
