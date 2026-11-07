@@ -152,12 +152,21 @@ spec:
             # pen test).
             - name: MCP_OAUTH_ENABLED
               value: "true"
-            # DB pool 2+3 (tbd default 5+10): with the two hardcoded 2+5 engines (rate limits, sessions) the pod holds at
-            # most 19, and with mcp's 9 staging stays under its MAX_USER_CONNECTIONS 30 (runbooks.md, INFRA-194).
+            # DB pool at the tbd default 5+10; the rate-limit and session engines (tbd default 2+5 each, from env since
+            # v0.306.0) at 1+1: the pod holds at most 19, and with mcp's 4 staging stays under its MAX_USER_CONNECTIONS
+            # 30 (runbooks.md, INFRA-194).
             - name: DB_POOL_SIZE
-              value: "2"
+              value: "5"
             - name: DB_MAX_OVERFLOW
-              value: "3"
+              value: "10"
+            - name: RATE_LIMIT_DB_POOL_SIZE
+              value: "1"
+            - name: RATE_LIMIT_DB_MAX_OVERFLOW
+              value: "1"
+            - name: STATE_DB_POOL_SIZE
+              value: "1"
+            - name: STATE_DB_MAX_OVERFLOW
+              value: "1"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -168,6 +177,13 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it.
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tbd
+                  key: setup-token
+                  optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
