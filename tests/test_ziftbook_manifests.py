@@ -10,9 +10,9 @@ APP_HOST = {"ziftbook-prod": "app.ziftbook.com", "ziftbook-staging": "dev.ziftbo
 # ZIF_CSP_ENFORCE is not here: it is opt-in ("true" enforces, anything else is report-only), so setting it only
 # tightens the web. A repeat first-run setup lifts ZIF_SETUP_TOKEN from this set for its PR (runbooks.md).
 NEVER = {"ZIF_TURNSTILE_DISABLED", "ZIF_SETUP_TOKEN"}
-# Erasure ledger (ZIF-58, INFRA-267): the env's bucket, per namespace wired so far (prod joins in its own PR), and the
-# key variables with their key in Secret ziftbook-ledger-worker.
-LEDGER_BUCKET = {"ziftbook-staging": "ziftbook-ledger-staging"}
+# Erasure ledger (ZIF-58, INFRA-267): each env's bucket, and the key variables with their key in Secret
+# ziftbook-ledger-worker.
+LEDGER_BUCKET = {"ziftbook-staging": "ziftbook-ledger-staging", "ziftbook-prod": "ziftbook-ledger-prod"}
 LEDGER_KEYS = {"ZIF_ERASURE_LEDGER_ACCESS_KEY_ID": "access-key-id",
                "ZIF_ERASURE_LEDGER_SECRET_ACCESS_KEY": "secret-access-key"}
 
