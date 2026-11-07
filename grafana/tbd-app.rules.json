@@ -253,6 +253,131 @@
         "group_wait": "30s",
         "repeat_interval": "24h"
       }
+    },
+    {
+      "uid": "tbd-no-superadmin",
+      "title": "TbdNoSuperadmin",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 3600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-logs",
+          "model": {
+            "refId": "A",
+            "expr": "sum(count_over_time({service_namespace=\"tbd\", k8s_namespace_name=\"tbd-prod\"} | json | level=\"ERROR\" | msg=\"platform.superadmin.none\" [1h]))",
+            "queryType": "instant"
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "critical",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD production has no active platform superadmin ({{ printf \"%.0f\" $values.A.Value }} probe error(s) in the last hour): /admin refuses everyone. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "4h"
+      }
+    },
+    {
+      "uid": "tbd-superadmin-probe-stale",
+      "title": "TbdSuperadminProbeStale",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "(time() - max(tbd_platform_active_superadmins_probed_at_seconds{service_name=\"tbd-scheduler\", deployment_environment_name=\"production\"})) or on() vector(1e9)",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    2700
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "15m",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD production's superadmin probe has not read the database for 45+ min (or never since the scheduler started): the no-superadmin alert is blind. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
     }
   ]
 }
