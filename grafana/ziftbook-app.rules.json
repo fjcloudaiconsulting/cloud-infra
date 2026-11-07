@@ -315,6 +315,69 @@
         "group_wait": "30s",
         "repeat_interval": "4h"
       }
+    },
+    {
+      "uid": "ziftbook-frontend-down",
+      "title": "ZiftbookFrontendDown",
+      "folderUID": "platform",
+      "ruleGroup": "ziftbook-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "absent_over_time(container_memory_working_set_bytes{job=\"cadvisor\", namespace=\"ziftbook-prod\", container=\"frontend\"}[5m]) or absent_over_time(container_memory_working_set_bytes{job=\"cadvisor\", namespace=\"ziftbook-staging\", container=\"frontend\"}[5m])",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "5m",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "ziftbook"
+      },
+      "annotations": {
+        "summary": "No Ziftbook frontend container has run in {{ $labels.namespace }} for 10 minutes. See the Ziftbook app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#ziftbook-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
     }
   ]
 }

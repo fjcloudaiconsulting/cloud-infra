@@ -127,6 +127,132 @@
         "group_wait": "30s",
         "repeat_interval": "24h"
       }
+    },
+    {
+      "uid": "tbd-process-down",
+      "title": "TbdProcessDown",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "absent_over_time(tbd_process_up{service_name=\"tbd-api\", deployment_environment_name=\"production\"}[5m]) or absent_over_time(tbd_process_up{service_name=\"tbd-scheduler\", deployment_environment_name=\"production\"}[5m]) or label_replace(absent_over_time(container_memory_working_set_bytes{job=\"cadvisor\", namespace=\"tbd-prod\", container=\"frontend\"}[5m]), \"service_name\", \"tbd-frontend\", \"\", \"\")",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "5m",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "critical",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD production: {{ $labels.service_name }} has reported nothing for 10 minutes (process down, or its metrics export broken). See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "4h"
+      }
+    },
+    {
+      "uid": "tbd-staging-process-down",
+      "title": "TbdStagingProcessDown",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 600,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-prom",
+          "model": {
+            "refId": "A",
+            "expr": "absent_over_time(tbd_process_up{service_name=\"tbd-api\", deployment_environment_name=\"staging\"}[5m]) or absent_over_time(tbd_process_up{service_name=\"tbd-mcp\", deployment_environment_name=\"staging\"}[5m]) or label_replace(absent_over_time(container_memory_working_set_bytes{job=\"cadvisor\", namespace=\"tbd-staging\", container=\"frontend\"}[5m]), \"service_name\", \"tbd-frontend\", \"\", \"\")",
+            "instant": true,
+            "range": false
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "5m",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "TBD staging: {{ $labels.service_name }} has reported nothing for 10 minutes (process down, or its metrics export broken). See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
     }
   ]
 }
