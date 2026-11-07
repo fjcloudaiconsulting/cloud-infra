@@ -614,13 +614,32 @@ One-time owner steps, per environment, staging first:
 
 1. Approve the `cloudflare` apply that creates the buckets, the lock and the lifecycle (the workspace token already
    has "Workers R2 Storage Write").
-2. R2 > Manage API tokens > Create Account API token, twice, each "Apply to specific buckets only" with
-   `ziftbook-ledger-<env>` alone: `ziftbook-<env>-ledger-worker` with **Object Read & Write**, and
-   `ziftbook-<env>-ledger-operator` with **Object Read**. The secrets are shown once.
-3. Write each pair into its own Secret, `ziftbook-ledger-worker` and `ziftbook-ledger-operator` (keys
-   `access-key-id`, `secret-access-key`), with the command of [R2 for Ziftbook photos](#r2-for-ziftbook-photos) step 3,
-   `ziftbook-storage` replaced by the Secret's name in both places. The manifest PR wires them in.
-4. Staging only, before its manifests merge: check the bucket with the AWS CLI. `E=https://<account id>.eu.r2.cloudflarestorage.com`,
+2. Approve the `cloudflare-tokens` apply that makes the worker tokens `ziftbook-<env>-ledger-worker` (both
+   environments at once): Object Read & Write on that environment's ledger bucket only.
+3. Write the worker's keys straight from the Terraform output into Secret `ziftbook-ledger-worker` (keys
+   `access-key-id`, `secret-access-key`), on a laptop logged in to HCP Terraform (`terraform login`), in bash from the
+   repo root. Nothing is printed but the count, `2`; anything else, or nothing, means the file was not written:
+
+   ```sh
+   env=staging   # then prod
+   F=clusters/hetzner/ziftbook-$env/ziftbook-ledger-worker.secret.yaml
+   terraform -chdir=terraform/cloudflare-tokens init -input=false >/dev/null
+   K=$(terraform -chdir=terraform/cloudflare-tokens output -json ziftbook_ledger_worker_keys)
+   kubectl create secret generic ziftbook-ledger-worker -n ziftbook-$env \
+     --from-file=access-key-id=<(jq -j --arg e $env '.[$e].access_key_id' <<<"$K") \
+     --from-file=secret-access-key=<(jq -j --arg e $env '.[$e].secret_access_key' <<<"$K") \
+     --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F.tmp" \
+     && mv "$F.tmp" "$F" && grep -cE '^ +(access-key-id|secret-access-key): ENC' "$F"
+   rm -f "$F.tmp"; unset K
+   ```
+
+   The manifest PR wires it in.
+4. The operator key is made only when a reapply is needed, and deleted after it: R2 > Manage API tokens > Create
+   Account API token, `ziftbook-<env>-ledger-operator`, **Object Read**, "Apply to specific buckets only" with
+   `ziftbook-ledger-<env>` alone. Write it into Secret `ziftbook-ledger-operator` with the command of
+   [R2 for Ziftbook photos](#r2-for-ziftbook-photos) step 3, `ziftbook-storage` replaced by that name in both places.
+5. Staging only, before its manifests merge: check the bucket with the AWS CLI. `E=https://<account id>.eu.r2.cloudflarestorage.com`,
    `b=ziftbook-ledger-staging`, `AWS_REGION=auto`, and the key named in each comment exported as
    `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`:
 
@@ -630,8 +649,8 @@ One-time owner steps, per environment, staging first:
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: 412 PreconditionFailed
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p                       # worker key: refused (locked)
    aws s3api delete-object --endpoint-url $E --bucket $b --key $k                                  # worker key: refused (locked)
-   aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # operator key: OK
-   aws s3api put-object --endpoint-url $E --bucket $b --key probe --body /tmp/p                    # operator key: 403
+   aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # worker key: OK
+   aws s3api get-object --endpoint-url $E --bucket ziftbook-ledger-prod --key $k /dev/null         # worker key: 403
    aws s3api head-object --endpoint-url $E --bucket $b --key $k                                    # photo key: 403
    rm /tmp/p
    ```
@@ -639,8 +658,13 @@ One-time owner steps, per environment, staging first:
    The probe is not an erasure and stays until the lifecycle removes it (15 days): a staging reapply in that window
    refuses it (`ledger entry refused`) unless run with `--skip-key` for it.
 
-Rotate: a new token, redo step 3 for that Secret, merge, `kubectl -n ziftbook-<env> rollout restart deploy/worker`
-(the operator key is read only when a reapply pod starts), then delete the old token.
+The first time an operator key exists, check it the same way: `get-object` OK, `put-object` 403.
+
+Rotate the worker key: HCP Terraform > `cloudflare-tokens` > New run > Plan and apply, "Replace resources" set to
+`cloudflare_account_token.ziftbook_ledger_worker["<env>"]`, then step 3, merge, and
+`kubectl -n ziftbook-<env> rollout restart deploy/worker`. The old key stops working when the apply ends, so ledger jobs
+fail until the restart; `python -m app.ledger backfill` queues what they missed. An operator key is not rotated: it is
+deleted after its reapply.
 
 ## Ziftbook Turnstile (public bookings)
 

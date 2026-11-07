@@ -75,6 +75,11 @@ locals {
   r2_write_ids = [for g in data.cloudflare_account_api_token_permission_groups_list.access_write.result : g.id
   if g.name == "Workers R2 Storage Write" && contains(g.scopes, "com.cloudflare.api.account")]
 
+  # Same lookup for "Workers R2 Storage Bucket Item Write", the dashboard's "Object Read & Write" on chosen buckets.
+  # By name only: it is the one group of that name, and `one()` fails the plan if that ever changes.
+  r2_item_write_ids = [for g in data.cloudflare_account_api_token_permission_groups_list.access_write.result : g.id
+  if g.name == "Workers R2 Storage Bucket Item Write"]
+
   # The provider stores the API's `resources` bytes as they come back, and jsonencode sorts keys, so a `resources`
   # object with two keys at one level can come back in another order and fail the apply. Keep one key per level:
   # one policy per zone. The provider also matches the API's policies back by effect and permission group set, so
@@ -150,6 +155,36 @@ resource "tfe_variable" "cloudflare_workspace_token" {
   value        = cloudflare_account_token.cloudflare_workspace.value
   sensitive    = true
   description  = "Managed by workspace cloudflare-tokens (INFRA-133)"
+}
+
+# Erasure-ledger worker keys: Object Read & Write on that environment's ledger bucket only (the worker reads before
+# each write). Their consumer is a SOPS Secret in git, which Terraform cannot write, so the owner pipes the output
+# straight into sops (docs/runbooks.md, "Ziftbook erasure ledger"). The operator's read-only key is made by hand,
+# only for a reapply.
+resource "cloudflare_account_token" "ziftbook_ledger_worker" {
+  for_each   = toset(["staging", "prod"])
+  account_id = local.account_id
+  name       = "ziftbook-${each.key}-ledger-worker"
+
+  policies = [{
+    effect            = "allow"
+    resources         = jsonencode({ "com.cloudflare.edge.r2.bucket.${local.account_id}_eu_ziftbook-ledger-${each.key}" = "*" })
+    permission_groups = [{ id = one(local.r2_item_write_ids) }]
+  }]
+
+  # A replace (rotation) mints the new key before the old one is deleted; rewrite the Secret before applying it.
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# An R2 key pair is the token's id and the SHA-256 of its value.
+output "ziftbook_ledger_worker_keys" {
+  sensitive = true
+  value = { for env, t in cloudflare_account_token.ziftbook_ledger_worker : env => {
+    access_key_id     = t.id
+    secret_access_key = sha256(t.value)
+  } }
 }
 
 # Every other account-owned token, adopted as it is: imported-tokens.json is the API's own view of each token
