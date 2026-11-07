@@ -537,6 +537,59 @@ Rotate: create a new token, redo step 3, merge, `kubectl -n ziftbook-<env> rollo
 deploy/worker`, then delete the old token. Until the Secret exists, uploads answer 503 and nothing else
 breaks.
 
+## Ziftbook erasure ledger
+
+Ziftbook records every erasure (ZIF-58) outside its database, so a restored backup can be erased again with
+`python -m app.ledger reapply`. One private bucket per environment, `ziftbook-ledger-staging` and
+`ziftbook-ledger-prod`, EU jurisdiction, in `terraform/cloudflare/r2.tf` (INFRA-267): no CORS, no custom domain, r2.dev
+off. Objects under `erasures/` are locked for 14 days (no overwrite, no delete) and deleted after 15. The lock must be
+at least the backups' retention (8 days plus 1 day of old versions, `terraform/tbd-backups`):
+`tests/test_erasure_ledger.py` fails otherwise. If backup retention grows, raise the lock first.
+
+| Pod | Ledger env | R2 key |
+|---|---|---|
+| worker | `ZIF_S3_ENDPOINT`, `ZIF_ERASURE_LEDGER_BUCKET`, `ZIF_ERASURE_LEDGER_ACCESS_KEY_ID`, `ZIF_ERASURE_LEDGER_SECRET_ACCESS_KEY` | `ziftbook-<env>-ledger-worker`, Object Read & Write (it reads before each write, so a write-only key fails every job) |
+| reapply (short-lived, migrations image, only after a restore) | `ZIF_MIGRATE_DATABASE_URL`, `ZIF_APP_URL`, the four above | `ziftbook-<env>-ledger-operator`, Object Read only |
+| API | `ZIF_ERASURE_LEDGER_BUCKET` only (without it, erasure answers 503) | none, ever |
+
+The photo key (`ziftbook-storage`) is never scoped to a ledger bucket, and neither ledger key is mounted on the API.
+The endpoint is the photos' `.eu` one. Without the worker's settings, its `erasure.ledger` jobs give up and it logs
+`erasure ledger unset` as an ERROR; erasures still commit, and `python -m app.ledger backfill` queues the missing
+entries once it is fixed. Alert `ZiftbookErasureLedger` ([Ziftbook app alerts](#ziftbook-app-alerts)) fires on that
+and on the other ledger ERROR lines.
+
+One-time owner steps, per environment, staging first:
+
+1. Approve the `cloudflare` apply that creates the buckets, the lock and the lifecycle (the workspace token already
+   has "Workers R2 Storage Write").
+2. R2 > Manage API tokens > Create Account API token, twice, each "Apply to specific buckets only" with
+   `ziftbook-ledger-<env>` alone: `ziftbook-<env>-ledger-worker` with **Object Read & Write**, and
+   `ziftbook-<env>-ledger-operator` with **Object Read**. The secrets are shown once.
+3. Write each pair into its own Secret, `ziftbook-ledger-worker` and `ziftbook-ledger-operator` (keys
+   `access-key-id`, `secret-access-key`), with the command of [R2 for Ziftbook photos](#r2-for-ziftbook-photos) step 3,
+   `ziftbook-storage` replaced by the Secret's name in both places. The manifest PR wires them in.
+4. Staging only, before its manifests merge: check the bucket with the AWS CLI. `E=https://<account id>.eu.r2.cloudflarestorage.com`,
+   `b=ziftbook-ledger-staging`, `AWS_REGION=auto`, and the key named in each comment exported as
+   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`:
+
+   ```sh
+   echo probe > /tmp/p; k=erasures/infra-267-probe
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: OK
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: 412 PreconditionFailed
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p                       # worker key: refused (locked)
+   aws s3api delete-object --endpoint-url $E --bucket $b --key $k                                  # worker key: refused (locked)
+   aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # operator key: OK
+   aws s3api put-object --endpoint-url $E --bucket $b --key probe --body /tmp/p                    # operator key: 403
+   aws s3api head-object --endpoint-url $E --bucket $b --key $k                                    # photo key: 403
+   rm /tmp/p
+   ```
+
+   The probe is not an erasure and stays until the lifecycle removes it (15 days): a staging reapply in that window
+   refuses it (`ledger entry refused`) unless run with `--skip-key` for it.
+
+Rotate: a new token, redo step 3 for that Secret, merge, `kubectl -n ziftbook-<env> rollout restart deploy/worker`
+(the operator key is read only when a reapply pod starts), then delete the old token.
+
 ## Ziftbook Turnstile (public bookings)
 
 The Ziftbook API refuses every public booking (403) while it has no Turnstile secret, and logs ERROR `turnstile
@@ -993,6 +1046,7 @@ also fires about 2 min later, because its no-data case is what catches a worker 
 | `ZiftbookJobsGaveUp` | any job given up after its 5th attempt in the last hour, per kind (`ziftbook_job_runs_total{job_outcome="gave_up"}`). Never retried by the worker | warning, daily |
 | `ZiftbookRefundFailed` | a refund did not reach the client in the last hour, per `payment_kind` (`ziftbook_payment_outcomes_total{payment_outcome="refund_failed"}`): Stripe refused the refund (a disputed charge, a closed account) or an issued refund failed later. Counted once; the booking is flagged for the business | warning, daily |
 | `ZiftbookJobQueueStuck` | the oldest due job of a kind waited over 10 min for 5 min (`ziftbook_job_queue_oldest_age_seconds`; the worker polls every 30 s), or no queue metric at all: the worker reports every kind every minute, 0 when empty | critical, every 4 h |
+| `ZiftbookErasureLedger` | an ERROR line of the [erasure ledger](#ziftbook-erasure-ledger) in the last hour, per `msg`, from the Loki data source (ZIF-58): `job gave up` with `job_kind` `erasure.ledger` (an erasure is missing from the ledger: fix the worker's ledger settings, then `python -m app.ledger backfill`), the worker's `erasure ledger unset` (same fix), `refund held after a reapply` (a refund waits for a person after a restore; the line carries `booking_id`), `ledger entry refused` (a reapply stopped; inspect the entry its `key` names), `contact hold purged late` | critical, every 4 h |
 
 When one fires:
 
@@ -1015,6 +1069,9 @@ returns the names with `service_name` `ziftbook-api` or `ziftbook-worker` (tbd-p
 misnamed metric or label leaves its rule silent, except `ZiftbookJobQueueStuck`, which fires on no data.
 `ziftbook_job_runs_total` exists only after a job has run since the worker started, and the HTTP metric only after real
 API traffic.
+`ZiftbookErasureLedger` queries the stack's Loki data source by uid `grafanacloud-logs`: check it exists with
+`api GET /api/datasources/uid/grafanacloud-logs /dev/null`, and that its query, pasted into Explore, runs (no lines is
+the normal result).
 
 ### TBD app alerts
 
