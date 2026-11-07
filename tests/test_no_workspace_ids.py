@@ -18,7 +18,7 @@ class NoWorkspaceIds(unittest.TestCase):
 
     def test_pattern_matches_a_workspace_id(self):
         # guard: the regex finds the shape HCP Terraform uses.
-        self.assertTrue(WS_ID.search('WS = "ws-AbCdEfGh12345678"'))
+        self.assertTrue(WS_ID.search('WS = "ws-' + 'AbCdEfGh12345678"'))  # split, or this file would match
 
 
 if __name__ == "__main__":
