@@ -114,6 +114,24 @@ data:
       done
     done
     exit $rc
+  # The owner's backup key, public half (INFRA-203): FJC database backups <flamarion@fjconsulting.io>, fingerprint
+  # 037EF649967C4D1DA4982B8BA38C8AAA409FDED8, encryption subkey 7E6481DB5AC4A488A3F05424DF3FF6DD2C98FB6F. The private half
+  # is offline (docs/runbooks.md "Backups to R2"); upload-r2 encrypts every dump and grants file to it.
+  backups.pub.asc: |
+    -----BEGIN PGP PUBLIC KEY BLOCK-----
+    Comment: GPGTools - https://gpgtools.org
+
+    mDMEau7TkBYJKwYBBAHaRw8BAQdAkvyGwvaRasT2d63q5s3MZzVJv5DUoFJ64JOS
+    kV5l21W0MEZKQyBkYXRhYmFzZSBiYWNrdXBzIDxmbGFtYXJpb25AZmpjb25zdWx0
+    aW5nLmlvPoiQBBMWCgA4FiEEA372SZZ8TR2kmCuLo4yKqkCf3tgFAmru05ACGwMF
+    CwkIBwMFFQoJCAsFFgIDAQACHgECF4AACgkQo4yKqkCf3timuQEAyFnwJRvxqpzl
+    HC5OYcTpe9vjUirkTUNl1wE/WVmoX3EBAMzyd32pMHspTqF0hO1SKUY9nfUpFThJ
+    24aHj8ZcluQEuDgEau7TkBIKKwYBBAGXVQEFAQEHQDXg84fxEDyfe1ipW7YGJwNF
+    XO4J265SJMlCHrGVhbdVAwEIB4h4BBgWCgAgFiEEA372SZZ8TR2kmCuLo4yKqkCf
+    3tgFAmru05ACGwwACgkQo4yKqkCf3th1XgD7Bx0Aaf9NnSkaxOxo/bYF2B16U11T
+    QUH+E4wtN6VonaoA/jSOp2DEvjX4HtMsMaaBX7Ur4O7wijC5QgH0/iC7o8oJ
+    =iHwQ
+    -----END PGP PUBLIC KEY BLOCK-----
 ---
 apiVersion: batch/v1
 kind: CronJob
