@@ -144,6 +144,59 @@ outage means no smoke; the [synthetic uptime](#synthetic-uptime) check and the d
 The smoke account's credentials are the `tbd-prod` environment secrets `SMOKE_USERNAME` and `SMOKE_PASSWORD` in this
 repo. Deployments from `main` only can read them. Rotating them is part of [TBD smoke account](#tbd-smoke-account).
 
+## Backups to R2
+
+INFRA-203 moves the nightly backups from the AWS Object Lock bucket to the R2 bucket `db-backups`
+(`terraform/cloudflare/r2.tf`, EU jurisdiction, every object locked for 7 days and deleted after 8). During the move the
+`db-backup` Job uploads every set to both: container `upload` to S3, container `upload-r2` to R2. `upload-r2` encrypts
+each dump and grants file with gpg to the owner's backup key (`<key>.gpg`) and uploads the manifest in plaintext, so the
+probe can read it without the key. It refuses to upload at all without the public key.
+
+Setup, once:
+
+1. **Backup key**, on the owner's machine (set a passphrase at the prompt):
+
+   ```sh
+   gpg --quick-gen-key 'FJC database backups' future-default default never
+   FPR=$(gpg --list-keys --with-colons 'FJC database backups' | awk -F: '/^fpr/{print $10; exit}')
+   gpg --armor --export "$FPR" > backups.pub.asc          # public: goes into db-backup.yaml as backups.pub.asc
+   gpg --armor --export-secret-keys "$FPR" > backups.sec.asc
+   ```
+
+   Store `backups.sec.asc` and its passphrase in the password manager and one offline copy, then delete the file.
+   Without it no backup can be read.
+2. **Token**, after the `cloudflare` apply creates the bucket: R2 > Manage API tokens > Create, name
+   `db-backups-uploader`, Object Read & Write, bucket `db-backups` only, no expiry.
+3. **Secret**, a new file (public SOPS key only):
+
+   ```sh
+   F=clusters/hetzner/data/backup-r2.secret.yaml
+   read -r ID; read -rs SK; kubectl create secret generic backup-r2 -n data --from-literal=AWS_ACCESS_KEY_ID="$ID" \
+     --from-literal=AWS_SECRET_ACCESS_KEY="$SK" --dry-run=client -o yaml \
+     | sops encrypt --filename-override "$F" --input-type yaml --output-type yaml /dev/stdin > "$F"; unset ID SK
+   grep -cE '^ +AWS_[A-Z_]+: ENC\[' "$F"   # must print 2 (a plain ': ENC' count also matches sops' own mac line)
+   ```
+
+4. **Probe token**: R2 > Manage API tokens > Create, name `db-backups-probe`, Object Read only, bucket `db-backups`
+   only, no expiry. Store it and the endpoint as secrets of the environment `backup-probe`, which only `main` may deploy
+   to (each `gh secret set` prompts for the value):
+
+   ```sh
+   R=repos/fjcloudaiconsulting/cloud-infra/environments/backup-probe
+   gh api -X PUT $R -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST $R/deployment-branch-policies -f name=main -f type=branch
+   for s in R2_PROBE_ACCESS_KEY_ID R2_PROBE_SECRET_ACCESS_KEY R2_BACKUP_ENDPOINT; do
+     gh secret set $s --env backup-probe -R fjcloudaiconsulting/cloud-infra; done   # endpoint: https://<account id>.eu.r2.cloudflarestorage.com
+   ```
+
+   The freshness probe (04:17 UTC) lists the bucket with it and opens `[backup-stale]` when a set is missing, old or
+   too small. A missing secret reads as "could not run", which also opens the issue.
+
+Check after a night (`E=https://<account id>.eu.r2.cloudflarestorage.com`, a read token in the AWS env vars):
+`aws s3 ls --endpoint-url "$E" s3://db-backups/ --recursive | grep "$(date -u +%Y/%m/%d)"` lists, per set, a
+`.sql.gz.gpg` (or `.dump.gpg`), a `grants_*.gpg` and a `manifest_*.json`. To read one:
+`gpg --decrypt <file>.gpg > <file>`, then check its sha256 against the manifest.
+
 ## Write or rotate a Kubernetes Secret
 
 Secrets are `clusters/**/<name>.secret.yaml`, SOPS-encrypted to the cluster's age key (`.sops.yaml`). Flux decrypts

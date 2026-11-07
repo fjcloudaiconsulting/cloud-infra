@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Decide whether the off-host database backups are fresh, from S3 object
-# METADATA only (TBD-400, INFRA-30).
+# Decide whether the off-host database backups are fresh, from object METADATA only.
 #
 # Usage: check-backup-freshness.sh PREFIX=MIN_DUMP_BYTES...
-# Reads an `aws s3api list-objects-v2` JSON document on STDIN (one listing, or
+# Reads an S3-API `list-objects-v2` JSON document on STDIN (one listing, or
 # several merged into one Contents array) and writes a verdict to stdout.
 #
 #   exit 0  fresh   -- last night's backup is present, complete and plausible
@@ -108,7 +107,8 @@ def age_hours(obj):
     return (now - int(parsed.timestamp())) / 3600.0
 
 def base(o):
-    return str(o.get("Key", "")).rpartition("/")[2]
+    # The dump and grants arrive gpg-encrypted as <name>.gpg (db-backup.yaml): judged by the name inside.
+    return str(o.get("Key", "")).rpartition("/")[2].removesuffix(".gpg")
 
 def judge(contents, min_dump_bytes):
     manifests = [o for o in contents
