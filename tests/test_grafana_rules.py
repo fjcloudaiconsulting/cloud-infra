@@ -48,11 +48,14 @@ class TbdSuperadminAlerts(unittest.TestCase):
         rules = json.loads((G / "tbd-app.rules.json").read_text())["rules"]
         self.rules = {r["uid"]: r for r in rules}
 
-    def test_no_superadmin_alerts_on_the_probe_error_in_production(self):
-        expr = self.rules["tbd-no-superadmin"]["data"][0]["model"]["expr"]
-        self.assertIn('k8s_namespace_name="tbd-prod"', expr)
-        self.assertIn('level="ERROR" | msg="platform.superadmin.none"', expr)
-        self.assertEqual(self.rules["tbd-no-superadmin"]["labels"]["severity"], "critical")
+    def test_no_superadmin_alerts_on_a_zero_count_in_production(self):
+        # The probe's count gauge, not its log line: tbd-prod logs are not shipped (see the Loki fence below).
+        rule = self.rules["tbd-no-superadmin"]
+        self.assertEqual(rule["data"][0]["datasourceUid"], "grafanacloud-prom")
+        self.assertIn('tbd_platform_active_superadmins{service_name="tbd-scheduler", '
+                      'deployment_environment_name="production"}', rule["data"][0]["model"]["expr"])
+        self.assertEqual(rule["data"][1]["model"]["conditions"][0]["evaluator"], {"type": "lt", "params": [0.5]})
+        self.assertEqual(rule["labels"]["severity"], "critical")
 
     def test_stale_probe_outlasts_two_scheduler_ticks_and_alerts_when_absent(self):
         scheduler = (G.parent / "clusters/hetzner/tbd-prod/scheduler.yaml").read_text()
@@ -63,6 +66,22 @@ class TbdSuperadminAlerts(unittest.TestCase):
         self.assertGreaterEqual(threshold, 2 * tick)
         # A missing series (probe never succeeded since the scheduler started) must read as stale, not as no data.
         self.assertIn("or on() vector(1e9)", rule["data"][0]["model"]["expr"])
+
+class LokiRulesReadShippedLogs(unittest.TestCase):
+    def test_every_log_rule_targets_a_namespace_alloy_reads(self):
+        # fence: a log rule on a namespace Alloy does not read sees no data, and noDataState OK keeps it silent forever.
+        alloy = (G.parent / "clusters/hetzner/observability/alloy/config.alloy").read_text()
+        block = re.search(r'discovery\.kubernetes "ziftbook_pods" \{.*?names = \[([^\]]*)\]', alloy, re.S)
+        shipped = set(re.findall(r'"([^"]+)"', block.group(1)))
+        self.assertTrue(shipped)
+        rules = [r for p in sorted(G.glob("*.rules.json")) for r in json.loads(p.read_text())["rules"]]
+        loki = [q["model"]["expr"] for r in rules for q in r["data"] if q.get("datasourceUid") == "grafanacloud-logs"]
+        self.assertTrue(loki)
+        for expr in loki:
+            namespaces = set(re.findall(r'k8s_namespace_name="([^"]+)"', expr))
+            self.assertTrue(namespaces, expr)
+            self.assertLessEqual(namespaces, shipped, expr)
+
 
 if __name__ == "__main__":
     unittest.main()

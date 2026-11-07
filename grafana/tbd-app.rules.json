@@ -265,14 +265,15 @@
         {
           "refId": "A",
           "relativeTimeRange": {
-            "from": 3600,
+            "from": 600,
             "to": 0
           },
-          "datasourceUid": "grafanacloud-logs",
+          "datasourceUid": "grafanacloud-prom",
           "model": {
             "refId": "A",
-            "expr": "sum(count_over_time({service_namespace=\"tbd\", k8s_namespace_name=\"tbd-prod\"} | json | level=\"ERROR\" | msg=\"platform.superadmin.none\" [1h]))",
-            "queryType": "instant"
+            "expr": "max(tbd_platform_active_superadmins{service_name=\"tbd-scheduler\", deployment_environment_name=\"production\"})",
+            "instant": true,
+            "range": false
           }
         },
         {
@@ -289,7 +290,7 @@
             "conditions": [
               {
                 "evaluator": {
-                  "type": "gt",
+                  "type": "lt",
                   "params": [
                     0.5
                   ]
@@ -307,7 +308,7 @@
         "component": "tbd"
       },
       "annotations": {
-        "summary": "TBD production has no active platform superadmin ({{ printf \"%.0f\" $values.A.Value }} probe error(s) in the last hour): /admin refuses everyone. See the TBD app alerts runbook.",
+        "summary": "TBD production has no active platform superadmin: /admin refuses everyone. See the TBD app alerts runbook.",
         "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
       },
       "notification_settings": {
