@@ -177,6 +177,13 @@ spec:
                 secretKeyRef:
                   name: tbd
                   key: jwt-secret-key
+            # First-user setup only (tbd #1095, INFRA-269). Optional: an install that has users never reads it.
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tbd
+                  key: setup-token
+                  optional: true
             - name: MFA_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
