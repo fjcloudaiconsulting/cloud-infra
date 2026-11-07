@@ -8,9 +8,9 @@ Step-by-step procedures for the recurring changes. Why things are built this way
 Database restores are
 [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
 set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
-runbook replays MySQL with `--binary-mode` and scans the Postgres files before `psql` as a guard
-against commands a backup should never carry; custom-format dumps restored by a non-superuser role
-are planned to replace the scan (#272).
+runbook replays MySQL with `--binary-mode` and restores the custom-format Postgres dumps with
+`pg_restore`, logged in as the owner role, never a superuser (INFRA-235); the plain Postgres dumps
+written before that are scanned before `psql` until they expire.
 
 ## Restore drill
 
@@ -377,9 +377,9 @@ In a database grant `_` is still a (deprecated) wildcard, so `tbd_staging` also 
 escaping backslash, and the replayed grant would name a different database. The password reaches
 `mysql` on stdin, so it is never on a command line in the pod (locally it is briefly in `sed`'s). The cap (30) keeps staging from
 using up `max_connections` (120) that production needs: production's pools hold up to 87 (3 pods × 29), plus 1 for the
-dump job. Staging's backend (pool 2 + 3 from env, plus the two engines tbd hardcodes at 2 + 5 for rate limits and
-sessions: 19) and mcp (9, `tbd-staging/mcp.yaml`) add up to 28 at full pools, so under load staging stays under its
-cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
+dump job. Staging's backend (pool 5 + 10, plus the rate-limit and session engines at 1 + 1 each, all from env: 19)
+and mcp (pool 1 + 1 and rate-limit engine 1 + 1: 4, `tbd-staging/mcp.yaml`) add up to 23 at full pools, so under load
+staging stays under its cap and never reaches production's (INFRA-194; `MySqlConnectionBudget` in `tests/test_tbd_manifests.py` fails when
 pools, cap or `max_connections` drift apart). The cap is also in `init.sql` in `data/mysql.yaml`, which MySQL runs at every start, so a cap
 changed there in git applies at the next MySQL restart; keep it equal to the one above (the test checks). To apply it
 sooner without a restart, run `ALTER USER 'tbd_staging'@'%' WITH MAX_USER_CONNECTIONS 30;` as root. Nothing here touches `tbd` or its users, and the MySQL pod
@@ -408,6 +408,7 @@ Traffic path: Cloudflare (proxied), then the Cloudflare Tunnel `hetzner-k3s` (`c
 1. **DNS:** add a proxied CNAME to `<tunnel id>.cfargotunnel.com` in [`terraform/cloudflare/main.tf`](../terraform/cloudflare/main.tf) (the TBD `app` and `dev` records are entries of one map there; Ziftbook's are separate resources, copy the one for your zone).
 2. **Route:** the hostname -> Service rule lives in the tunnel config in [`terraform/cloudflare/tunnel.tf`](../terraform/cloudflare/tunnel.tf); `cloudflared` only runs it.
 3. **Also:** a staging `dev.*` host needs a Cloudflare Access app ([`terraform/cloudflare/access.tf`](../terraform/cloudflare/access.tf), INFRA-117) or it is public; a new zone must join `local.app_zones` in `main.tf` (zone settings and rate limit) and get a policy in [`terraform/cloudflare-tokens/main.tf`](../terraform/cloudflare-tokens/main.tf) first, or the `cloudflare` apply fails; the app namespace's NetworkPolicy must admit the `cloudflared` namespace (model: `clusters/hetzner/tbd-prod/networkpolicy.yaml`); and a route to a Service that is new to the tunnel needs an egress rule for its pods and port in the `cloudflared` NetworkPolicy ([`clusters/hetzner/cloudflared/cloudflared.yaml`](../clusters/hetzner/cloudflared/cloudflared.yaml)), in the same PR (`tests/test_network_policies.py` fails until it has one). Approve the `cloudflare` apply only once Flux has applied that policy (`kubectl -n cloudflared get networkpolicy cloudflared -o yaml`), or the route answers 502 meanwhile.
+   A proxied hostname uses Cloudflare's edge certificate, which the zone's CAA already allows. A DNS-only hostname whose service brings its own certificate needs that CA in `caa_issuers` in [`terraform/cloudflare/dns_security.tf`](../terraform/cloudflare/dns_security.tf) (INFRA-231), unless its CNAME target publishes its own CAA. A new zone in `app_zones` also gets DNSSEC and CAA there and needs its name in `caa_zone_names`, or the plan fails.
 4. **Check** after the `cloudflare` workspace apply: `curl -sI https://<host> | head -1`.
 
 ## Mail (Mailgun)

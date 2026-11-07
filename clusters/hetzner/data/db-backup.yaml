@@ -19,12 +19,14 @@ data:
     cd /backup && mkdir -p "$DIR"
     MIN_TABLES=${MIN_TABLES:-1}
     die() { echo "!! $SET: $*" >&2; exit 1; }
-    # Read to EOF, never grep -q: under pipefail a SIGPIPEd gzip fails a good file.
-    count() { gzip -dc "$1" | grep -Ec "$2" || true; }
+    # Read to EOF, never grep -q: under pipefail a SIGPIPEd gzip fails a good file. A custom-format
+    # Postgres archive (*.dump) reads as the SQL pg_restore would send, so it is checked the same way.
+    text() { case $1 in *.dump) pg_restore -f - "$1" ;; *) gzip -dc "$1" ;; esac; }
+    count() { text "$1" | grep -Ec "$2" || true; }
     # Called last: verify, checksum, manifest, then the ordered upload list that marks the set as good.
     publish() {
       [ "$TABLES" -ge "$MIN_TABLES" ] || die "$TABLES tables, expected at least $MIN_TABLES"
-      gzip -t "$DUMP" && gzip -t "$GRANTS" || die "not a valid gzip stream"
+      text "$DUMP" >/dev/null && gzip -t "$GRANTS" || die "dump or grants unreadable"
       [ "$(count "$DUMP" "$MARKER")" -eq 1 ] || die "dump has no completion marker"
       [ "$(count "$DUMP" "$TABLE_RE")" -eq "$TABLES" ] || die "table count differs from $TABLES"
       art() { printf '{"key": "%s", "bytes": %s, "sha256": "%s"}' "$1" "$(wc -c <"$1")" "$(sha256sum "$1" | cut -d' ' -f1)"; }
@@ -61,14 +63,17 @@ data:
     SET=${SET:-ziftbook-postgres} DB=${DB:-ziftbook} VERSION_KEY=postgres_version
     MARKER='^-- PostgreSQL database dump complete' TABLE_RE='^CREATE (UNLOGGED )?TABLE '
     . /scripts/common.sh
+    # Custom format (INFRA-235): RESTORE.md restores it with pg_restore as the database's owner role, never
+    # through psql as a superuser. The roles, the database and its grants come from the bootstrap Jobs.
+    DUMP=${DUMP%.sql.gz}.dump
     q() { psql -d "$DB" -XAtc "$1"; }
     # Extension-owned tables are recreated by CREATE EXTENSION, not dumped.
     TABLES=$(q "SELECT count(*) FROM pg_tables t WHERE schemaname NOT IN ('pg_catalog','information_schema') AND NOT EXISTS
       (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.deptype = 'e'
         AND d.objid = format('%I.%I', t.schemaname, t.tablename)::regclass)")
     VERSION=$(q "SHOW server_version")
-    # --create carries the database's own ACLs and settings; globals carry the roles and their hashes.
-    pg_dump --create "$DB" | gzip >"$DUMP"
+    # Globals: the night's record of the roles (and their hashes); the custom-format restore does not replay them.
+    pg_dump -Fc -f "$DUMP" "$DB"
     pg_dumpall --globals-only | gzip >"$GRANTS"
     [ "$(count "$GRANTS" '^-- PostgreSQL database cluster dump complete')" -eq 1 ] || die "globals have no completion marker"
     publish
