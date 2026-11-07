@@ -148,7 +148,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      # Reruns the whole pod, so a healthy set can upload twice (~600 KB each, 7 days under Object Lock; accepted).
+      # Reruns the whole pod, so a healthy set can upload twice (~600 KB each, 7 days under the bucket lock; accepted).
       backoffLimit: 1
       activeDeadlineSeconds: 1800
       template:

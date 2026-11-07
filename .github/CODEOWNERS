@@ -12,6 +12,5 @@
 /clusters/hetzner/system-upgrade/  @flamarion
 /clusters/hetzner/netbird/         @flamarion
 /terraform/                        @flamarion
-/aws/                              @flamarion
 /ansible/                          @flamarion
 /.sops.yaml                        @flamarion

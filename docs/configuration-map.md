@@ -1,7 +1,7 @@
 # Configuration map
 
 Settings that live **outside git**: GitHub org and repo settings, GitHub Apps, Mend Renovate, HCP
-Terraform, AWS, Cloudflare, Grafana Cloud, the cluster's out-of-band secrets, Jira. They were set by hand in UIs and
+Terraform, Cloudflare, Grafana Cloud, the cluster's out-of-band secrets, Jira. They were set by hand in UIs and
 consoles, so git cannot show drift and a wrong value fails silently. This page says what is set, where,
 what depends on it, and how it shows when it breaks. Names only: secret values never go in this repo
 (it is public).
@@ -55,7 +55,6 @@ in the same PR or right after.
 | A TBD upload or import on `app.` or `dev.thebetterdecision.com` gets a Cloudflare 403 block page, or a write there without a `Content-Length` does (a Mailgun webhook, a chunked upload) | The body cap (BE-13): the request declared a `Content-Length` over 16 MiB; or the length rule (EDGE-02): a write declared no length (`/mcp` on `dev.` is exempt) | `terraform/cloudflare/body_limit.tf`, Cloudflare Security > Events of the zone (the rule's description names which) | A real file over the cap is over TBD's own 5 MiB limit too. If a legitimate request trips it, raise the cap in a PR (keep the digit count and the value in step), or set `enabled = false` on that rule. A client that must send without a length needs a new exemption in a PR |
 | `thebetterdecision.com` does not resolve, or `www.thebetterdecision.com` 301s to an apex that does not answer | The apex custom domain was detached from `tbd-landing` (its DNS record goes with it), or the Worker was deleted | Workers & Pages > `tbd-landing` > Settings > Domains & Routes; [Worker and Snippet access](#worker-and-snippet-access-infra-98) | Re-attach `thebetterdecision.com` to `tbd-landing` (API or dashboard, same section). A deleted Worker: re-run tbd's `Deploy Apex Landing` workflow first |
 | A PR has no `Terraform Cloud/FlamaCorp/<ws>` check | Workspace missing, or its trigger path was not touched. Re-running GitHub checks does not trigger a plan | HCP Terraform workspace | An absent check is not a pass. Push a change under the stack's directory |
-| `aws` says the token has expired, aws-mcp tools missing | AWS login session expired | n/a | Owner logs in to AWS again (private ops notes) |
 | Ziftbook Renovate PR fails `pnpm install` with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` | A package version is younger than pnpm's 1 day policy | INFRA-77 | Re-run CI a day later |
 | No new metrics in Grafana Cloud | Alloy pod in `CreateContainerConfigError` (Secret `observability/grafana-cloud` missing), or the exporter logs `401` (token revoked, or wrong Instance ID) | `kubectl -n observability get pods`, `kubectl -n observability logs ds/alloy` | Write the Secret per the [runbook](runbooks.md#metrics-to-grafana-cloud-alloy), then `kubectl -n observability rollout restart ds/alloy` |
 | One app's metrics or traces missing in Grafana Cloud while node metrics arrive | Its pods still send to the other environment's Alloy port: the `otel` ConfigMap is read at container start, and the NetworkPolicy admits production to 4318 and staging to 4319 only (EDGE-04). Or the metric is named like a platform series (`up`, `node_*`, `container_*`, ...), which Alloy drops from apps, or Alloy's memory limiter is refusing app data | `OTEL_EXPORTER_OTLP_ENDPOINT` in `clusters/hetzner/<ns>/otel.yaml` against the pods' start time (`kubectl -n <ns> get pods`); `kubectl -n observability logs ds/alloy \| grep memory_limiter` | Restart the deployments that read `otel` ([architecture.md](architecture.md#telemetry)); rename the metric under `<app>.`; for memory, [runbook](runbooks.md#metrics-to-grafana-cloud-alloy) |
@@ -126,7 +125,7 @@ cloud-infra `main` also has a ruleset with **no bypass** that requires `Terrafor
 automerges as a branch still lands, because the pushed commit already carries both green checks.
 
 `.github/CODEOWNERS` (GHA-08) names the owner on the tier-0 paths: `.github/`, `renovate.json`, `flux-system`,
-`system-upgrade`, `netbird`, `terraform/`, `aws/`, `ansible/` and `.sops.yaml`. It only requests a review until the
+`system-upgrade`, `netbird`, `terraform/`, `ansible/` and `.sops.yaml`. It only requests a review until the
 `main` pull-request ruleset turns on **Require review from Code Owners** (owner, ruleset setting). With a single owner,
 the owner's own PRs to those paths then need a bypass or a second code owner: decide that before turning it on. A
 staging automerge touches none of these paths.
@@ -229,14 +228,12 @@ the Mend installation settings of the org.
 ## HCP Terraform
 
 Org `FlamaCorp`. Workspaces are created in the UI or through the API with the owner's token (VCS flow, plan on PR,
-apply on merge after approval in the UI). The workspace name must equal the `cloud` block name, and the `tbd-backups`
-name is pinned in an AWS trust policy: never rename it.
+apply on merge after approval in the UI). The workspace name must equal the `cloud` block name.
 
 | Workspace | Stack | Auth |
 |---|---|---|
 | `cloudflare` | `terraform/cloudflare` | Sensitive env var `CLOUDFLARE_API_TOKEN`, written by `cloudflare-tokens` (token `tf: cloudflare workspace`; its scopes are `cloudflare_account_token.cloudflare_workspace` there, never edit them in the dashboard); variable `account_id` |
 | `cloudflare-tokens` (INFRA-133) | `terraform/cloudflare-tokens` | Env `CLOUDFLARE_API_TOKEN` (**sensitive**): the bootstrap token, the one hand-made Cloudflare token (account-owned, Account API Tokens: Edit only, stored by the owner with a script that checks it first). Only this workspace holds it, and the workspace does not manage it. Env `TFE_TOKEN` (**sensitive**): token of team `cloudflare-tokens`, custom access on workspace `cloudflare` only (variables write, runs read). Token scopes change only in `terraform/cloudflare-tokens`; exposure notes: see the owner's private ops notes |
-| `tbd-backups` | `terraform/tbd-backups` | OIDC, two roles (plan, provisioner); variable `aws_account_id` |
 | `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): a project token, held only in the workspace. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22, each /24 or narrower) and `deploy_ssh_public_key` (`ssh-ed25519 ...` or `sk-ssh-ed25519@openssh.com ...`, not sensitive; it seeds new servers only, Ansible manages root's keys afterwards). Both have no default, so a plan without them fails. The Hetzner project and its tokens are hand-made |
 
 The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
@@ -248,15 +245,6 @@ A speculative plan runs with the workspace's own credentials. `tests/test_terraf
 the providers and provider arguments listed in that file and refuses `external` and `http` data sources, remote
 state, provisioners, remote modules, override files and file reads outside the repository. A new provider or
 provider argument is a change to those lists in the PR that needs it.
-
-Never set `TFC_AWS_RUN_ROLE_ARN` on `tbd-backups`: it would give unapproved PR plans the apply role. The IAM documents are
-in [`aws/bootstrap/`](../aws/bootstrap/); root creates the roles once and a workspace never manages its
-own role.
-
-## AWS
-
-- The backup chain (Object Lock bucket, KMS key, uploader users, OIDC providers, role `github-actions-backup-probe`) is managed by the `tbd-backups` stack; the OIDC provider `app.terraform.io` and the `tfc-*` roles were created by hand once (root). Details: `terraform/tbd-backups/README.md`.
-- Access, audit and cost alerts: see the owner's private ops notes.
 
 ## Cloudflare
 

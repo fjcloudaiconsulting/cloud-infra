@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-Single home for the infrastructure of FJ Consulting apps (Hetzner, epic INFRA-164; AWS keeps the backup chain and account-level resources): TBD (`fjcloudaiconsulting/tbd`, in prod on this
+Single home for the infrastructure of FJ Consulting apps (Hetzner, epic INFRA-164): TBD (`fjcloudaiconsulting/tbd`, in prod on this
 cluster since the 2026-10-04 cutover) and Ziftbook (`fjcloudaiconsulting/ziftbook`, pre-launch). App repos keep
 app code, Dockerfiles and CI; this repo owns where and how they run. Work is tracked in Jira `INFRA`.
 
@@ -13,7 +13,7 @@ app code, Dockerfiles and CI; this repo owns where and how they run. Work is tra
 The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-platform` stack were removed in INFRA-176.
 
 - Three Hetzner CAX21 (ARM64) servers in nbg1 (`terraform/hetzner`), k3s HA configured by `ansible/`. No EKS, no RDS, no ALB/NAT.
-- MySQL 8.4 (TBD), Postgres 18 (Ziftbook) run in-cluster as StatefulSets; nightly dumps go to the existing Object Lock bucket in AWS.
+- MySQL 8.4 (TBD), Postgres 18 (Ziftbook) run in-cluster as StatefulSets; nightly dumps go, gpg-encrypted to the owner's backup key, to the R2 backup bucket (`terraform/cloudflare/r2.tf`).
 - Cloudflare proxies all app traffic to the Cloudflare Tunnel (`cloudflared`, the cluster's only ingress).
 - Images live on GHCR, built by the app repos. Flux (source + kustomize controllers only) applies
   `clusters/hetzner/`. Secrets are SOPS + age.
@@ -26,8 +26,6 @@ The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-
 - `clusters/<cluster>/`: Kubernetes manifests reconciled by Flux.
 - `ansible/`: host config and k3s HA for the Hetzner servers (INFRA-64), run by hand from that directory;
   runbook `ansible/README.md`. Secrets are `*.sops.yaml` there.
-- `aws/bootstrap/`: IAM documents for the HCP Terraform OIDC roles, minted once by root (see each stack's
-  README). A workspace never manages its own role.
 - `grafana/`: Grafana Cloud alert rules, contact point and dashboard as API payloads; applied by hand after merge
   (runbooks.md "Memory alerts"). Nothing applies them automatically: keep git and the stack in step.
 - CI (`.github/workflows/ci.yml`) runs, on PRs only when Terraform files changed (the job itself always reports, it is a required check), `terraform fmt -check -recursive -diff`, `init -backend=false && validate`
@@ -38,12 +36,10 @@ The Hetzner migration (epic INFRA-164) is done; the Lightsail node and the `aws-
 
 ## Constraints that are easy to break
 
-- The TBD backup chain (bucket, KMS key, uploader, `tfc-backups-*` roles, OIDC providers) lives in AWS. The TFC role trust is pinned to workspace name `tbd-backups`:
-  do not rename it. If a rename is ever unavoidable, or any trust statement must change, add the new
-  statement, apply, then remove the old one; never edit in place. Account specifics: `docs/specs/private-ops-notes.md` (local, git-excluded).
+- The backups can only be read with the owner's offline backup key (`docs/runbooks.md` "Backups to R2"): never upload a
+  dump unencrypted, and keep the ledger lock in `terraform/cloudflare/r2.tf` longer than the backup retention.
 - `thebetterdecision.com` is registered at Cloudflare Registrar (since 2026-10-06) and its DNS is served by Cloudflare
   (`terraform/cloudflare`); no Route 53 zone is left. The TBD apex is the Worker `tbd-landing`.
-- AWS calls go through the aws-mcp server; the account is in `docs/specs/private-ops-notes.md` (local).
 
 ## Docs
 

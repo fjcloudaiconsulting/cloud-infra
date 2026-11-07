@@ -1,4 +1,0 @@
-# Set in the TFC workspace, not committed. aws_account_id has no default on
-# purpose -- this repo spans two AWS accounts.
-aws_account_id = "884686184019"
-aws_region     = "eu-central-1"

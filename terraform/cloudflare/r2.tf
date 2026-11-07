@@ -76,8 +76,8 @@ resource "cloudflare_r2_custom_domain" "ziftbook_media" {
 
 # Ziftbook erasure ledger (ZIF-58, INFRA-267): one private bucket per environment, EU jurisdiction, apart from the
 # photo buckets. No CORS, no custom domain, r2.dev off (the default). Each erasure's entry under erasures/ is locked so
-# a restored backup can be erased again: the lock must outlast the oldest restorable backup (8 days plus 1 of old
-# versions in terraform/tbd-backups; tests/test_erasure_ledger.py). If backup retention grows, raise this first.
+# a restored backup can be erased again: the lock must outlast the oldest restorable backup (deleted after 8 days,
+# the backup bucket below; tests/test_erasure_ledger.py). If backup retention grows, raise this first.
 # Tokens are made by hand (docs/runbooks.md "Ziftbook erasure ledger").
 locals {
   ziftbook_ledger_lock_days = 14
@@ -129,10 +129,9 @@ resource "cloudflare_r2_bucket_lifecycle" "ziftbook_ledger" {
   ]
 }
 
-# Nightly database backups (INFRA-203): replaces the S3 Object Lock bucket in terraform/tbd-backups with the same
-# retention, every object locked for 7 days and deleted after 8. Private, EU jurisdiction, no CORS, no custom domain,
-# r2.dev off (the default). The dumps arrive gpg-encrypted to the owner's backup key (clusters/hetzner/data/db-backup.yaml);
-# the uploader's token is made by hand (docs/runbooks.md "Backups to R2").
+# Nightly database backups (INFRA-203): every object locked for 7 days and deleted after 8. Private, EU jurisdiction,
+# no CORS, no custom domain, r2.dev off (the default). The dumps arrive gpg-encrypted to the owner's backup key
+# (clusters/hetzner/data/db-backup.yaml); the uploader's token is made by hand (docs/runbooks.md "Backups to R2").
 locals {
   backup_lock_days = 7
 }
