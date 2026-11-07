@@ -1,5 +1,4 @@
-# Detect SILENCE in the off-host database backups (TBD-400, moved from tbd in INFRA-20;
-# k3s MySQL and Postgres prefixes added in INFRA-30).
+# Detect SILENCE in the off-host database backups.
 #
 # ⚠ WHY THIS LIVES IN CI AND NOT ON THE DROPLET. An alert emitted by the machine
 # being backed up cannot fire when that machine is gone, or when its cron never
@@ -7,10 +6,9 @@
 # is silence, and only an off-host observer can read silence. The machine's only
 # obligations are to fail loudly into its log and never to upload a bad artifact.
 #
-# ⚠ READ-ONLY BY CONSTRUCTION. The assumed role holds s3:ListBucket and nothing
-# else -- no GetObject, and an explicit key-policy Deny on kms:Decrypt. The
-# probe can see that a backup exists, is recent and is plausibly sized; it can
-# never read a customer's data to find out.
+# ⚠ CANNOT READ A CUSTOMER'S DATA. The probe's token is read-only and the dumps
+# are encrypted to the owner's offline key before upload; the probe looks only at
+# the listing (names, sizes, times), never at an object.
 name: Backup Freshness Probe
 
 on:
@@ -39,56 +37,49 @@ jobs:
   probe:
     name: Backup Freshness
     runs-on: ubuntu-26.04
+    # The R2 secrets are environment secrets: only main may deploy to backup-probe, so a workflow on another branch
+    # cannot read them (the role this replaced trusted refs/heads/main only).
+    environment: backup-probe
     permissions:
       contents: read
-      id-token: write
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # ⚠ continue-on-error so a FAILED ROLE ASSUMPTION becomes a
-      # `could-not-run` verdict and raises the alarm, instead of dying here
-      # with a raw AWS error that notifies nobody. This is not hypothetical:
-      # between merging this PR and applying the tbd-backups workspace the role
-      # does not exist yet, and "the probe cannot authenticate" is exactly the
-      # sort of thing that must be visible rather than a red square in a tab
-      # nobody opens.
-      - name: Assume the read-only probe role
-        id: auth
-        continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          # Created by terraform/tbd-backups. Trust is StringEquals on
-          # refs/heads/main, so a PR context cannot assume it even by rewriting
-          # this file in that PR.
-          role-to-assume: arn:aws:iam::884686184019:role/github-actions-backup-probe
-          aws-region: eu-central-1
-
+      # Read-only bucket token and endpoint as secrets: GitHub masks them in the public run log.
       - name: Check backup freshness
         id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_PROBE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_PROBE_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_BACKUP_ENDPOINT }}
         run: |
           set -uo pipefail
-          if [[ "${{ steps.auth.outcome }}" != "success" ]]; then
+          if [[ -z "$R2_ENDPOINT" || -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
             echo "verdict=could-not-run" >> "$GITHUB_OUTPUT"
-            echo "detail=could not assume the probe role. If the tbd-backups Terraform workspace has not been applied yet, that is expected and this alarm is correct." >> "$GITHUB_OUTPUT"
+            echo "detail=the probe's secrets are not set (docs/runbooks.md, Backups to R2)." >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # ⚠ The listing and the verdict are separate steps on purpose: an AWS
+          # Masking covers the whole secret only: mask the host and the account id too, which an error may print alone.
+          host=${R2_ENDPOINT#https://}; host=${host%%/*}
+          echo "::add-mask::$host"; echo "::add-mask::${host%%.*}"
+          # ⚠ The listing and the verdict are separate steps on purpose: a listing
           # failure here must read as "could not run" (exit 2), not as "stale",
           # and must not be mistaken for a healthy empty bucket.
-          # One listing per prefix (the role may list only these), merged into
-          # one document. prefix=minimum dump bytes:
+          # One listing per prefix, merged into one document. prefix=minimum dump bytes:
           # - floors are about 40% of a real dump (tbd-mysql, tbd-staging-mysql, ziftbook-postgres,
-          #   ziftbook-prod-postgres: the k3s CronJob sets).
+          #   ziftbook-prod-postgres: the backup CronJob's sets).
           floors="tbd-mysql=100000 tbd-staging-mysql=5000 ziftbook-postgres=5000 ziftbook-prod-postgres=5000"
           for spec in $floors; do
-            if ! aws s3api list-objects-v2 \
-                  --bucket tbd-mysql-backups-884686184019 \
+            if ! aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket db-backups \
                   --prefix "${spec%%=*}/" --output json > "list-${spec%%=*}.json" 2>err.txt; then
+              # The error goes to the run log only (secrets masked), never into the public issue.
+              head -c 300 err.txt >&2
               echo "verdict=could-not-run" >> "$GITHUB_OUTPUT"
-              echo "detail=listing ${spec%%=*}/ failed: $(head -c 300 err.txt | tr '\r\n' '  ')" >> "$GITHUB_OUTPUT"
+              echo "detail=listing ${spec%%=*}/ failed; see the run log." >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
@@ -138,7 +129,7 @@ jobs:
   # enabling this workflow on every run resets that counter (not documented by
   # GitHub; it is what community keepalive actions rely on), so a quiet cloud-infra
   # cannot silence the alarm. Its own job keeps actions: write away from the job
-  # that holds the AWS role and issues: write.
+  # that holds the bucket token and issues: write.
   keepalive:
     name: Keep the schedule alive
     runs-on: ubuntu-26.04
