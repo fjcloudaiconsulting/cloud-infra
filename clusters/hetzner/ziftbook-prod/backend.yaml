@@ -61,7 +61,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.32.0@sha256:91f40a42cb3a9966eefb0375bbe01ed12c8f84e0d5b09d5a907f94766bbfea02
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.38.0@sha256:a40f3e51a23d5c7ab7944f3c54a910cb37c02ce6fbb6c31cd997e84af2f17eaa
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -87,7 +87,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.32.0@sha256:cfe9b97753fc1513c17b79573a8c5a2d822a520a8ef8a89ff1c865c4899dc713
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.38.0@sha256:05268ada667b299ac13af062d21c25e88305972cf968732074d5b8cca2515a0b
           ports:
             - containerPort: 8000
           envFrom:
@@ -141,6 +141,10 @@ spec:
                   name: ziftbook-storage
                   key: secret-access-key
                   optional: true
+            # Erasure ledger: the API only checks the bucket is set (unset, erasure answers 503) and never holds a ledger
+            # key; the worker writes the entries.
+            - name: ZIF_ERASURE_LEDGER_BUCKET
+              value: ziftbook-ledger-prod
             # X-Forwarded-For is believed only from pods: the frontend sets it from cf-connecting-ip, and
             # networkpolicy.yaml admits only the frontend. Cluster CIDR, not the node's podCIDR, which changes
             # if the node re-registers. Node-local traffic (source 10.42.0.1) is owner-only (NetBird).

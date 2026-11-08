@@ -646,7 +646,7 @@ One-time owner steps, per environment, staging first:
    ```sh
    echo probe > /tmp/p; k=erasures/infra-267-probe
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: OK
-   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: 412 PreconditionFailed
+   aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p --if-none-match '*'   # worker key: refused (locked)
    aws s3api put-object --endpoint-url $E --bucket $b --key $k --body /tmp/p                       # worker key: refused (locked)
    aws s3api delete-object --endpoint-url $E --bucket $b --key $k                                  # worker key: refused (locked)
    aws s3api get-object --endpoint-url $E --bucket $b --key $k /dev/null                           # worker key: OK
@@ -654,6 +654,9 @@ One-time owner steps, per environment, staging first:
    aws s3api head-object --endpoint-url $E --bucket $b --key $k                                    # photo key: 403
    rm /tmp/p
    ```
+
+   R2 checks the lock before the condition, so the second write answers ObjectLockedByBucketPolicy, not 412; the worker
+   treats any refused write for a key that is there as written.
 
    The probe is not an erasure and stays until the lifecycle removes it (15 days): a staging reapply in that window
    refuses it (`ledger entry refused`) unless run with `--skip-key` for it.
@@ -1173,10 +1176,16 @@ fire alongside `NodeMetricsAbsent`.
 | `TbdCspReportSinkFailing` | any CSP report not stored in the last hour because the counter store or the write failed (`outcome` `counter_unavailable` or `write_failed`); the sink fails open | warning, daily |
 | `TbdProcessDown` | a production process reported nothing for 10 min: `tbd-api`, `tbd-scheduler` (`tbd_process_up`) or `tbd-frontend` (cAdvisor, namespace `tbd-prod`). The scheduler has no other alarm; a dead `tbd-api` also trips `ProdEndpointDown` | critical, every 4 h |
 | `TbdStagingProcessDown` | the same on staging: `tbd-api`, `tbd-mcp` and `tbd-frontend` (namespace `tbd-staging`). Staging has no scheduler pod | warning, daily |
+| `TbdNoSuperadmin` | the scheduler's superadmin probe counts 0 active platform superadmins in production (`tbd_platform_active_superadmins` < 1): a populated install where `/admin` refuses everyone. The count gauge, not the probe's ERROR line: tbd-prod logs are not shipped | critical, every 4 h |
+| `TbdSuperadminProbeStale` | `tbd_platform_active_superadmins_probed_at_seconds` (the probe's last successful read, scheduler, production) is more than 45 min old, three ticks, or missing, for 15 min: `TbdNoSuperadmin` cannot fire. The gauge re-exports its last value, so the age is what shows a stalled probe | warning, daily |
 
 When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
 of dropped reports is either a real CSP regression (a release that blocks its own assets) or someone flooding the
 report endpoint; the app decides which, not infra.
+
+When `TbdNoSuperadmin` fires: recover a superadmin with tbd's `docs/operations/SUPERADMIN_RECOVERY.md`. When
+`TbdSuperadminProbeStale` fires: `kubectl -n tbd-prod logs deploy/scheduler --since=2h | grep -E 'superadmin_floor|tick'`
+for `scheduler.superadmin_floor.failed` (the database read fails) or no `scheduler.tick.complete` (the loop is stuck).
 
 When a process alert fires: `kubectl -n tbd-prod get pods` (or `tbd-staging`) for a pod that is not Running or keeps
 restarting, then its `kubectl logs --previous`. All pods Running: the process runs but its export fails, so check the
@@ -1191,6 +1200,11 @@ Before applying the process rules, check that
 `count by (service_name, deployment_environment_name) (tbd_process_up)` returns the four pairs `tbd-api` and
 `tbd-scheduler` in production, `tbd-api` and `tbd-mcp` in staging: a different name or label fires the rule for that
 process at once (it fails loud, not silent).
+Before applying the superadmin rules, check in Explore that
+`max by (service_name) (tbd_platform_active_superadmins_probed_at_seconds{deployment_environment_name="production"})`
+returns `tbd-scheduler` with a recent epoch (a different name makes `TbdSuperadminProbeStale` fire at once), and that
+`max by (service_name) (tbd_platform_active_superadmins{deployment_environment_name="production"})` returns
+`tbd-scheduler` with a value of 1 or more (a different name leaves `TbdNoSuperadmin` silent).
 
 ### Find a request's logs
 

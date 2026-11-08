@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.32.0@sha256:91f40a42cb3a9966eefb0375bbe01ed12c8f84e0d5b09d5a907f94766bbfea02
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/migrations:v0.38.0@sha256:a40f3e51a23d5c7ab7944f3c54a910cb37c02ce6fbb6c31cd997e84af2f17eaa
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
@@ -67,7 +67,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: worker
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.32.0@sha256:cfe9b97753fc1513c17b79573a8c5a2d822a520a8ef8a89ff1c865c4899dc713
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/backend:v0.38.0@sha256:05268ada667b299ac13af062d21c25e88305972cf968732074d5b8cca2515a0b
           command: [python, -m, app.worker]
           envFrom:
             - configMapRef:
@@ -131,6 +131,22 @@ spec:
                   name: ziftbook-storage
                   key: secret-access-key
                   optional: true
+            # Erasure ledger (docs/runbooks.md "Ziftbook erasure ledger"): on ZIF_S3_ENDPOINT above, the same .eu endpoint.
+            # Only the worker writes it, with its own Read & Write token in Secret ziftbook-ledger-worker, never the photo
+            # key. Not optional: a worker without its key lets erasures commit with no ledger entry, so the pod waits for the
+            # Secret instead (CreateContainerConfigError until it exists).
+            - name: ZIF_ERASURE_LEDGER_BUCKET
+              value: ziftbook-ledger-prod
+            - name: ZIF_ERASURE_LEDGER_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-ledger-worker
+                  key: access-key-id
+            - name: ZIF_ERASURE_LEDGER_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ziftbook-ledger-worker
+                  key: secret-access-key
           resources:
             requests:
               cpu: 20m
