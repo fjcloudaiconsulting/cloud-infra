@@ -39,7 +39,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.37.0@sha256:1e2f9592d7f4c066c9fd62f85c496d718cbeda4cf1a34b811b929dcec64bc5d2
+          image: ghcr.io/fjcloudaiconsulting/ziftbook/frontend:v0.38.0@sha256:d515725fc01e7254814b1f40ba4b29edd87f86b8d709b6d3299a7a0ebfab5c6f
           ports:
             - containerPort: 3000
           env:

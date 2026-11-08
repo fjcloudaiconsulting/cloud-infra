@@ -105,7 +105,7 @@ jobs:
         # which fail here instead of skipping without kustomize.
         run: |
           set -euo pipefail
-          curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$KUSTOMIZE_VERSION/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 15 -o kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$KUSTOMIZE_VERSION/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
           echo "$KUSTOMIZE_SHA256  kustomize.tgz" | sha256sum -c -
           tar -xzf kustomize.tgz kustomize
           export KUSTOMIZE="$PWD/kustomize" RENDER_CHECK_REQUIRED=1
@@ -127,7 +127,7 @@ jobs:
       - name: kubeconform
         run: |
           set -euo pipefail
-          curl -fsSLo kc.tgz "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz"
+          curl -fsSL --retry 5 --retry-delay 15 -o kc.tgz "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz"
           echo "$KUBECONFORM_SHA256  kc.tgz" | sha256sum -c -
           tar -xzf kc.tgz kubeconform
           # No published schema for CRDs themselves (they come from `flux install --export`);
