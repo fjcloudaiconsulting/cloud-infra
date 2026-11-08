@@ -469,6 +469,21 @@ volume). A MySQL dump replaces every table it contains (`DROP TABLE IF EXISTS`).
    ```bash
    echo 'DELETE FROM auth_session_families;' | my tbd
    ```
+
+   Then revoke every TBD API token: personal tokens and OAuth grants share `api_tokens`, and one revoked after the
+   dump would come back live. Users and MCP clients mint or authorize again. Again `tbd_staging` for a staging set;
+   a set from before the table existed fails with "doesn't exist", which is safe to ignore.
+
+   ```bash
+   echo 'UPDATE api_tokens SET revoked_at = UTC_TIMESTAMP() WHERE revoked_at IS NULL;' | my tbd
+   ```
+
+   And revoke every open TBD invitation: one revoked after the dump would come back with a working link. Owners
+   resend the invitations they still want.
+
+   ```bash
+   echo 'UPDATE invitations SET revoked_at = UTC_TIMESTAMP() WHERE accepted_at IS NULL AND revoked_at IS NULL;' | my tbd
+   ```
 8. Resume (`suspend` was set by hand, so Flux does not clear it):
 
    ```bash
