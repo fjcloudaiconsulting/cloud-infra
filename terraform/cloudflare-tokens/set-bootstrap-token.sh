@@ -11,7 +11,7 @@ CF="$(cat)"; CF="${CF//[$'\r\n ']/}"
 export CF
 python3 - <<'PY'
 import json, os, re, sys, urllib.request, urllib.error
-ACC, WS = "fb5eb042529f2621c6de3f34c6801174", "ws-NY4KrCLeGst38u6Z"
+ACC = "fb5eb042529f2621c6de3f34c6801174"
 # Must match local.pg in terraform/cloudflare-tokens/main.tf.
 PG = {"4755a26eedb94da69e1066d98aa820be": "DNS Write",
       "c03055bc037c4ea9afb9a9f104b7b721": "SSL and Certificates Write", "c8fed203ed3043cba015a93ad1616f1f": "Zone Read",
@@ -28,6 +28,13 @@ def call(url, tok, method="GET", body=None, ctype="application/json"):
             return r.status, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, None
+
+# The workspace by name, before anything else: a failed lookup stops the run with nothing stored.
+st, d = call("https://app.terraform.io/api/v2/organizations/FlamaCorp/workspaces/cloudflare-tokens", tfc,
+             ctype="application/vnd.api+json")
+if st != 200:
+    sys.exit("HCP Terraform: cannot read workspace cloudflare-tokens (HTTP %s); nothing stored." % st)
+WS = d["data"]["id"]
 
 api = "https://api.cloudflare.com/client/v4/accounts/" + ACC
 st, d = call(api + "/tokens/verify", cf)
