@@ -20,13 +20,16 @@ cross-references them.
 
 ## Current state
 
-Snapshot of 2026-11-07. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
+Snapshot of 2026-11-08. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
 column below is the assessment's 2026-10-25 verdict and is not updated here.
 
 - **Merged:** every fix PR in the table below (#286 to #303, #341 to #348), and the follow-ups #304 to #311 and #319.
   The Merged and Commit columns name the squash commits.
 - **Confirmed and closed in Jira on 2026-11-07:** the post-merge checks of K8S-02, K8S-04, K8S-05, K8S-06, K8S-07,
   K8S-08, ANS-07, EDGE-04, EDGE-05 and EDGE-07, among others.
+- **Merged on 2026-11-07 and 2026-11-08:** #359 (nightly backups go only to the encrypted bucket copy), #361 (the
+  retired backup stack and its roles removed, which retires TF-02 and TF-05), #365 (a real restore revokes every TBD
+  API token and open invitation) and #367 (part of TF-07: no workspace id in the repo, with a test).
 - **Open:** #312 (GHA-09: Renovate reads GHCR as a dedicated machine user), waiting on the owner's account steps in its
   description (INFRA-253).
 - **Waiting on the owner:** the post-merge checks in each PR description (most INFRA issues stay In Progress until
@@ -90,6 +93,10 @@ this file only when the owner asks, for example after a merge wave.
 | #342 | `fix/infra-228-apex-dmarc` | EDGE-03 (non-sending domains) | DNS records after the owner approves the apply | Merged 2026-11-07 (4f8af87) |
 | #344 | `fix/infra-231-caa-dnssec` | EDGE-08 | DNS signing and CA records after the owner approves the apply | Merged 2026-11-07 (eb22c0c) |
 | #348 | `fix/infra-235-restore-safety` | DATA-01 | The next nightly backup writes the new Postgres format | Merged 2026-11-07 (23d1da5) |
+| #359 | `feat/infra-203-drop-s3-uploader` | DATA-04 (context) | The backup Job uploads only the encrypted copy; the next night is the check | Merged 2026-11-07 (e8217f3) |
+| #361 | `chore/infra-203-remove-aws-backup-chain` | TF-02, TF-05 | Removes the retired backup stack and its role documents; nothing applies (its workspace is deleted) | Merged 2026-11-07 (259227f) |
+| #365 | `docs/infra-148-restore-revokes-tbd-tokens` | DATA-01 (follow-up) | Documentation and its test only | Merged 2026-11-08 (2531b71) |
+| #367 | `fix/infra-233-workspace-id-by-name` | TF-07 (part) | A helper script and a test only | Merged 2026-11-08 (84053cb) |
 
 ## Findings
 
@@ -100,12 +107,12 @@ elsewhere), **Accepted** (no change).
 | ID | Title | Status | PR | Merged | Commit | Owner action | Jira |
 |---|---|---|---|---|---|---|---|
 | TF-01 | Terraform plan-time credentials | Partial | #299 | 2026-11-01 | 1479d11 | Review HCP Terraform run settings and per-phase credentials (private report) | INFRA-226 |
-| TF-02 | Backup apply role self-management | Partial | #299 | 2026-11-01 | 1479d11 | Decide the permissions-boundary change (private report) | INFRA-207 |
+| TF-02 | Backup apply role self-management | Partial | #299, #361 | 2026-11-01, 2026-11-07 | 1479d11, 259227f | None: the role is gone with its stack (#361); close the account (INFRA-203) | INFRA-207 |
 | TF-03 | Secrets kept in Terraform state | Needs owner | | | | Restrict state access in HCP Terraform | INFRA-230 |
 | TF-04 | Cloudflare workspace token scope | Needs owner | | | | Decide on splitting the account-scoped permissions | INFRA-226 |
-| TF-05 | Backup plan role read scope | Fixed | #299 | 2026-11-01 | 1479d11 | Simulate the policy before approving the `tbd-backups` apply (README) | INFRA-246 |
+| TF-05 | Backup plan role read scope | Fixed | #299, #361 | 2026-11-01, 2026-11-07 | 1479d11, 259227f | None: the role is gone with its stack (#361) | INFRA-246 |
 | TF-06 | NetBird group membership binding | Needs owner | | | | Provide peer IDs; enable peer approval and posture checks | INFRA-247 |
-| TF-07 | Identifiers committed to the repository | Cross-ref | | | | Tracked as INFRA-233 | INFRA-233 |
+| TF-07 | Identifiers committed to the repository | Cross-ref | #367 | 2026-11-08 | 84053cb | Tracked as INFRA-233 (the rest waits on workspace variables) | INFRA-233 |
 | TF-08 | Lock-file platform hashes and version constraint | Fixed | #299 | 2026-11-01 | 1479d11 | Hash the `cloudflare-tokens` lock for both platforms on its next bump | INFRA-248 |
 | K8S-01 | Per-tenant Flux reconciliation | Needs owner | | | | Decide the Flux tenancy restructure (after the Ziftbook release) | INFRA-209 |
 | K8S-02 | Digest pins for upgrade and controller images | Fixed | #286, #295 | 2026-11-01, 2026-11-01 | 6a6219d, dc232bf | Merge #286 while no k3s roll is in progress | INFRA-218 |
