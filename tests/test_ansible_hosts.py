@@ -497,6 +497,18 @@ class PinnedDownloads(unittest.TestCase):
         for where, name, args in found:
             self.assertRegex(str(args.get("checksum", "")), r"^sha256:", f"{where}: {name}")
 
+    def test_k3s_binary_is_pinned_for_k3s_version(self):
+        # ANS-06: a k3s_version bump (Renovate's k3s group) must bring the new version's sha256 in the same PR.
+        v = all_vars()
+        self.assertEqual(list(v["k3s_binary_sha256"]), [v["k3s_version"]],
+                         "k3s_binary_sha256 must hold exactly k3s_version's line (group_vars/all.yml says how to get it)")
+        self.assertRegex(str(v["k3s_binary_sha256"][v["k3s_version"]]), r"^[0-9a-f]{64}$")
+        binaries = [a for _, _, a in self.get_urls() if a.get("dest") == "/usr/local/bin/k3s"]
+        self.assertEqual(len(binaries), 1)
+        self.assertEqual(binaries[0]["url"],
+                         "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s-arm64")
+        self.assertEqual(binaries[0]["checksum"], "sha256:{{ k3s_binary_sha256[k3s_version] }}")
+
     def test_k3s_installer_is_pinned_by_commit_and_hash(self):
         v = all_vars()
 
