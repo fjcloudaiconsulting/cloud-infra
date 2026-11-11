@@ -193,6 +193,32 @@
         mode: "0755"
         force: true
 
+    # ANS-06: a node without k3s gets the pinned binary first. The collection then finds k3s_version installed, skips
+    # its own download and runs install.sh with INSTALL_K3S_SKIP_DOWNLOAD. A node that has k3s keeps it: versions move
+    # through system-upgrade-controller, never this play.
+    - name: Look for an installed k3s binary
+      when: k3s_apply | bool
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Install the pinned k3s binary
+      when: k3s_apply | bool and not k3s_binary.stat.exists
+      block:
+        - name: The pin is for arm64 servers
+          ansible.builtin.assert:
+            that: ansible_facts['architecture'] == 'aarch64'
+            msg: "k3s_binary_sha256 pins k3s-arm64; this host is {{ ansible_facts['architecture'] }}"
+
+        - name: Download k3s, checked against its pinned sha256
+          ansible.builtin.get_url:
+            url: https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s-arm64
+            checksum: sha256:{{ k3s_binary_sha256[k3s_version] }}
+            dest: /usr/local/bin/k3s
+            owner: root
+            group: root
+            mode: "0755"
+
   roles:
     # prereq (forwarding sysctls, packages) never restarts k3s, so it runs every time and corrects drift.
     - role: k3s.orchestration.prereq

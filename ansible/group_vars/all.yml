@@ -6,9 +6,14 @@ k3s_version: v1.36.5+k3s1
 # The k3s installer site.yml puts on a server: install.sh at the commit of a k3s tag, checked against this sha256. It
 # installs whatever k3s_version names, so a k3s bump does not need a new pin. To move it: the tag's commit
 # (`gh api 'repos/k3s-io/k3s/commits/<tag, + as %2B>' --jq .sha`) and `sha256sum` of install.sh at that commit.
-# The k3s binary itself is still fetched by install.sh and checked only against the release's own sha256sum file.
 k3s_install_sh_commit: "3dd98cc58ec34991e7e59b93663eee2e26fc1f65"  # v1.36.5+k3s1
 k3s_install_sh_sha256: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
+# The k3s binary a new or rebuilt server gets (ANS-06): the release's k3s-arm64, checked against this sha256, so
+# install.sh runs with its download skipped. Keyed by version: a k3s_version bump without its line fails
+# tests/test_ansible_hosts.py. In the same PR, replace the line with the new version's
+# (`curl -sL https://github.com/k3s-io/k3s/releases/download/<tag, + as %2B>/sha256sum-arm64.txt | grep ' k3s-arm64$'`).
+k3s_binary_sha256:
+  v1.36.5+k3s1: "135e34cb9e8a1cfae3cb55577789e93501efe7edc080a8b2630458a85b07721e"
 
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.

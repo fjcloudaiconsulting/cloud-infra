@@ -1281,7 +1281,9 @@ Promoting a release of a commit older than 30 days: `promote-release` never rebu
 k3s is upgraded by Rancher's system-upgrade-controller (`clusters/hetzner/system-upgrade/`, INFRA-179), not by hand.
 The k3s pin lives twice: `version` in both Plans (`plans.yaml`, the source of truth for the running cluster) and
 `k3s_version` in `ansible/group_vars/all.yml` (what a rebuilt node installs). Renovate bumps both in one PR, a patch
-only after the release is 7 days old. Merging that PR is the upgrade: Flux applies the Plans and the controller rolls
+only after the release is 7 days old. Its tests fail until the PR also carries the new version's `k3s_binary_sha256`
+line (the sha256 a rebuilt node's binary is checked against; `group_vars/all.yml` has the command): add it on the
+Renovate branch. Merging that PR is the upgrade: Flux applies the Plans and the controller rolls
 the servers one at a time. The two app nodes go first, in no fixed order (Plan `k3s-app`: cordon, drain, upgrade,
 uncordon), then db-1 (Plan `k3s-db`: cordon only, no drain, because its local-path volumes would take the databases
 down). db-1's prepare waits until every app node carries the new version's label, so it is always last. Each prepare
