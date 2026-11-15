@@ -207,8 +207,9 @@ runtime value is left in GitHub. A new repo in the org gets its rows here.
 Hosted Mend app, Free plan, repos selected in
 the Mend installation settings of the org.
 
-- **`GHCR_READ_TOKEN`**: Mend org secret, a classic PAT with only `read:packages`, 90-day expiry, created
-  2026-10-02 (expires around 2026-12-31). cloud-infra's `renovate.json` reads it as
+- **`GHCR_READ_TOKEN`**: Mend org secret, a classic PAT of the owner's account with only `read:packages`, no expiry
+  (accepted: it can read private packages in every org that account belongs to, until Renovate runs without a
+  personal token). cloud-infra's `renovate.json` reads it as
   `{{ secrets.GHCR_READ_TOKEN }}`; Mend rejects encrypted secrets in repo config. Rotation: new token,
   replace the Mend secret.
 - cloud-infra rules in `renovate.json`: database majors never proposed (data dirs upgrade by hand after a
@@ -365,7 +366,7 @@ commit body only.
 
 | What | When | Rotation |
 |---|---|---|
-| `GHCR_READ_TOKEN` (Mend) | about 2026-12-31 | Mend section |
+| `GHCR_READ_TOKEN` (Mend) | no expiry, rotate on suspicion | Mend section |
 | `ghcr-pull` credentials | with their token | Cluster section |
 | NetBird `owner-admin` token | 90 days from the mint | [Bootstrap runbook](runbooks.md#hetzner-cluster-bootstrap) step 6 |
 | R2 token `db-backups-uploader` | no expiry, rotate on suspicion | Cluster section |
