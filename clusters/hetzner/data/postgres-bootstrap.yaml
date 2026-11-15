@@ -9,6 +9,9 @@
 # the same value is in ziftbook-staging/ziftbook-worker-database.secret.yaml (staging's worker URL). Rotate the
 # two together (docs/runbooks.md "Ziftbook production secrets").
 # admin-password is read only at initdb: rotate it with ALTER ROLE postgres PASSWORD first.
+# ziftbook_admin (Secret postgres-ziftbook-admin, shared by both Jobs) is the admin login the Jobs are to run as instead of
+# the superuser; ziftbook_backup (Secret postgres-ziftbook-backup) is staging's backup login. Both are created here by the
+# superuser: only a superuser can give the backup login BYPASSRLS.
 # bootstrap.sql runs in one transaction that ends with the same end-state check as postgres-bootstrap-prod.yaml (no
 # login of one environment can open the other's database): a run that fails it, or stops anywhere, changes nothing.
 # A Failed Job does not make the Flux Kustomization unready: check `kubectl -n data get job` after a change.
@@ -67,8 +70,48 @@ spec:
               until pg_isready -q; do sleep 2; done
               exec psql -v ON_ERROR_STOP=1 <<'SQL'
               \set ON_ERROR_STOP on
+              \getenv admin_password ZIF_ADMIN_PASSWORD
+              \getenv backup_password ZIF_BACKUP_PASSWORD
+
+              -- Stop before any change if a password is unset or empty: PASSWORD '' would clear that login role's
+              -- password. The message never holds a value.
+              \set admin_password_missing true
+              \if :{?admin_password}
+              SELECT :'admin_password' = '' AS admin_password_missing \gset
+              \endif
+              \if :admin_password_missing
+              DO $msg$ BEGIN RAISE EXCEPTION 'ZIF_ADMIN_PASSWORD is unset or empty'; END $msg$;
+              \endif
+              \set backup_password_missing true
+              \if :{?backup_password}
+              SELECT :'backup_password' = '' AS backup_password_missing \gset
+              \endif
+              \if :backup_password_missing
+              DO $msg$ BEGIN RAISE EXCEPTION 'ZIF_BACKUP_PASSWORD is unset or empty'; END $msg$;
+              \endif
+
               BEGIN;
               \i /work/bootstrap.sql
+
+              -- The admin login that is to run both Jobs instead of the superuser: it creates roles and databases, is no
+              -- superuser, holds ADMIN (without their privileges) on the roles the Jobs manage, and owns the app databases,
+              -- which bootstrap.sql's REVOKE TEMPORARY and schema grant need. Shared by both Jobs, like the app roles.
+              SELECT 'CREATE ROLE ziftbook_admin'
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ziftbook_admin') \gexec
+              ALTER ROLE ziftbook_admin WITH LOGIN NOSUPERUSER CREATEROLE CREATEDB NOBYPASSRLS NOINHERIT CONNECTION LIMIT 1
+                PASSWORD :'admin_password';
+              GRANT ziftbook_app, ziftbook_migrate, ziftbook_worker TO ziftbook_admin WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+              ALTER DATABASE :"DBNAME" OWNER TO ziftbook_admin;
+
+              -- This environment's backup login: reads every row of its own database only (BYPASSRLS, which only a
+              -- superuser can grant: the tables force row-level security, and pg_dump refuses a table a policy applies to).
+              -- No other attribute, one connection. The admin gets no ADMIN on it.
+              SELECT 'CREATE ROLE ziftbook_backup'
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ziftbook_backup') \gexec
+              ALTER ROLE ziftbook_backup WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB BYPASSRLS CONNECTION LIMIT 1
+                PASSWORD :'backup_password';
+              GRANT pg_read_all_data TO ziftbook_backup;
+              GRANT CONNECT ON DATABASE :"DBNAME" TO ziftbook_backup;
 
               -- Staging logs in as the shared roles and production only SETs ROLE to them: a role's CONNECTION LIMIT
               -- counts the sessions that logged in as it, so these cap staging alone. Each is the full pool of one pod
@@ -83,7 +126,8 @@ spec:
               -- The end state, checked before COMMIT; the same block ends both Jobs. No staging login can open
               -- ziftbook_prod and no production login can open ziftbook, through any grant or membership; every staging
               -- login has its connection cap and none may take the slots reserved for production, which every
-              -- production login may. Otherwise the Job fails and the run changes nothing. A role or database not
+              -- production login may; the admin and backup logins have one connection each, and no role but postgres is a
+              -- superuser. Otherwise the Job fails and the run changes nothing. A role or database not
               -- created yet is skipped. A named dollar quote: Kubernetes turns a double dollar sign in a command into a
               -- single one.
               DO $check$
@@ -92,11 +136,14 @@ spec:
                 uncapped text;
                 reserved text;
                 unreserved text;
+                service text;
+                superusers text;
               BEGIN
                 SELECT string_agg(c.rol || ' on ' || c.db, ', ') INTO crossed
                 FROM (VALUES ('ziftbook_app', 'ziftbook_prod'), ('ziftbook_migrate', 'ziftbook_prod'),
-                             ('ziftbook_worker', 'ziftbook_prod'), ('ziftbook_prod_app', 'ziftbook'),
-                             ('ziftbook_prod_migrate', 'ziftbook'), ('ziftbook_prod_worker', 'ziftbook')) AS c (rol, db)
+                             ('ziftbook_worker', 'ziftbook_prod'), ('ziftbook_backup', 'ziftbook_prod'),
+                             ('ziftbook_prod_app', 'ziftbook'), ('ziftbook_prod_migrate', 'ziftbook'),
+                             ('ziftbook_prod_worker', 'ziftbook'), ('ziftbook_prod_backup', 'ziftbook')) AS c (rol, db)
                 JOIN pg_roles r ON r.rolname = c.rol
                 JOIN pg_database d ON d.datname = c.db
                 WHERE has_database_privilege(r.oid, d.oid, 'CONNECT');
@@ -111,16 +158,26 @@ spec:
                   RAISE EXCEPTION 'staging logins without their connection cap: %', uncapped;
                 END IF;
                 SELECT string_agg(rolname, ', ') INTO reserved FROM pg_roles
-                WHERE rolname IN ('ziftbook_app', 'ziftbook_migrate', 'ziftbook_worker')
+                WHERE rolname IN ('ziftbook_app', 'ziftbook_migrate', 'ziftbook_worker', 'ziftbook_backup')
                   AND pg_has_role(oid, 'pg_use_reserved_connections', 'USAGE');
                 IF reserved IS NOT NULL THEN
                   RAISE EXCEPTION 'staging logins may take the reserved connection slots: %', reserved;
                 END IF;
                 SELECT string_agg(rolname, ', ') INTO unreserved FROM pg_roles
-                WHERE rolname IN ('ziftbook_prod_app', 'ziftbook_prod_migrate', 'ziftbook_prod_worker')
+                WHERE rolname IN ('ziftbook_prod_app', 'ziftbook_prod_migrate', 'ziftbook_prod_worker', 'ziftbook_prod_backup')
                   AND NOT pg_has_role(oid, 'pg_use_reserved_connections', 'USAGE');
                 IF unreserved IS NOT NULL THEN
                   RAISE EXCEPTION 'production logins cannot take the reserved connection slots: %', unreserved;
+                END IF;
+                SELECT string_agg(rolname || ' (' || rolconnlimit || ')', ', ') INTO service FROM pg_roles
+                WHERE rolname IN ('ziftbook_admin', 'ziftbook_backup', 'ziftbook_prod_backup')
+                  AND (rolconnlimit < 0 OR rolconnlimit > 1);
+                IF service IS NOT NULL THEN
+                  RAISE EXCEPTION 'admin or backup logins without their one-connection cap: %', service;
+                END IF;
+                SELECT string_agg(rolname, ', ') INTO superusers FROM pg_roles WHERE rolsuper AND rolname <> 'postgres';
+                IF superusers IS NOT NULL THEN
+                  RAISE EXCEPTION 'superusers other than postgres: %', superusers;
                 END IF;
               END
               $check$;
@@ -152,6 +209,16 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: postgres-ziftbook-worker
+                  key: password
+            - name: ZIF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-admin
+                  key: password
+            - name: ZIF_BACKUP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-backup
                   key: password
           resources:
             requests:

@@ -18,6 +18,11 @@ LOGINS = {
     "staging": ("ziftbook_app", "ziftbook_migrate", "ziftbook_worker"),
     "production": ("ziftbook_prod_app", "ziftbook_prod_migrate", "ziftbook_prod_worker"),
 }
+# Logins that are not the apps': the admin the Jobs are to run as (shared), and each environment's backup login. One
+# connection each.
+ADMIN = "ziftbook_admin"
+BACKUP = {"staging": "ziftbook_backup", "production": "ziftbook_prod_backup"}
+SERVICE_CAP = 1
 CHECK = re.compile(r"(?s)DO \$check\$\n(.*)\n\$check\$;\Z")
 # Connections per pod at full pool, from the Ziftbook code of the running release (app/main.py, app/setup.py,
 # app/worker.py, migrations/env.py): the API's pool of 5 + 10 overflow and its one-off start-up check, the worker's 21
@@ -131,8 +136,8 @@ class EnvironmentBoundary(unittest.TestCase):
     def test_the_check_covers_every_login_against_the_other_database(self):
         body = check_block("production")
         pairs = set(re.findall(r"\('(\w+)', '(\w+)'\)", body))
-        crossed = {(role, DATABASE["production"]) for role in LOGINS["staging"]}
-        crossed |= {(role, DATABASE["staging"]) for role in LOGINS["production"]}
+        crossed = {(role, DATABASE["production"]) for role in LOGINS["staging"] + (BACKUP["staging"],)}
+        crossed |= {(role, DATABASE["staging"]) for role in LOGINS["production"] + (BACKUP["production"],)}
         self.assertEqual(pairs, crossed)
         self.assertIn("has_database_privilege(r.oid, d.oid, 'CONNECT')", body)
         self.assertRegex(body, r"IF crossed IS NOT NULL THEN\n\s*RAISE EXCEPTION ")
@@ -165,7 +170,7 @@ class ConnectionSlots(unittest.TestCase):
         m = re.search(r"(?m)^GRANT pg_use_reserved_connections TO ([\w, ]+)\n\s*WITH INHERIT TRUE;$",
                       transaction("production"))
         self.assertIsNotNone(m, "the production Job does not grant pg_use_reserved_connections, inherited")
-        self.assertEqual({r.strip() for r in m.group(1).split(",")}, set(LOGINS["production"]))
+        self.assertEqual({r.strip() for r in m.group(1).split(",")}, {*LOGINS["production"], BACKUP["production"]})
 
     def test_the_check_requires_the_caps_and_the_reservation(self):
         body = check_block("production")
@@ -173,9 +178,9 @@ class ConnectionSlots(unittest.TestCase):
                          "the check's caps differ from the ones the Jobs set")
         self.assertRegex(body, r"WHERE r\.rolconnlimit < 0 OR r\.rolconnlimit > c\.cap;\n\s*IF uncapped IS NOT NULL THEN"
                                r"\n\s*RAISE EXCEPTION ")
-        self.assertEqual(reservation_clause(body, negated=False), set(LOGINS["staging"]),
+        self.assertEqual(reservation_clause(body, negated=False), {*LOGINS["staging"], BACKUP["staging"]},
                          "the check does not refuse the reserved slots to every staging login")
-        self.assertEqual(reservation_clause(body, negated=True), set(LOGINS["production"]),
+        self.assertEqual(reservation_clause(body, negated=True), {*LOGINS["production"], BACKUP["production"]},
                          "the check does not require the reserved slots for every production login")
 
     def test_connection_budget(self):
@@ -184,13 +189,14 @@ class ConnectionSlots(unittest.TestCase):
         superuser = int(s.get("superuser_reserved_connections", SUPERUSER_RESERVED_DEFAULT))
         self.assertEqual(set(staging_caps()), set(LOGINS["staging"]), "a staging login has no cap to budget")
         self.assertGreater(reserved, 0, "no slots reserved for production")
-        caps = sum(staging_caps().values())
+        # The logins without the reserved slots: staging's, its backup and the admin.
+        caps = sum(staging_caps().values()) + 2 * SERVICE_CAP
         self.assertLessEqual(caps + reserved + superuser, total, "staging's caps reach into the reserved slots")
-        self.assertLessEqual(superuser + caps + sum(full_pools("production").values()), total,
-                             "production's full pools do not fit beside staging at its caps")
+        self.assertLessEqual(superuser + caps + sum(full_pools("production").values()) + SERVICE_CAP, total,
+                             "production's full pools and backup do not fit beside staging at its caps")
         # Postgres refuses logins without pg_use_reserved_connections once fewer than reserved + superuser slots are
         # free, whoever holds the rest: a larger reservation refuses staging below its caps.
-        self.assertLessEqual(superuser + caps + standing_pools("production") + reserved, total,
+        self.assertLessEqual(superuser + caps + standing_pools("production") + SERVICE_CAP + reserved, total,
                              "the reservation refuses staging below its caps beside production's standing pools")
 
     def test_a_slot_is_released_soon_by_a_stalled_or_lost_client(self):
@@ -199,6 +205,59 @@ class ConnectionSlots(unittest.TestCase):
         idle, interval, count = (int(s.get(f"tcp_keepalives_{k}", "0")) for k in ("idle", "interval", "count"))
         self.assertTrue(idle and interval and count, "postgres.yaml: tcp_keepalives_idle, _interval and _count")
         self.assertLess(idle + interval * count, NODE_LOSS_EVICTION_SECONDS)
+
+
+class ServiceLogins(unittest.TestCase):
+    """The admin login and the backup logins that are to replace the superuser's network logins."""
+
+    def test_both_jobs_make_the_same_admin_no_superuser_owning_their_database(self):
+        stmts = {}
+        for env in JOBS:
+            tx = transaction(env)
+            m = re.search(r"(?m)^ALTER ROLE ziftbook_admin WITH ([A-Z ]+) CONNECTION LIMIT (\d+)\n\s*PASSWORD :'admin_password';$", tx)
+            self.assertIsNotNone(m, env)
+            stmts[env] = m.groups()
+            attrs = set(m.group(1).split())
+            self.assertTrue({"LOGIN", "NOSUPERUSER", "NOBYPASSRLS", "NOINHERIT", "CREATEROLE", "CREATEDB"} <= attrs, env)
+            self.assertEqual(int(m.group(2)), SERVICE_CAP, env)
+            self.assertIn('ALTER DATABASE :"DBNAME" OWNER TO ziftbook_admin;', tx, env)
+            self.assertRegex(tx, r"(?m)^GRANT ziftbook_app, ziftbook_migrate, ziftbook_worker TO ziftbook_admin "
+                                 r"WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;$", env)
+        self.assertEqual(stmts["staging"], stmts["production"])
+
+    def test_each_backup_login_reads_only_its_own_database(self):
+        for env, role in BACKUP.items():
+            tx = transaction(env)
+            m = re.search(rf"(?m)^ALTER ROLE {role} WITH ([A-Z ]+) CONNECTION LIMIT (\d+)\n\s*PASSWORD :'backup_password';$", tx)
+            self.assertIsNotNone(m, env)
+            attrs = set(m.group(1).split())
+            self.assertTrue({"LOGIN", "NOSUPERUSER", "NOCREATEROLE", "NOCREATEDB", "BYPASSRLS"} <= attrs, env)
+            self.assertEqual(int(m.group(2)), SERVICE_CAP, env)
+            self.assertIn(f"GRANT pg_read_all_data TO {role};", tx, env)
+            self.assertIn(f'GRANT CONNECT ON DATABASE :"DBNAME" TO {role};', tx, env)
+            # ADMIN on a BYPASSRLS login would let the admin read every row through it.
+            self.assertNotRegex(tx, rf"GRANT [\w, ]*\b{role}\b[\w, ]* TO ziftbook_admin", env)
+
+    def test_the_check_caps_the_service_logins_and_refuses_other_superusers(self):
+        body = check_block("production")
+        m = re.search(r"WHERE rolname IN \(([^)]*)\)\n\s*AND \(rolconnlimit < 0 OR rolconnlimit > (\d+)\);", body)
+        self.assertIsNotNone(m, "the check does not cap the admin and backup logins")
+        self.assertEqual(set(re.findall(r"'(\w+)'", m.group(1))), {ADMIN, *BACKUP.values()})
+        self.assertEqual(int(m.group(2)), SERVICE_CAP)
+        self.assertIn("WHERE rolsuper AND rolname <> 'postgres';", body)
+
+    def test_every_new_password_is_guarded_and_read_from_its_own_secret(self):
+        secrets = {"staging": {"ZIF_ADMIN_PASSWORD": "postgres-ziftbook-admin", "ZIF_BACKUP_PASSWORD": "postgres-ziftbook-backup"},
+                   "production": {"ZIF_ADMIN_PASSWORD": "postgres-ziftbook-admin",
+                                  "ZIF_PROD_BACKUP_PASSWORD": "postgres-ziftbook-prod-backup"}}
+        for env, want in secrets.items():
+            sql = "\n".join(job_sql(env))
+            env_vars = {e["name"]: e.get("valueFrom", {}).get("secretKeyRef", {}) for e in job_container(env)["env"]}
+            for var, secret in want.items():
+                self.assertEqual(env_vars[var], {"name": secret, "key": "password"}, f"{env}: {var}")
+                self.assertIn(f"RAISE EXCEPTION '{var} is unset or empty'", sql, f"{env}: {var} has no empty guard")
+                self.assertTrue((DATA / f"{secret}.secret.yaml").is_file(), f"{secret}.secret.yaml is missing")
+            self.assertLess(sql.index("is unset or empty"), sql.index("BEGIN;"), f"{env}: a guard runs inside the transaction")
 
 
 if __name__ == "__main__":
