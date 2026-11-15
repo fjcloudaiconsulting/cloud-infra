@@ -9,4 +9,4 @@ in a PR, after a drill: [runbooks.md](runbooks.md#restore-drill).
 The INFRA-31 drill (2026-10-02) ran before the production sets held data and before the current procedure, so it is
 not recorded here.
 
-last-successful-drill: never
+last-successful-drill: 2026-11-15
