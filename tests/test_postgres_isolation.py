@@ -142,8 +142,11 @@ class EnvironmentBoundary(unittest.TestCase):
         self.assertIn("has_database_privilege(r.oid, d.oid, 'CONNECT')", body)
         self.assertRegex(body, r"IF crossed IS NOT NULL THEN\n\s*RAISE EXCEPTION ")
 
-    def test_production_job_closes_the_maintenance_databases(self):
-        self.assertRegex(transaction("production"), r"(?m)^REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;$")
+    def test_the_check_requires_the_maintenance_databases_closed(self):
+        # The superuser owns them and revokes PUBLIC's CONNECT; the Jobs (the admin) can only check it.
+        self.assertRegex(check_block("production"),
+                         r"WHERE datname = ANY \(ARRAY\['postgres', 'template1'\]\) AND has_database_privilege\('public', oid, 'CONNECT'\);"
+                         r"\n\s*IF maintenance IS NOT NULL THEN\n\s*RAISE EXCEPTION ")
 
     def test_kubernetes_hands_the_scripts_over_as_written(self):
         # Kubernetes expands $(NAME) in a container's command and args and turns $$ into $, which breaks a $$ quote.
@@ -208,35 +211,27 @@ class ConnectionSlots(unittest.TestCase):
 
 
 class ServiceLogins(unittest.TestCase):
-    """The admin login and the backup logins that are to replace the superuser's network logins."""
+    """The Jobs log in as the admin, never the superuser, and leave to the superuser what only it may grant."""
 
-    def test_both_jobs_make_the_same_admin_no_superuser_owning_their_database(self):
-        stmts = {}
+    def test_both_jobs_log_in_as_the_admin(self):
+        for env in JOBS:
+            env_vars = {e["name"]: e for e in job_container(env)["env"]}
+            self.assertEqual(env_vars["PGUSER"].get("value"), ADMIN, env)
+            self.assertEqual(env_vars["PGPASSWORD"]["valueFrom"]["secretKeyRef"],
+                             {"name": "postgres-ziftbook-admin", "key": "password"}, env)
+            refs = [(e.get("valueFrom") or {}).get("secretKeyRef") or {} for e in env_vars.values()]
+            self.assertNotIn("admin-password", {r.get("key") for r in refs}, f"{env}: the superuser's password")
+
+    def test_jobs_never_grant_what_only_the_superuser_may(self):
         for env in JOBS:
             tx = transaction(env)
-            m = re.search(r"(?m)^ALTER ROLE ziftbook_admin WITH ([A-Z ]+) CONNECTION LIMIT (\d+)\n\s*PASSWORD :'admin_password';$", tx)
-            self.assertIsNotNone(m, env)
-            stmts[env] = m.groups()
-            attrs = set(m.group(1).split())
-            self.assertTrue({"LOGIN", "NOSUPERUSER", "NOBYPASSRLS", "NOINHERIT", "CREATEROLE", "CREATEDB"} <= attrs, env)
-            self.assertEqual(int(m.group(2)), SERVICE_CAP, env)
-            self.assertIn('ALTER DATABASE :"DBNAME" OWNER TO ziftbook_admin;', tx, env)
-            self.assertRegex(tx, r"(?m)^GRANT ziftbook_app, ziftbook_migrate, ziftbook_worker TO ziftbook_admin "
-                                 r"WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;$", env)
-        self.assertEqual(stmts["staging"], stmts["production"])
+            for forbidden in ("BYPASSRLS", "SUPERUSER", "pg_read_all_data", f"ALTER ROLE {ADMIN}", f"TO {ADMIN}",
+                              "ALTER DATABASE", "template1"):
+                self.assertNotIn(forbidden, tx.split("DO $check$")[0], f"{env}: {forbidden}")
 
-    def test_each_backup_login_reads_only_its_own_database(self):
+    def test_each_backup_login_may_open_its_own_database(self):
         for env, role in BACKUP.items():
-            tx = transaction(env)
-            m = re.search(rf"(?m)^ALTER ROLE {role} WITH ([A-Z ]+) CONNECTION LIMIT (\d+)\n\s*PASSWORD :'backup_password';$", tx)
-            self.assertIsNotNone(m, env)
-            attrs = set(m.group(1).split())
-            self.assertTrue({"LOGIN", "NOSUPERUSER", "NOCREATEROLE", "NOCREATEDB", "BYPASSRLS"} <= attrs, env)
-            self.assertEqual(int(m.group(2)), SERVICE_CAP, env)
-            self.assertIn(f"GRANT pg_read_all_data TO {role};", tx, env)
-            self.assertIn(f'GRANT CONNECT ON DATABASE :"DBNAME" TO {role};', tx, env)
-            # ADMIN on a BYPASSRLS login would let the admin read every row through it.
-            self.assertNotRegex(tx, rf"GRANT [\w, ]*\b{role}\b[\w, ]* TO ziftbook_admin", env)
+            self.assertIn(f'GRANT CONNECT ON DATABASE :"DBNAME" TO {role};', transaction(env), env)
 
     def test_the_check_caps_the_service_logins_and_refuses_other_superusers(self):
         body = check_block("production")
@@ -246,18 +241,10 @@ class ServiceLogins(unittest.TestCase):
         self.assertEqual(int(m.group(2)), SERVICE_CAP)
         self.assertIn("WHERE rolsuper AND rolname <> 'postgres';", body)
 
-    def test_every_new_password_is_guarded_and_read_from_its_own_secret(self):
-        secrets = {"staging": {"ZIF_ADMIN_PASSWORD": "postgres-ziftbook-admin", "ZIF_BACKUP_PASSWORD": "postgres-ziftbook-backup"},
-                   "production": {"ZIF_ADMIN_PASSWORD": "postgres-ziftbook-admin",
-                                  "ZIF_PROD_BACKUP_PASSWORD": "postgres-ziftbook-prod-backup"}}
-        for env, want in secrets.items():
-            sql = "\n".join(job_sql(env))
-            env_vars = {e["name"]: e.get("valueFrom", {}).get("secretKeyRef", {}) for e in job_container(env)["env"]}
-            for var, secret in want.items():
-                self.assertEqual(env_vars[var], {"name": secret, "key": "password"}, f"{env}: {var}")
-                self.assertIn(f"RAISE EXCEPTION '{var} is unset or empty'", sql, f"{env}: {var} has no empty guard")
-                self.assertTrue((DATA / f"{secret}.secret.yaml").is_file(), f"{secret}.secret.yaml is missing")
-            self.assertLess(sql.index("is unset or empty"), sql.index("BEGIN;"), f"{env}: a guard runs inside the transaction")
+    def test_production_job_reaches_the_server_through_an_app_database(self):
+        # PUBLIC, the admin included, has no CONNECT on the maintenance databases.
+        script = job_container("production")["command"][-1]
+        self.assertNotRegex(script, r"psql [^\n]*-d (postgres|template1)\b")
 
 
 if __name__ == "__main__":

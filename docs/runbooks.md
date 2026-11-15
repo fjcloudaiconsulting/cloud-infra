@@ -305,6 +305,25 @@ sops -d "$G" | grep -c 'namespace: ziftbook-prod$'
 
 Until the pull secret is merged the production pods wait (`ImagePullBackOff`) and start by themselves once Flux applies it.
 
+## Postgres admin and backup logins
+
+The bootstrap Jobs log in as `ziftbook_admin` and the nightly Postgres dumps as `ziftbook_backup` and
+`ziftbook_prod_backup`. None of them is a superuser, so no Job can set their passwords: the superuser does, over the
+pod's local socket. Their passwords are machine-only (nobody types them). To rotate one, regenerate its Secret file with
+the public key ([Write or rotate a Kubernetes Secret](#write-or-rotate-a-kubernetes-secret), key `password`, a value
+from `openssl rand -hex 32`), merge, and once Flux has applied it, set the same value in the database. The value goes
+through stdin only:
+
+```sh
+S=postgres-ziftbook-admin R=ziftbook_admin   # or postgres-ziftbook-backup/ziftbook_backup, postgres-ziftbook-prod-backup/ziftbook_prod_backup
+kubectl -n data get secret "$S" -o jsonpath='{.data.password}' | base64 -d \
+  | { read -r P; printf "ALTER ROLE %s PASSWORD '%s';\n" "$R" "$P"; } \
+  | kubectl -n data exec -i postgres-0 -- psql -U postgres -Xq -v ON_ERROR_STOP=1
+```
+
+Until then the old password stays in the database: a Job or backup that starts in between cannot log in, and succeeds on
+its next run (a Job: `kubectl -n data delete job <name>`, Flux recreates it).
+
 ## Ziftbook admin TOTP key
 
 Since v0.25.0 the backend encrypts each platform admin's TOTP secret with `ZIF_TOTP_KEY` (ZIF-71): base64 of 32 random
