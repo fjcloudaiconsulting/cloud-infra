@@ -25,6 +25,20 @@ class DbBackupManifest(unittest.TestCase):
         self.assertRegex(script, r'(?m)^\s*pg_dump -Fc -f "\$DUMP" "\$DB"$')
         self.assertNotRegex(script, r"pg_dump [^\n]*\|")
 
+    def test_postgres_dumps_log_in_as_their_backup_login(self):
+        """INFRA-206: the superuser is to refuse network logins, so each dump uses its database's backup login, and the
+        globals skip the password hashes a non-superuser cannot read."""
+        script = re.search(r"^  pg-dump\.sh: \|\n((?:    .*\n|\n)+)", self.text, re.M).group(1)
+        self.assertRegex(script, r'(?m)^\s*pg_dumpall --globals-only --no-role-passwords -l "\$DB" \|')
+        want = {"pg-dump": ("ziftbook_backup", "postgres-ziftbook-backup"),
+                "pg-dump-prod": ("ziftbook_prod_backup", "postgres-ziftbook-prod-backup")}
+        for name, (role, secret) in want.items():
+            block = re.search(rf"(?m)^            - name: {name}\n((?:             .*\n|\s*#.*\n)+)", self.text).group(1)
+            self.assertRegex(block, rf"- name: PGUSER\n\s+value: {role}\n", name)
+            self.assertRegex(block, rf"- name: PGPASSWORD\n\s+valueFrom:\n\s+secretKeyRef:\n\s+name: {secret}\n"
+                                    r"\s+key: password\n", name)
+            self.assertNotIn("admin-password", block, name)
+
 
 if __name__ == "__main__":
     unittest.main()

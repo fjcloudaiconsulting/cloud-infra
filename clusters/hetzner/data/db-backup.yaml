@@ -73,9 +73,10 @@ data:
       (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.deptype = 'e'
         AND d.objid = format('%I.%I', t.schemaname, t.tablename)::regclass)")
     VERSION=$(q "SHOW server_version")
-    # Globals: the night's record of the roles (and their hashes); the custom-format restore does not replay them.
+    # Globals: the night's record of the roles, without password hashes (the backup login is no superuser and cannot
+    # read them); the custom-format restore does not replay them. -l: PUBLIC has no CONNECT on the maintenance databases.
     pg_dump -Fc -f "$DUMP" "$DB"
-    pg_dumpall --globals-only | gzip >"$GRANTS"
+    pg_dumpall --globals-only --no-role-passwords -l "$DB" | gzip >"$GRANTS"
     [ "$(count "$GRANTS" '^-- PostgreSQL database cluster dump complete')" -eq 1 ] || die "globals have no completion marker"
     publish
   # One PUT per object. CLI 2.37 sends a CRC64NVME checksum by default; SHA256 is what the manifests record.
@@ -237,13 +238,14 @@ spec:
                   value: "1"
                 - name: PGHOST
                   value: postgres
+                # The database's backup login (postgres-bootstrap*.yaml): reads every row of this database only, no superuser.
                 - name: PGUSER
-                  value: postgres
+                  value: ziftbook_backup
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: postgres
-                      key: admin-password
+                      name: postgres-ziftbook-backup
+                      key: password
               securityContext:
                 runAsUser: 999
                 allowPrivilegeEscalation: false
@@ -275,13 +277,14 @@ spec:
                   value: "1"
                 - name: PGHOST
                   value: postgres
+                # The database's backup login (postgres-bootstrap*.yaml): reads every row of this database only, no superuser.
                 - name: PGUSER
-                  value: postgres
+                  value: ziftbook_prod_backup
                 - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: postgres
-                      key: admin-password
+                      name: postgres-ziftbook-prod-backup
+                      key: password
               securityContext:
                 runAsUser: 999
                 allowPrivilegeEscalation: false
