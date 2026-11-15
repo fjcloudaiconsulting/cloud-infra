@@ -105,6 +105,8 @@ spec:
                 service text;
                 superusers text;
                 maintenance text;
+                attributes text;
+                reach text;
               BEGIN
                 SELECT string_agg(c.rol || ' on ' || c.db, ', ') INTO crossed
                 FROM (VALUES ('ziftbook_app', 'ziftbook_prod'), ('ziftbook_migrate', 'ziftbook_prod'),
@@ -145,6 +147,23 @@ spec:
                 SELECT string_agg(rolname, ', ') INTO superusers FROM pg_roles WHERE rolsuper AND rolname <> 'postgres';
                 IF superusers IS NOT NULL THEN
                   RAISE EXCEPTION 'superusers other than postgres: %', superusers;
+                END IF;
+                -- The superuser sets these logins' attributes, not this Job: the admin creates roles and databases and does not
+                -- inherit; the backup logins bypass row security and create nothing.
+                SELECT string_agg(rolname, ', ') INTO attributes FROM pg_roles
+                WHERE (rolname = 'ziftbook_admin' AND (rolbypassrls OR rolinherit OR NOT rolcreaterole OR NOT rolcreatedb))
+                   OR (rolname = ANY (ARRAY['ziftbook_backup', 'ziftbook_prod_backup'])
+                       AND (NOT rolbypassrls OR rolcreaterole OR rolcreatedb));
+                IF attributes IS NOT NULL THEN
+                  RAISE EXCEPTION 'admin or backup logins with the wrong attributes: %', attributes;
+                END IF;
+                -- Nor may the admin reach every row: no membership, of any kind, in a backup login or pg_read_all_data.
+                SELECT string_agg(g.rolname, ', ') INTO reach FROM pg_auth_members m
+                JOIN pg_roles g ON g.oid = m.roleid JOIN pg_roles u ON u.oid = m.member
+                WHERE u.rolname = 'ziftbook_admin'
+                  AND g.rolname = ANY (ARRAY['ziftbook_backup', 'ziftbook_prod_backup', 'pg_read_all_data']);
+                IF reach IS NOT NULL THEN
+                  RAISE EXCEPTION 'the admin is a member of: %', reach;
                 END IF;
                 -- Their owner (the superuser) revokes it, not this Job: neither environment's logins reach them.
                 SELECT string_agg(datname, ', ') INTO maintenance FROM pg_database

@@ -241,6 +241,16 @@ class ServiceLogins(unittest.TestCase):
         self.assertEqual(int(m.group(2)), SERVICE_CAP)
         self.assertIn("WHERE rolsuper AND rolname <> 'postgres';", body)
 
+    def test_the_check_requires_the_service_logins_attributes_and_no_admin_reach(self):
+        # The Jobs no longer set them (only the superuser may), so the check is what holds them.
+        body = check_block("production")
+        self.assertIn("(rolname = 'ziftbook_admin' AND (rolbypassrls OR rolinherit OR NOT rolcreaterole OR NOT rolcreatedb))",
+                      body)
+        self.assertRegex(body, r"rolname = ANY \(ARRAY\['ziftbook_backup', 'ziftbook_prod_backup'\]\)\n\s*"
+                               r"AND \(NOT rolbypassrls OR rolcreaterole OR rolcreatedb\)\)")
+        self.assertRegex(body, r"WHERE u\.rolname = 'ziftbook_admin'\n\s*AND g\.rolname = ANY \(ARRAY\['ziftbook_backup', "
+                               r"'ziftbook_prod_backup', 'pg_read_all_data'\]\);\n\s*IF reach IS NOT NULL THEN")
+
     def test_production_job_reaches_the_server_through_an_app_database(self):
         # PUBLIC, the admin included, has no CONNECT on the maintenance databases.
         script = job_container("production")["command"][-1]
