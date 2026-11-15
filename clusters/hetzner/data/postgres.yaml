@@ -48,15 +48,17 @@ spec:
         - name: postgres
           image: postgres:18.6@sha256:1267c7e692de235fda2a50dbcdbcbca4672ea6a0298576a6bd9d07cafc319b32
           # Sized for a 384Mi limit; Ziftbook pools, per environment (staging and production, INFRA-82): backend 5+10, worker 21,
-          # plus migrate and admin; 100 connections cover both environments at full pool.
+          # plus migrate and admin; 103 connections cover both environments at full pool, with the admin and backups.
           # Ceiling: ~40 busy sessions at work_mem each; no parallel workers, which would multiply it.
           # Connection budget (tests/test_postgres_isolation.py): 3 slots for superusers (the default); staging's logins
           # capped at 40 in its bootstrap Job; production's full pools 57 (2 API pods x 16, worker 21, 3 migrate init
-          # containers, admin CLI). 3 + 40 + 57 = 100: production always fits beside a staging at its caps.
+          # containers, admin CLI); the admin login and the two backup logins, capped at 1 each. 3 + 40 + 57 + 3 = 103:
+          # production always fits beside a staging at its caps.
           # reserved_connections keeps 26 slots for logins granted pg_use_reserved_connections (production's, in its Job)
-          # and the admin, should a cap be missing. Postgres refuses every other login once fewer than 26 + 3 slots are
-          # free, whoever holds the rest, so 26 is the most that never refuses staging below its caps beside production's
-          # standing pools (2 x 5 + 21): 100 - 3 - 40 - 31. It is also production's growth from standing to full pools.
+          # and the superuser, should a cap be missing. Postgres refuses every other login once fewer than 26 + 3 slots are
+          # free, whoever holds the rest, so 26 never refuses staging below its caps (with its backup and the admin) beside
+          # production's standing pools (2 x 5 + 21) and backup: 103 - 3 - 42 - 32 = 26. It is also production's growth
+          # from standing to full pools.
           # authentication_timeout: a connection holds a slot from its startup packet until it authenticates, before any
           # cap applies; the apps authenticate in milliseconds. The keepalives end, within 2 minutes, the sessions of a pod
           # lost with its node, which would otherwise count against a cap for over 2 hours (the kernel's default).
@@ -70,7 +72,7 @@ spec:
             - -c
             - maintenance_work_mem=32MB
             - -c
-            - max_connections=100
+            - max_connections=103
             - -c
             - reserved_connections=26
             - -c
