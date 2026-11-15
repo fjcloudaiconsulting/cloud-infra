@@ -5,7 +5,7 @@ the pull request that addresses it and what is left to do. Agents with Jira acce
 the Jira issues. Every agent working on this effort keeps it current, so the next one starts from the real state and
 nobody needs a live conversation to catch up.
 
-Last updated: 2026-11-07 by the cloud-infra session, after the 2026-11-07 merge wave.
+Last updated: 2026-11-15 by the cloud-infra session, after the 2026-11-15 merges and owner checks.
 
 ## Disclosure note
 
@@ -20,7 +20,7 @@ cross-references them.
 
 ## Current state
 
-Snapshot of 2026-11-08. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
+Snapshot of 2026-11-15. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
 column below is the assessment's 2026-10-25 verdict and is not updated here.
 
 - **Merged:** every fix PR in the table below (#286 to #303, #341 to #348), and the follow-ups #304 to #311 and #319.
@@ -30,8 +30,16 @@ column below is the assessment's 2026-10-25 verdict and is not updated here.
 - **Merged on 2026-11-07 and 2026-11-08:** #359 (nightly backups go only to the encrypted bucket copy), #361 (the
   retired backup stack and its roles removed, which retires TF-02 and TF-05), #365 (a real restore revokes every TBD
   API token and open invitation) and #367 (part of TF-07: no workspace id in the repo, with a test).
-- **Open:** #312 (GHA-09: Renovate reads GHCR as a dedicated machine user), waiting on the owner's account steps in its
-  description (INFRA-253).
+- **2026-11-11 to 2026-11-15:**
+  - #377: the k3s binary is pinned on bootstrap and rebuild (ANS-06).
+  - The owner's Ansible run with `k3s_reconfigure=true` made the audit log (ANS-02), the Pod Security defaults (ANS-08,
+    K8S-09) and the root key list (ANS-03) live, and they were checked on every server.
+  - The restore drill passed for both engines on the new Postgres format; its record is #382 (DATA-01, DATA-05).
+  - Both app domains validate with DNS signing (EDGE-08).
+  - #383, #384 and #389: the Postgres superuser is no longer used for backups or the bootstrap Jobs. One more PR
+    removes its network logins (DATA-02, DATA-06; INFRA-206).
+  - #312 was closed. The owner keeps the current read-only package token as an accepted risk, and INFRA-273 tracks its
+    replacement (GHA-09).
 - **Waiting on the owner:** the post-merge checks in each PR description (most INFRA issues stay In Progress until
   they are confirmed), and the decisions listed in INFRA-252.
 
@@ -97,6 +105,11 @@ this file only when the owner asks, for example after a merge wave.
 | #361 | `chore/infra-203-remove-aws-backup-chain` | TF-02, TF-05 | Removes the retired backup stack and its role documents; nothing applies (its workspace is deleted) | Merged 2026-11-07 (259227f) |
 | #365 | `docs/infra-148-restore-revokes-tbd-tokens` | DATA-01 (follow-up) | Documentation and its test only | Merged 2026-11-08 (2531b71) |
 | #367 | `fix/infra-233-workspace-id-by-name` | TF-07 (part) | A helper script and a test only | Merged 2026-11-08 (84053cb) |
+| #377 | `infra-245-k3s-binary-pin` | ANS-06 | Nothing until a server is built or rebuilt | Merged 2026-11-11 (68bfa7f) |
+| #382 | `INFRA-214-restore-drill-record` | DATA-05, DATA-01 | Documentation only; closes the drill issue | Merged 2026-11-15 (add5f15) |
+| #383 | `INFRA-206-postgres-admin-backup-roles` | DATA-02, DATA-06 | Postgres restart; the bootstrap Jobs create the admin and backup logins | Merged 2026-11-15 (7f2b84f) |
+| #384 | `INFRA-206-backups-use-backup-logins` | DATA-06 | The Postgres dumps log in as the backup logins | Merged 2026-11-15 (37e8fd8) |
+| #389 | `INFRA-206-bootstrap-jobs-as-admin` | DATA-02 | The bootstrap Jobs log in as the admin login | Merged 2026-11-15 (e41ccad) |
 
 ## Findings
 
@@ -107,7 +120,7 @@ elsewhere), **Accepted** (no change).
 | ID | Title | Status | PR | Merged | Commit | Owner action | Jira |
 |---|---|---|---|---|---|---|---|
 | TF-01 | Terraform plan-time credentials | Partial | #299 | 2026-11-01 | 1479d11 | Review HCP Terraform run settings and per-phase credentials (private report) | INFRA-226 |
-| TF-02 | Backup apply role self-management | Partial | #299, #361 | 2026-11-01, 2026-11-07 | 1479d11, 259227f | None: the role is gone with its stack (#361); close the account (INFRA-203) | INFRA-207 |
+| TF-02 | Backup apply role self-management | Partial | #299, #361 | 2026-11-01, 2026-11-07 | 1479d11, 259227f | None: the role is gone with its stack (#361); the account closure is the owner's | INFRA-207 |
 | TF-03 | Secrets kept in Terraform state | Needs owner | | | | Restrict state access in HCP Terraform | INFRA-230 |
 | TF-04 | Cloudflare workspace token scope | Needs owner | | | | Decide on splitting the account-scoped permissions | INFRA-226 |
 | TF-05 | Backup plan role read scope | Fixed | #299, #361 | 2026-11-01, 2026-11-07 | 1479d11, 259227f | None: the role is gone with its stack (#361) | INFRA-246 |
@@ -122,16 +135,16 @@ elsewhere), **Accepted** (no change).
 | K8S-06 | Service-account token mounting | Fixed | #295, #305 | 2026-11-01, 2026-11-01 | dc232bf, e78e6ac | | INFRA-216 |
 | K8S-07 | App-namespace egress to node addresses | Fixed | #287 | 2026-11-01 | 13edd6d | | INFRA-242 |
 | K8S-08 | NetBird pod security context | Needs owner | #308, #309 | 2026-11-01, 2026-11-01 | a7f4638, 777c939 | Rehearse with a console session open | INFRA-221 |
-| K8S-09 | Pod Security levels | Partial | #295, #308, #319 | 2026-11-01, 2026-11-01, 2026-11-01 | dc232bf, a7f4638, 7c92199 | Add the warn/audit labels to the `netbird` namespace | INFRA-222 |
+| K8S-09 | Pod Security levels | Partial | #295, #308, #319 | 2026-11-01, 2026-11-01, 2026-11-01 | dc232bf, a7f4638, 7c92199 | None: the cluster default is live and checked (2026-11-15) | INFRA-222 |
 | K8S-10 | Documentation corrections | Partial | #286, #295 | 2026-11-01, 2026-11-01 | 6a6219d, dc232bf | | INFRA-104 |
 | ANS-01 | Host network filtering | Partial | #298 | 2026-11-01 | 4da1ad9 | Decide the host firewall rollout; narrow the SSH allowlist to /24 or longer | INFRA-220 |
-| ANS-02 | Kubernetes API audit logging | Partial | #298 | 2026-11-01 | 4da1ad9 | Run `site.yml -e k3s_reconfigure=true`; decide log shipping | INFRA-217 |
-| ANS-03 | Root SSH key management | Fixed | #298 | 2026-11-01 | 4da1ad9 | Run `site.yml --check --diff`, then `site.yml` | INFRA-243 |
+| ANS-02 | Kubernetes API audit logging | Partial | #298 | 2026-11-01 | 4da1ad9 | The log is live on every server (2026-11-15); decide log shipping | INFRA-217 |
+| ANS-03 | Root SSH key management | Fixed | #298 | 2026-11-01 | 4da1ad9 | None: checked on every server (2026-11-15) | INFRA-243 |
 | ANS-04 | Cluster-admin credential lifetime | Partial | #298 | 2026-11-01 | 4da1ad9 | Shorten the owner token lifetime | INFRA-144 |
 | ANS-05 | k3s token rotation procedure | Fixed | #298 | 2026-11-01 | 4da1ad9 | | INFRA-244 |
-| ANS-06 | k3s installer verification | Partial | #298 | 2026-11-01 | 4da1ad9 | Decide on pinning the binary (airgap path) | INFRA-245 |
+| ANS-06 | k3s installer verification | Partial | #298, #377 | 2026-11-01, 2026-11-11 | 4da1ad9, 68bfa7f | None: the binary is pinned too | INFRA-245 |
 | ANS-07 | Pending reboot alerting | Needs owner | #304 | 2026-11-01 | 66df9f6 | | INFRA-219 |
-| ANS-08 | k3s hardening-guide options | Needs owner | #310 | 2026-11-01 | 8b008e6 | | INFRA-222 |
+| ANS-08 | k3s hardening-guide options | Needs owner | #310 | 2026-11-01 | 8b008e6 | None: live since the 2026-11-15 run | INFRA-222 |
 | ANS-09 | Host key verification at bootstrap | Fixed | #298 | 2026-11-01 | 4da1ad9 | | INFRA-249 |
 | GHA-01 | Automated commits to `main` | Needs owner | | | | Decide the Renovate automerge model (private report) | INFRA-209 |
 | GHA-02 | Shared preset and signer identity pinning | Needs owner | | | | Decide with the `.github` release flow (cross-ref Ziftbook owner action 14) | INFRA-229 |
@@ -141,7 +154,7 @@ elsewhere), **Accepted** (no change).
 | GHA-06 | Organisation 2FA and bypass settings | Needs owner | | | | Require 2FA; review bypass modes | INFRA-229 |
 | GHA-07 | Public workflow log content | Partial | #300 | 2026-11-01 | edc908c | | INFRA-233 |
 | GHA-08 | Repository security settings | Partial | #300 | 2026-11-01 | edc908c | Enable code-owner review and the settings listed in the PR | INFRA-229 |
-| GHA-09 | CI input pinning and release age | Partial | #300, #307, #312 | 2026-11-01, 2026-11-01 | edc908c, 6c56b17 | Release age for images and actions (with #273) | INFRA-250 |
+| GHA-09 | CI input pinning and release age | Partial | #300, #307 | 2026-11-01, 2026-11-01 | edc908c, 6c56b17 | Package token kept as an accepted risk (INFRA-253); its replacement is INFRA-273 | INFRA-250 |
 | EDGE-01 | Access control for the Ziftbook staging host | Needs owner | | | | Decide the Access application and its bypasses | INFRA-224 |
 | EDGE-02 | Edge request body limits | Fixed | #290 | 2026-11-01 | 7ff2095 | Approve the `cloudflare` apply; post-apply checks in #290 | INFRA-234 |
 | EDGE-03 | Email sender authentication for the product domains | Needs owner | #342 | 2026-11-07 | 4f8af87 | One production mail check per app; decide the ramp for the sending domains | INFRA-228 |
@@ -149,14 +162,14 @@ elsewhere), **Accepted** (no change).
 | EDGE-05 | Edge rate-limit path coverage | Fixed | #290, #283, #341 | 2026-11-01, 2026-11-07 | 7ff2095, 455954b | | INFRA-223 |
 | EDGE-06 | TBD staging Access bypass | Fixed | #290 | 2026-11-01 | 7ff2095 | Apply the Access change in two steps | INFRA-238 |
 | EDGE-07 | Tunnel connector egress | Fixed | #287 | 2026-11-01 | 13edd6d | | INFRA-239 |
-| EDGE-08 | DNS zone hygiene | Needs owner | #344 | 2026-11-07 | eb22c0c | Confirm the parent zone publishes the signing record, then validate | INFRA-231 |
+| EDGE-08 | DNS zone hygiene | Needs owner | #344 | 2026-11-07 | eb22c0c | None: both domains validate (2026-11-15) | INFRA-231 |
 | EDGE-09 | Data processor inventory | Accepted | | | | Keep the privacy notices current | INFRA-104 |
-| DATA-01 | Restore procedure | Partial | #297, #348 | 2026-11-01, 2026-11-07 | a4a922e, 23d1da5 | First night in the new format, a restore drill, then remove the old restore path | INFRA-235 |
-| DATA-02 | Postgres role isolation between environments | Fixed | #303 | 2026-11-03 | b1473e3 | | INFRA-211, INFRA-206 |
+| DATA-01 | Restore procedure | Partial | #297, #348 | 2026-11-01, 2026-11-07 | a4a922e, 23d1da5 | Drill passed (2026-11-15); remove the old restore path | INFRA-235 |
+| DATA-02 | Postgres role isolation between environments | Fixed | #303, #383, #389 | 2026-11-03, 2026-11-15, 2026-11-15 | b1473e3, 7f2b84f, e41ccad | One more PR: the superuser refuses network logins (INFRA-206) | INFRA-211, INFRA-206 |
 | DATA-03 | Postgres connection limits per environment | Fixed | #303 | 2026-11-03 | b1473e3 | | INFRA-212 |
 | DATA-04 | Backup provenance and an independent copy | Needs owner | | | | Decide the second copy and retention | INFRA-208 |
-| DATA-05 | Restore drill freshness signal | Needs owner | #306 | 2026-11-01 | b5c70b5 | | INFRA-214 |
-| DATA-06 | Database and backup credential separation | Needs owner | | | | | INFRA-215 |
+| DATA-05 | Restore drill freshness signal | Needs owner | #306, #382 | 2026-11-01, 2026-11-15 | b5c70b5, add5f15 | None: first drill recorded | INFRA-214 |
+| DATA-06 | Database and backup credential separation | Needs owner | #383, #384 | 2026-11-15, 2026-11-15 | 7f2b84f, 37e8fd8 | The Postgres dumps use their own logins; MySQL's backup login already exists | INFRA-215 |
 | DATA-07 | Encryption for database data at rest and in transit | Partial | #272 | | | #272 keeps dumps in memory; decide on the rest | INFRA-213 |
 
 ## Counts
