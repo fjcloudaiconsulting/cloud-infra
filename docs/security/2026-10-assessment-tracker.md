@@ -20,7 +20,7 @@ cross-references them.
 
 ## Current state
 
-Snapshot of 2026-11-15. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
+Snapshot of 2026-11-17. Jira (INFRA-252 and the INFRA issues in the Jira column) holds the live status; the Status
 column below is the assessment's 2026-10-25 verdict and is not updated here.
 
 - **Merged:** every fix PR in the table below (#286 to #303, #341 to #348), and the follow-ups #304 to #311 and #319.
@@ -36,8 +36,10 @@ column below is the assessment's 2026-10-25 verdict and is not updated here.
     K8S-09) and the root key list (ANS-03) live, and they were checked on every server.
   - The restore drill passed for both engines on the new Postgres format; its record is #382 (DATA-01, DATA-05).
   - Both app domains validate with DNS signing (EDGE-08).
-  - #383, #384 and #389: the Postgres superuser is no longer used for backups or the bootstrap Jobs. One more PR
-    removes its network logins (DATA-02, DATA-06; INFRA-206).
+  - #383, #384 and #389: the Postgres superuser is no longer used for backups or the bootstrap Jobs (DATA-02,
+    DATA-06).
+- **2026-11-17:** #395: Postgres refuses the superuser over the network, and a new volume gets the admin and backup
+  logins at first start. Checked on the cluster; INFRA-206 is Done (DATA-02).
   - #312 was closed. The owner keeps the current read-only package token as an accepted risk, and INFRA-273 tracks its
     replacement (GHA-09).
 - **Waiting on the owner:** the post-merge checks in each PR description (most INFRA issues stay In Progress until
@@ -110,6 +112,7 @@ this file only when the owner asks, for example after a merge wave.
 | #383 | `INFRA-206-postgres-admin-backup-roles` | DATA-02, DATA-06 | Postgres restart; the bootstrap Jobs create the admin and backup logins | Merged 2026-11-15 (7f2b84f) |
 | #384 | `INFRA-206-backups-use-backup-logins` | DATA-06 | The Postgres dumps log in as the backup logins | Merged 2026-11-15 (37e8fd8) |
 | #389 | `INFRA-206-bootstrap-jobs-as-admin` | DATA-02 | The bootstrap Jobs log in as the admin login | Merged 2026-11-15 (e41ccad) |
+| #395 | `INFRA-206-pg-hba` | DATA-02 | Postgres restart; the superuser is refused over the network | Merged 2026-11-17 (c4e3a76) |
 
 ## Findings
 
@@ -165,7 +168,7 @@ elsewhere), **Accepted** (no change).
 | EDGE-08 | DNS zone hygiene | Needs owner | #344 | 2026-11-07 | eb22c0c | None: both domains validate (2026-11-15) | INFRA-231 |
 | EDGE-09 | Data processor inventory | Accepted | | | | Keep the privacy notices current | INFRA-104 |
 | DATA-01 | Restore procedure | Partial | #297, #348 | 2026-11-01, 2026-11-07 | a4a922e, 23d1da5 | Drill passed (2026-11-15); remove the old restore path | INFRA-235 |
-| DATA-02 | Postgres role isolation between environments | Fixed | #303, #383, #389 | 2026-11-03, 2026-11-15, 2026-11-15 | b1473e3, 7f2b84f, e41ccad | One more PR: the superuser refuses network logins (INFRA-206) | INFRA-211, INFRA-206 |
+| DATA-02 | Postgres role isolation between environments | Fixed | #303, #383, #389, #395 | 2026-11-03, 2026-11-15, 2026-11-15, 2026-11-17 | b1473e3, 7f2b84f, e41ccad, c4e3a76 | The superuser logs in over the socket or loopback only | INFRA-211, INFRA-206 |
 | DATA-03 | Postgres connection limits per environment | Fixed | #303 | 2026-11-03 | b1473e3 | | INFRA-212 |
 | DATA-04 | Backup provenance and an independent copy | Needs owner | | | | Decide the second copy and retention | INFRA-208 |
 | DATA-05 | Restore drill freshness signal | Needs owner | #306, #382 | 2026-11-01, 2026-11-15 | b5c70b5, add5f15 | None: first drill recorded | INFRA-214 |
