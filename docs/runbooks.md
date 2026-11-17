@@ -309,7 +309,8 @@ Until the pull secret is merged the production pods wait (`ImagePullBackOff`) an
 
 The bootstrap Jobs log in as `ziftbook_admin` and the nightly Postgres dumps as `ziftbook_backup` and
 `ziftbook_prod_backup`. None of them is a superuser, so no Job can set their passwords: the superuser does, over the
-pod's local socket. Their passwords are machine-only (nobody types them). To rotate one, regenerate its Secret file with
+pod's local socket (it cannot log in over the network). On a new, empty volume Postgres creates the three logins itself at
+first start, from the same Secrets. Their passwords are machine-only (nobody types them). To rotate one, regenerate its Secret file with
 the public key ([Write or rotate a Kubernetes Secret](#write-or-rotate-a-kubernetes-secret), key `password`, a value
 from `openssl rand -hex 32`), merge, and once Flux has applied it, set the same value in the database. The value goes
 through stdin only:

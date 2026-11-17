@@ -113,11 +113,19 @@ class ServersOnlyAnswer(unittest.TestCase):
             if re.search(r"(?i)name[-_]resolve", line) and not line.lstrip().startswith("#"):
                 self.assertRegex(line.strip(), r"(?i)^skip[-_]name[-_]resolve(\s*=\s*(on|1|true))?$",
                                  "tbd.cnf turns client name lookups back on: MySQL would need DNS")
-        # Postgres resolves only for log_hostname or a hostname in pg_hba (the image writes `host all all all`).
+        # Postgres resolves only for log_hostname or a hostname in pg_hba: its pg_hba (ConfigMap postgres) names
+        # addresses only, and no other pg_hba is mounted.
         pg = next(d for _, d in workloads("data") if name(d) == "StatefulSet/postgres")
         for arg in (a for c in containers(pg) for a in c.get("args") or []):
-            self.assertNotRegex(str(arg), r"(?i)^(log_hostname\s*=\s*(on|true|yes|1)|hba_file\s*=)",
-                                "Postgres would need DNS")
+            self.assertNotRegex(str(arg), r"(?i)^log_hostname\s*=\s*(on|true|yes|1)", "Postgres would need DNS")
+            if re.match(r"(?i)hba_file\s*=", str(arg)):
+                self.assertEqual(arg, "hba_file=/etc/postgresql/pg_hba.conf")
+        hba = next(d["data"]["pg_hba.conf"] for _, d in manifests("data")
+                   if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "postgres")
+        for line in hba.splitlines():
+            fields = line.split("#")[0].split()
+            if fields and fields[0] != "local":
+                self.assertRegex(fields[3], r"^(all|[0-9a-f.:]+/\d+)$", f"pg_hba names a host: {line}")
 
 
 class ClientsReachTheirServersAndHttps(unittest.TestCase):

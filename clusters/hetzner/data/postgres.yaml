@@ -1,4 +1,65 @@
 # Postgres 18 for Ziftbook. Admin and role passwords: postgres.secret.yaml.
+# Both files are read at start (subPath mounts): a change applies at the next Postgres restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres
+  namespace: data
+data:
+  # The superuser logs in over the pod's socket or loopback only; every network login is a named role with a password.
+  # Addresses only, never a hostname: the server looks up no names and has no egress (networkpolicy.yaml).
+  pg_hba.conf: |
+    local all      all                     trust
+    host  all      postgres 127.0.0.1/32   scram-sha-256
+    host  all      postgres ::1/128        scram-sha-256
+    host  all      postgres all            reject
+    host  all      all      all            scram-sha-256
+  # First start only: the image runs it on an empty volume, as the superuser over the socket, in database ziftbook.
+  # What only the superuser may do; the bootstrap Jobs, logged in as the admin, do the rest and check all of it. One
+  # transaction: a failed run leaves no login, the Jobs cannot log in, and the fix is a new empty volume.
+  # The admin creates the app roles and so gets ADMIN on them; it gets no ADMIN on the backup logins.
+  10-logins.sql: |
+    \set ON_ERROR_STOP on
+    \getenv admin_password ZIF_ADMIN_PASSWORD
+    \getenv backup_password ZIF_BACKUP_PASSWORD
+    \getenv prod_backup_password ZIF_PROD_BACKUP_PASSWORD
+    -- Stop if a password is unset or empty; the message never holds a value.
+    \set admin_password_missing true
+    \if :{?admin_password}
+    SELECT :'admin_password' = '' AS admin_password_missing \gset
+    \endif
+    \if :admin_password_missing
+    DO $msg$ BEGIN RAISE EXCEPTION 'ZIF_ADMIN_PASSWORD is unset or empty'; END $msg$;
+    \endif
+    \set backup_password_missing true
+    \if :{?backup_password}
+    SELECT :'backup_password' = '' AS backup_password_missing \gset
+    \endif
+    \if :backup_password_missing
+    DO $msg$ BEGIN RAISE EXCEPTION 'ZIF_BACKUP_PASSWORD is unset or empty'; END $msg$;
+    \endif
+    \set prod_backup_password_missing true
+    \if :{?prod_backup_password}
+    SELECT :'prod_backup_password' = '' AS prod_backup_password_missing \gset
+    \endif
+    \if :prod_backup_password_missing
+    DO $msg$ BEGIN RAISE EXCEPTION 'ZIF_PROD_BACKUP_PASSWORD is unset or empty'; END $msg$;
+    \endif
+    BEGIN;
+    CREATE ROLE ziftbook_admin WITH LOGIN NOSUPERUSER CREATEROLE CREATEDB NOBYPASSRLS NOINHERIT CONNECTION LIMIT 1
+      PASSWORD :'admin_password';
+    ALTER DATABASE ziftbook OWNER TO ziftbook_admin;
+    GRANT pg_use_reserved_connections TO ziftbook_admin WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+    -- One backup login per database: every row (BYPASSRLS: the tables force row security), nothing else. Each Job
+    -- grants its own CONNECT.
+    CREATE ROLE ziftbook_backup WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB BYPASSRLS CONNECTION LIMIT 1
+      PASSWORD :'backup_password';
+    CREATE ROLE ziftbook_prod_backup WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB BYPASSRLS CONNECTION LIMIT 1
+      PASSWORD :'prod_backup_password';
+    GRANT pg_read_all_data TO ziftbook_backup, ziftbook_prod_backup;
+    REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;
+    COMMIT;
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -64,6 +125,8 @@ spec:
           # lost with its node, which would otherwise count against a cap for over 2 hours (the kernel's default).
           args:
             - -c
+            - hba_file=/etc/postgresql/pg_hba.conf
+            - -c
             - shared_buffers=64MB
             - -c
             - effective_cache_size=192MB
@@ -93,6 +156,22 @@ spec:
                 secretKeyRef:
                   name: postgres
                   key: admin-password
+            # Read by 10-logins.sql at first start only. Rotation: docs/runbooks.md "Postgres admin and backup logins".
+            - name: ZIF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-admin
+                  key: password
+            - name: ZIF_BACKUP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-backup
+                  key: password
+            - name: ZIF_PROD_BACKUP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-ziftbook-prod-backup
+                  key: password
           ports:
             - name: postgres
               containerPort: 5432
@@ -126,6 +205,16 @@ spec:
             # Postgres 18 images keep PGDATA under /var/lib/postgresql/18/docker, not .../data.
             - name: data
               mountPath: /var/lib/postgresql
+            - name: config
+              mountPath: /etc/postgresql/pg_hba.conf
+              subPath: pg_hba.conf
+            - name: config
+              mountPath: /docker-entrypoint-initdb.d/10-logins.sql
+              subPath: 10-logins.sql
+      volumes:
+        - name: config
+          configMap:
+            name: postgres
   volumeClaimTemplates:
     - metadata:
         name: data
