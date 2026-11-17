@@ -257,5 +257,53 @@ class ServiceLogins(unittest.TestCase):
         self.assertNotRegex(script, r"psql [^\n]*-d (postgres|template1)\b")
 
 
+
+def server_config(key):
+    (cm,) = [d for d in load_all(DATA / "postgres.yaml") if d.get("kind") == "ConfigMap"]
+    return cm["data"][key]
+
+
+class SuperuserOffTheNetwork(unittest.TestCase):
+    """The superuser logs in over the socket or loopback only; the server's first start makes the logins the Jobs use."""
+
+    def test_pg_hba_refuses_the_superuser_from_the_network(self):
+        rules = [line.split() for line in server_config("pg_hba.conf").splitlines() if line.split()]
+        self.assertEqual(server_settings()["hba_file"], "/etc/postgresql/pg_hba.conf")
+        # The first rule a network login of postgres matches, from any address but loopback, is reject.
+        first = next(r for r in rules if r[0] == "host" and r[2] in ("postgres", "all") and r[3] == "all")
+        self.assertEqual(first[1:], ["all", "postgres", "all", "reject"])
+        loopback = [r for r in rules[:rules.index(first)] if r[0] == "host"]
+        self.assertEqual({r[3] for r in loopback}, {"127.0.0.1/32", "::1/128"})
+        for r in rules:
+            method = r[-1]
+            self.assertIn(method, {"trust", "scram-sha-256", "reject"}, r)
+            if method == "trust":
+                self.assertEqual(r[0], "local", f"trust off the socket: {r}")
+        self.assertEqual(rules[-1], ["host", "all", "all", "all", "scram-sha-256"])
+
+    def test_first_start_makes_the_logins_the_check_requires(self):
+        sql = server_config("10-logins.sql")
+        guards, tx = sql.split("BEGIN;\n")
+        self.assertTrue(tx.rstrip().endswith("COMMIT;"))
+        for var in ("ZIF_ADMIN_PASSWORD", "ZIF_BACKUP_PASSWORD", "ZIF_PROD_BACKUP_PASSWORD"):
+            self.assertIn(f"RAISE EXCEPTION '{var} is unset or empty'", guards)
+        self.assertRegex(tx, rf"CREATE ROLE {ADMIN} WITH LOGIN NOSUPERUSER CREATEROLE CREATEDB NOBYPASSRLS NOINHERIT "
+                             rf"CONNECTION LIMIT {SERVICE_CAP}\n")
+        self.assertIn(f"ALTER DATABASE {DATABASE['staging']} OWNER TO {ADMIN};", tx)
+        for role in BACKUP.values():
+            self.assertRegex(tx, rf"CREATE ROLE {role} WITH LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB BYPASSRLS "
+                                 rf"CONNECTION LIMIT {SERVICE_CAP}\n")
+        self.assertIn(f"GRANT pg_read_all_data TO {', '.join(BACKUP.values())};", tx)
+        self.assertEqual(re.findall(rf"GRANT (.*) TO {ADMIN}\b", tx), ["pg_use_reserved_connections"])
+        self.assertIn("REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;", tx)
+
+    def test_the_server_reads_the_same_secrets_as_the_jobs_and_backups(self):
+        (ss,) = [d for d in load_all(DATA / "postgres.yaml") if d.get("kind") == "StatefulSet"]
+        (c,) = pod_spec(ss)["containers"]
+        refs = {e["name"]: e["valueFrom"]["secretKeyRef"] for e in c["env"] if "valueFrom" in e}
+        self.assertEqual(refs["ZIF_ADMIN_PASSWORD"], {"name": "postgres-ziftbook-admin", "key": "password"})
+        self.assertEqual(refs["ZIF_BACKUP_PASSWORD"], {"name": "postgres-ziftbook-backup", "key": "password"})
+        self.assertEqual(refs["ZIF_PROD_BACKUP_PASSWORD"], {"name": "postgres-ziftbook-prod-backup", "key": "password"})
+
 if __name__ == "__main__":
     unittest.main()
