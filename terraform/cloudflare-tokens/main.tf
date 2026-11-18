@@ -45,11 +45,13 @@ locals {
     tbd      = "5afce02a48d33e45b8119b34c88b4a2a" # thebetterdecision.com
     ziftbook = "d548b66e2e1b8793451fd7d9f5099430" # ziftbook.com
     fjdev    = "ff907e2dae27da386ae2f24dd51e76b2" # fjconsulting.dev
+    fjio     = "f3fb27219825edb004ee62cba0de45aa" # fjconsulting.io
   }
 
   # Permission group ids are global and survive renames (the dashboard's "Single Redirect" is the API's
   # "Dynamic URL Redirects"). A wrong id fails the apply with a 400 before any consumer is touched.
   pg = {
+    "DNS Read"                    = "82e64a83756745bbbb1c9c2701bf816b"
     "DNS Write"                   = "4755a26eedb94da69e1066d98aa820be"
     "Dynamic URL Redirects Write" = "74e1036f577a48528b78d2413b40538d"
     "SSL and Certificates Write"  = "c03055bc037c4ea9afb9a9f104b7b721"
@@ -91,6 +93,9 @@ locals {
     ziftbook = ["Zone Read", "Zone Settings Write", "DNS Write", "SSL and Certificates Write", "Zone WAF Write", "Dynamic URL Redirects Write"]
     # Zone read by a data source; only the shared dev Mailgun records `m.` are managed (INFRA-47).
     fjdev = ["Zone Read", "DNS Write"]
+    # Zone read by a data source; its mail and verification records are managed (INFRA-277). DNS Read adds no access
+    # beyond DNS Write: it only keeps this group list different from fjdev's (see above).
+    fjio = ["Zone Read", "DNS Read", "DNS Write"]
   }
 }
 
@@ -101,7 +106,7 @@ data "cloudflare_account_api_token_permission_groups_list" "access_write" {
 
 # Token of the `cloudflare` workspace. It replaces the hand-made token `cloudflare-tfc` (left out of the imports and
 # deleted by hand once `cloudflare` plans clean with this one) with the same scopes,
-# narrowed from "all zones" to the three zones Terraform uses. A new zone needs a policy here first (creating a zone
+# narrowed from "all zones" to the zones Terraform uses. A new zone needs a policy here first (creating a zone
 # needs account-wide Zone Write, which this token no longer has).
 resource "cloudflare_account_token" "cloudflare_workspace" {
   account_id = local.account_id
