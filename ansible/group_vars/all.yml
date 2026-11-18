@@ -13,7 +13,7 @@ k3s_install_sh_sha256: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e
 # tests/test_ansible_hosts.py. In the same PR, replace the line with the new version's
 # (`curl -sL https://github.com/k3s-io/k3s/releases/download/<tag, + as %2B>/sha256sum-arm64.txt | grep ' k3s-arm64$'`).
 k3s_binary_sha256:
-  v1.36.5+k3s1: "135e34cb9e8a1cfae3cb55577789e93501efe7edc080a8b2630458a85b07721e"
+  v1.36.6+k3s1: "49dcecdb4f64f5e92bdc52d204d407fb39729e492f09074488125ee58b6f2895"
 
 # The private network NIC (seen as enp7s0 on the CAX21 nodes). node_base brings it up with DHCP and waits for
 # private_ip on it; site.yml asserts that again before k3s is configured with it.
