@@ -73,7 +73,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.309.0@sha256:ae26855bd2ade161ebdab994a9b075f3d33cf89e8ba4ad4f3037031129553db6
+          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.312.0@sha256:c30f7c7fdc41724d3bbcaf4571de29575c87e538b71d2088bc837cbf2ab1f469
           env:
             - name: APP_ENV
               value: production
@@ -108,7 +108,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.309.0@sha256:1d29576a3d5034fddaccc3c985c9aa09040d0b4f87d6a3c541159be038a0bee9
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.312.0@sha256:934f408a66845ecdd699d69170330195fcc13d4c497f2510cbdcb83c670bad65
           args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
             - containerPort: 8000
