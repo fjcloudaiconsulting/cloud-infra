@@ -564,7 +564,7 @@ class LockFilesAndVersions(unittest.TestCase):
         self.assertEqual(version_problems(found, ci), [])
         self.assertTrue(version_problems({**found, "x": [">= 1.6"]}, ci))
         self.assertTrue(version_problems({**found, "x": []}, ci))
-        self.assertTrue(version_problems(found, ci.replace("terraform_version: v1.16", "terraform_version: v1.17")))
+        self.assertTrue(version_problems(found, re.sub(r"terraform_version: v[\d.]+", "terraform_version: v0.1.0", ci)))
 
 
 if __name__ == "__main__":
