@@ -31,34 +31,3 @@ resource "cloudflare_dns_record" "fjio" {
   ttl      = each.value.ttl
   proxied  = false
 }
-
-# Adopts the records made by hand. Remove these blocks once applied.
-import {
-  to = cloudflare_dns_record.fjio["mx"]
-  id = "f3fb27219825edb004ee62cba0de45aa/2e23e74ca1635f7640101190f7e09f03"
-}
-
-import {
-  to = cloudflare_dns_record.fjio["spf"]
-  id = "f3fb27219825edb004ee62cba0de45aa/819c1a4e61c80bc1f8d5e0a167bb9567"
-}
-
-import {
-  to = cloudflare_dns_record.fjio["google_site_verification"]
-  id = "f3fb27219825edb004ee62cba0de45aa/79c76e070f1be70aceb13649a03d9385"
-}
-
-import {
-  to = cloudflare_dns_record.fjio["google_domain_verification"]
-  id = "f3fb27219825edb004ee62cba0de45aa/499fc4223ae6b009798eadc21758264e"
-}
-
-import {
-  to = cloudflare_dns_record.fjio["google_dkim"]
-  id = "f3fb27219825edb004ee62cba0de45aa/587e1ac77cb669f192232dd4db2d94e5"
-}
-
-import {
-  to = cloudflare_dns_record.fjio["atlassian_domain_verification"]
-  id = "f3fb27219825edb004ee62cba0de45aa/818ac70a004a86f947be9d2ec67787d7"
-}
