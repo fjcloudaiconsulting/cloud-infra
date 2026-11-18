@@ -11,7 +11,7 @@ metadata:
   namespace: system-upgrade
 spec:
   # renovate: datasource=github-releases depName=k3s-io/k3s
-  version: v1.36.5+k3s1
+  version: v1.36.6+k3s1
   serviceAccountName: system-upgrade
   concurrency: 1
   postCompleteDelay: 2m
@@ -31,7 +31,7 @@ spec:
     deleteEmptydirData: true
     timeout: "10m"
   prepare:
-    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
+    image: rancher/k3s-upgrade:v1.36.6-k3s1@sha256:b6d95da5331cb7f34750cc17d56d1e16cfcf2baeecd634a56719de5fdb61c87c
     command: [sh, -c]
     args:
       - |
@@ -48,7 +48,7 @@ spec:
           exit 1
         fi
   upgrade:
-    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
+    image: rancher/k3s-upgrade:v1.36.6-k3s1@sha256:b6d95da5331cb7f34750cc17d56d1e16cfcf2baeecd634a56719de5fdb61c87c
 ---
 apiVersion: upgrade.cattle.io/v1
 kind: Plan
@@ -57,7 +57,7 @@ metadata:
   namespace: system-upgrade
 spec:
   # renovate: datasource=github-releases depName=k3s-io/k3s
-  version: v1.36.5+k3s1
+  version: v1.36.6+k3s1
   serviceAccountName: system-upgrade
   concurrency: 1
   postCompleteDelay: 2m
@@ -79,7 +79,7 @@ spec:
   # KillMode=process, so the containers survive the k3s restart.
   cordon: true
   prepare:
-    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
+    image: rancher/k3s-upgrade:v1.36.6-k3s1@sha256:b6d95da5331cb7f34750cc17d56d1e16cfcf2baeecd634a56719de5fdb61c87c
     command: [sh, -c]
     args:
       - |
@@ -112,4 +112,4 @@ spec:
           exit 1
         fi
   upgrade:
-    image: rancher/k3s-upgrade:v1.36.5-k3s1@sha256:95f3adc47b8355bc77b0cad60e2cb7f243e6f90480b96cd502081b37b19e0357
+    image: rancher/k3s-upgrade:v1.36.6-k3s1@sha256:b6d95da5331cb7f34750cc17d56d1e16cfcf2baeecd634a56719de5fdb61c87c
