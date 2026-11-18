@@ -46,7 +46,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate
-          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.309.1@sha256:f217f15a82e9f8b5c64b42a299d5571deeacf0d630fa64f6fb5637f0dea824f9
+          image: ghcr.io/fjcloudaiconsulting/tbd/migrations:v0.312.0@sha256:c30f7c7fdc41724d3bbcaf4571de29575c87e538b71d2088bc837cbf2ab1f469
           env:
             - name: APP_ENV
               value: production
@@ -81,7 +81,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: backend
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.309.1@sha256:6e48f697a51e6406a01b1c54e51d48e6f292be155617be5fba193fbb0531f975
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.312.0@sha256:934f408a66845ecdd699d69170330195fcc13d4c497f2510cbdcb83c670bad65
           # The image CMD with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
           args: [uvicorn, "app.main:app", --host, 0.0.0.0, --port, "8000", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
