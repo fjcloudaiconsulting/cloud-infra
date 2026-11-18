@@ -237,8 +237,8 @@ apply on merge after approval in the UI). The workspace name must equal the `clo
 | `cloudflare-tokens` (INFRA-133) | `terraform/cloudflare-tokens` | Env `CLOUDFLARE_API_TOKEN` (**sensitive**): the bootstrap token, the one hand-made Cloudflare token (account-owned, Account API Tokens: Edit only, stored by the owner with a script that checks it first). Only this workspace holds it, and the workspace does not manage it. Env `TFE_TOKEN` (**sensitive**): token of team `cloudflare-tokens`, custom access on workspace `cloudflare` only (variables write, runs read). Token scopes change only in `terraform/cloudflare-tokens`; exposure notes: see the owner's private ops notes |
 | `hetzner` (INFRA-169) | `terraform/hetzner` | Env `HCLOUD_TOKEN` (**sensitive**): a project token, held only in the workspace. Variables `ssh_allowed_cidrs` (HCL list of IPv4 CIDRs allowed on port 22, each /24 or narrower) and `deploy_ssh_public_key` (`ssh-ed25519 ...` or `sk-ssh-ed25519@openssh.com ...`, not sensitive; it seeds new servers only, Ansible manages root's keys afterwards). Both have no default, so a plan without them fails. The Hetzner project and its tokens are hand-made |
 
-The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.16.6; check the workspaces' Terraform version matches after a bump.
-Every stack requires the same `~> 1.16.0` (a test holds it to the CI pin), so a workspace left on another minor fails
+The org also holds workspaces `tbd` (repo tbd, `infra/terraform`) and `fjconsulting-website`, which belong to those repos. CI pins Terraform 1.17.1; check the workspaces' Terraform version matches after a bump.
+Every stack requires the same `~> 1.17.0` (a test holds it to the CI pin), so a workspace left on another minor fails
 its plan. Lock files carry `h1:` hashes for both platforms in use: refresh them with
 `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`.
 
