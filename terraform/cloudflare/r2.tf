@@ -104,20 +104,14 @@ resource "cloudflare_r2_bucket_lock" "ziftbook_ledger" {
 }
 
 # A day after the lock ends. Like ziftbook_uploads, this replaces R2's default rule, so the multipart one is kept.
+# The rules are in the order Cloudflare returns them. The provider reads the transition a rule does not use back as an
+# empty condition, which the schema cannot express, so only those two are ignored: otherwise every plan shows a change.
 resource "cloudflare_r2_bucket_lifecycle" "ziftbook_ledger" {
   for_each     = local.ziftbook_r2
   account_id   = var.account_id
   bucket_name  = cloudflare_r2_bucket.ziftbook_ledger[each.key].name
   jurisdiction = "eu"
   rules = [
-    {
-      id         = "expire-erasures"
-      enabled    = true
-      conditions = { prefix = "erasures/" }
-      delete_objects_transition = {
-        condition = { type = "Age", max_age = (local.ziftbook_ledger_lock_days + 1) * 86400 }
-      }
-    },
     {
       id         = "abort-multipart-after-1-day"
       enabled    = true
@@ -126,7 +120,19 @@ resource "cloudflare_r2_bucket_lifecycle" "ziftbook_ledger" {
         condition = { type = "Age", max_age = 86400 }
       }
     },
+    {
+      id         = "expire-erasures"
+      enabled    = true
+      conditions = { prefix = "erasures/" }
+      delete_objects_transition = {
+        condition = { type = "Age", max_age = (local.ziftbook_ledger_lock_days + 1) * 86400 }
+      }
+    },
   ]
+
+  lifecycle {
+    ignore_changes = [rules[0].delete_objects_transition, rules[1].abort_multipart_uploads_transition]
+  }
 }
 
 # Nightly database backups (INFRA-203): every object locked for 7 days and deleted after 8. Private, EU jurisdiction,

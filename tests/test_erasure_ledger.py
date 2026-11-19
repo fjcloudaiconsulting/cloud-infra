@@ -92,5 +92,35 @@ class LedgerWorkerToken(unittest.TestCase):
                 self.assertNotEqual(worker_token_problems(self.r2, widened), [])
 
 
+def ignored_and_unused(r2):
+    """The ledger lifecycle's ignore_changes paths, and the (rule index, transition) pairs its rules do not use."""
+    body = block(r2, 'resource "cloudflare_r2_bucket_lifecycle" "ziftbook_ledger"')
+    rules = re.findall(r"(?ms)^    \{\n(.*?)^    \},", body)
+    unused = {(str(i), t) for i, rule in enumerate(rules)
+              for t in ("delete_objects_transition", "abort_multipart_uploads_transition") if f"{t} =" not in rule}
+    return set(re.findall(r"rules\[(\d+)\]\.(\w+)", body)), unused
+
+
+class LedgerLifecycleIgnores(unittest.TestCase):
+    """ignore_changes is positional: a moved or added rule must not leave it ignoring a transition that is in use."""
+
+    def test_ignores_only_the_transition_each_rule_does_not_use(self):
+        ignored, unused = ignored_and_unused(R2.read_text())
+        self.assertTrue(ignored)
+        self.assertEqual(ignored, unused)
+
+    def test_a_moved_or_added_rule_fails(self):
+        r2 = R2.read_text()
+        first = '    {\n      id         = "abort-multipart-after-1-day"'
+        for name, edit in (
+                ("swapped paths", lambda s: s.replace("rules[0].delete_objects_transition", "rules[1].delete_objects_transition")),
+                ("added rule", lambda s: s.replace(first, '    {\n      id = "new"\n    },\n' + first))):
+            with self.subTest(name):
+                changed = edit(r2)
+                self.assertNotEqual(changed, r2)
+                ignored, unused = ignored_and_unused(changed)
+                self.assertNotEqual(ignored, unused)
+
+
 if __name__ == "__main__":
     unittest.main()
