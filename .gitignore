@@ -51,3 +51,6 @@ ansible/.ansible/
 
 # graphify knowledge graph: local only, rebuilt by the graphify git hooks
 graphify-out/
+
+#CodeGraph
+.codegraph/
