@@ -165,7 +165,7 @@ spec:
           # Dump containers never fail the pod, so upload always runs and decides the Job's outcome.
           initContainers:
             - name: mysql-dump
-              image: mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+              image: mysql:8.4.13@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
               command: [bash, -c, 'bash /scripts/mysql-dump.sh || echo "!! mysql dump failed" >&2; exit 0']
               env:
                 # TBD production data (here since INFRA-175): an empty dump fails the set.
@@ -195,7 +195,7 @@ spec:
             # TBD staging (INFRA-67): same script, its own set. Runs after the production dump and never fails the
             # pod, so a broken staging database costs only its own set (and the Job's status that night).
             - name: mysql-dump-staging
-              image: mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+              image: mysql:8.4.13@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
               # timeout: a hung staging dump must not run out the Job's deadline before production uploads.
               command: [bash, -c, 'timeout 600 bash /scripts/mysql-dump.sh || echo "!! mysql staging dump failed" >&2; exit 0']
               env:
@@ -303,7 +303,7 @@ spec:
                   mountPath: /scripts
           containers:
             - name: upload
-              image: amazon/aws-cli:2.39.3@sha256:d557b3524475d70dd3104cf44d96568ee3188897b73a6ece2b37aa50e1af362f
+              image: amazon/aws-cli:2.40.1@sha256:4ade0fe3e60e0b9e1fb0910f86c6d992baf4e12d3172c25a3c8c11f6c81cee08
               command: [bash, /scripts/upload.sh]
               env:
                 - name: HOME
