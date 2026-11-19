@@ -66,8 +66,3 @@ Path cost is round-trips, not milliseconds: the PreToolUse hook above already re
 
 Full tool + CLI tables, citation/decay rules, and save discipline → `.claude/plugin_claude_mem_lite.md`
 <!-- claude-mem-lite:end -->
-
-## graphify
-
-- **graphify** (`~/.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`.
-  When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
