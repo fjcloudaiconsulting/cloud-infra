@@ -13,7 +13,7 @@ flowchart LR
     cf["DNS and proxy<br/>thebetterdecision.com: Full strict"]
     r2[("R2 backup bucket, 7-day lock<br/>dumps gpg-encrypted to the owner's key")]
   end
-  worker["Workers ziftbook-landing, tbd-landing<br/>ziftbook.com apex and www, thebetterdecision.com apex<br/>(code in the app repos)"]
+  worker["Workers ziftbook-landing, tbd-landing, carol-nails-bar<br/>ziftbook.com apex and www, thebetterdecision.com apex,<br/>carol-nails-bar on workers.dev<br/>(code in the app repos)"]
   cf --> worker
 
   subgraph hetzner["Hetzner nbg1 (terraform/hetzner, ansible/)"]

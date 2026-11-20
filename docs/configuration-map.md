@@ -162,7 +162,7 @@ installation, and the grant applies to **every repository in the installation**.
   secrets `SMOKE_USERNAME` and `SMOKE_PASSWORD` (the [TBD smoke account](#cluster-out-of-band-material)). A missing
   secret shows as `app smoke failed` on the `[post-deploy-smoke] tbd-prod` issue. `tbd-staging` (INFRA-135), `ziftbook-staging` and `ziftbook-prod` hold nothing (a job
   that names a missing environment creates it, without restrictions).
-- **Environment `landing`** (tbd and ziftbook, INFRA-60/INFRA-98): deployment branches `main` only; secret
+- **Environment `landing`** (tbd, ziftbook and cnb-site, INFRA-60/INFRA-98/INFRA-285): deployment branches `main` only; secret
   `CLOUDFLARE_API_TOKEN`, a per-Worker token for that app's landing Worker. Scopes and rules:
   [Worker and Snippet access](#worker-and-snippet-access-infra-98).
 - **GHCR package read access for CI** (INFRA-107): every `tbd` and `ziftbook` package grants the `cloud-infra` repo Read under Package settings > Manage Actions access. The `image provenance` step of `Kubernetes checks` needs it to verify attestations; a missing grant shows as a red `Kubernetes checks` with a registry authorization error. A new image needs the grant after its first publish.
@@ -197,6 +197,7 @@ tbd and ziftbook have no repo-level Dependabot secrets; tbd's environment `copil
 | ziftbook | env `release` | secrets `RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY` | `ci.yml` job `Release` (shared `release.yml@v1`, INFRA-159) | pipeline | stays |
 | tbd | env `landing` (main only) | secret `CLOUDFLARE_API_TOKEN` | `apex-deploy.yml` `deploy-worker` | pipeline; token `tbd-landing deploy`, adopted by workspace `cloudflare-tokens` (INFRA-133 import), value set by hand when the token was made | stays |
 | ziftbook | env `landing` (main only) | secret `CLOUDFLARE_API_TOKEN` | `landing.yml` | pipeline; token `ziftbook-landing deploy`, adopted by workspace `cloudflare-tokens` (INFRA-133 import), value set by hand when the token was made | stays |
+| cnb-site | env `landing` (main only) | secret `CLOUDFLARE_API_TOKEN` | `ci.yml` `deploy` | pipeline; token `carol-nails-bar deploy`, made by workspace `cloudflare-tokens` (INFRA-285), value piped from its output by the owner ([runbook](runbooks.md#cloudflare-api-tokens)) | stays |
 | fjconsulting-website | repo | secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `deploy.yml`, `deploy-dev.yml` | pipeline; token `fjconsulting-website-github-actions` (its HCP workspace uses `fjconsulting-website-terraform-cloud`), both adopted by `cloudflare-tokens` (INFRA-133 import), scopes changed only there | stays |
 
 `GHCR_READ_TOKEN` is a Mend org secret, not a GitHub one (see [Mend Renovate](#mend-renovate)). No app
@@ -298,6 +299,7 @@ the attach. Recreate one with the Cloudflare API (`PUT /accounts/<account>/worke
 |---|---|---|
 | `ziftbook.com`, `www.ziftbook.com` | `ziftbook-landing` (www 301ed by the `ziftbook_redirects` zone rule before the Worker, INFRA-131; http by Always Use HTTPS and the Worker) | before 2026-10-04 |
 | `thebetterdecision.com` | `tbd-landing` | INFRA-61. Not `www`: the `tbd_redirects` rule in `terraform/cloudflare` 301s it to the apex |
+| none yet (`carol-nails-bar.flamarion-fb5.workers.dev` only) | `carol-nails-bar` | INFRA-285. Created by the owner through the API as a placeholder so its token could be scoped; workers.dev on as the review URL. `carolnailsbar.nl` attaches at the move (INFRA-286) |
 
 Who can put code on a zone and the token scopes: see the owner's private ops notes. Token scopes change only in `terraform/cloudflare-tokens`.
 
