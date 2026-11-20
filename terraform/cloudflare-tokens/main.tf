@@ -192,6 +192,34 @@ output "ziftbook_ledger_worker_keys" {
   } }
 }
 
+# CI deploy token of cnb-site (INFRA-285): Editor on the Worker `carol-nails-bar` alone, the per-Worker rule of
+# docs/configuration-map.md (Worker and Snippet access). The script tag is the Worker's id at Cloudflare: it changes
+# only if the Worker is deleted and recreated, and a stale tag leaves the token with no access (deploys fail 403).
+# Its consumer is a GitHub environment secret, which this stack cannot write, so the owner pipes the output into
+# `gh secret set` (docs/runbooks.md, "Cloudflare API tokens").
+resource "cloudflare_account_token" "cnb_site_deploy" {
+  account_id = local.account_id
+  name       = "carol-nails-bar deploy"
+
+  policies = [{
+    effect = "allow"
+    resources = jsonencode({ "com.cloudflare.api.account.${local.account_id}" = {
+      "com.cloudflare.edge.worker.script.f2b752b9ee504180b63541b4796c9758" = "*"
+    } })
+    permission_groups = [{ id = "7e79ec33834341f28dd431ab73884400" }] # Individual Workers Editor
+  }]
+
+  # A replace (rotation) deletes the old token at the end of the apply: deploys fail until the new value is set.
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+output "cnb_site_deploy_token" {
+  sensitive = true
+  value     = cloudflare_account_token.cnb_site_deploy.value
+}
+
 # Every other account-owned token, adopted as it is: imported-tokens.json is the API's own view of each token
 # (`resources` kept as the exact string the API returns), written by the bootstrap script. Their values stay with
 # their consumers; a replace would mint a value nothing receives, so wire a consumer here before rotating one.

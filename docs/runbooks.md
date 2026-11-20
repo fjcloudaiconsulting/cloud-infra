@@ -800,6 +800,18 @@ the bootstrap token (Account API Tokens: Edit), the only token made by hand and 
 - **New token for a consumer Terraform can write** (an HCP Terraform variable today): add a
   `cloudflare_account_token` with `create_before_destroy` and the consumer resource reading its `.value`, as
   `cloudflare_workspace` does. Its value then never passes through a person.
+- **App CI deploy token** (a per-Worker Editor whose consumer is a GitHub environment secret, e.g. `carol-nails-bar
+  deploy`): the Worker must exist first (its script tag is in the policy: `GET /accounts/<id>/workers/scripts`). After
+  the apply, on a laptop logged in to HCP Terraform (`terraform login`) and `gh`, from the repo root; nothing is
+  printed but `gh`'s confirmation:
+
+  ```sh
+  terraform -chdir=terraform/cloudflare-tokens init -input=false >/dev/null
+  terraform -chdir=terraform/cloudflare-tokens output -raw cnb_site_deploy_token \
+    | gh secret set CLOUDFLARE_API_TOKEN --env landing -R fjcloudaiconsulting/cnb-site
+  ```
+
+  Then re-run the repo's last `main` CI run; its deploy job no longer skips. After a rotation, run the same command.
 - **Token made by hand** (or by another project): add it to `imported-tokens.json`.
   [`set-bootstrap-token.sh`](../terraform/cloudflare-tokens/set-bootstrap-token.sh) writes every such token in that
   shape to `~/Downloads/INFRA-133-imported-tokens.json` (`resources` as the exact compact string the API returns).
