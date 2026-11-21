@@ -4,8 +4,7 @@ The nightly `db-backup` CronJob writes one set per night to the backup bucket `d
 `<prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>`, the dump and grants as `<name>.gpg`, encrypted to the owner's
 backup key; the manifest names the files inside. The manifest
 carries the table count and the SHA256 of the dump and grants files. A Postgres dump is a custom-format archive,
-`<db>_<stamp>.dump` (INFRA-235); MySQL dumps, grants files and the Postgres dumps written before INFRA-235 are gzipped
-SQL, `.sql.gz`.
+`<db>_<stamp>.dump`; MySQL dumps and every grants file are gzipped SQL, `.sql.gz`.
 
 | prefix | database | written by |
 |---|---|---|
@@ -122,21 +121,21 @@ my() { kubectl -n "$NS" exec -i "$POD" -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD
 pg() { kubectl -n "$NS" exec -i "$POD" -- psql -U postgres -XAtq -v ON_ERROR_STOP=1 "$@"; }
 for k in dump grants; do
   key=$(jq -r ".$k.key" manifest.json) sha=$(jq -r ".$k.sha256" manifest.json)
-  f=/tmp/$k.${key#*.}   # the key's extension: sql.gz, or dump for a custom-format Postgres dump
+  f=/tmp/$k.${key#*.}   # the key's extension: sql.gz, or dump for a Postgres dump
   # Decrypted on the Mac (gpg asks for the backup key's passphrase once), never written to its disk.
   aws s3 cp --endpoint-url "$E" "s3://$B/$key.gpg" - | gpg --decrypt --quiet | kubectl -n "$NS" exec -i "$POD" -- sh -c "cat >$f"
   kubectl -n "$NS" exec "$POD" -- sh -c "echo '$sha  $f' | sha256sum -c && case $f in *.gz) gzip -t $f; esac"
 done
 ```
 
-Expect `/tmp/grants.sql.gz: OK` and `/tmp/dump.sql.gz: OK` (`/tmp/dump.dump: OK` for a custom-format Postgres
+Expect `/tmp/grants.sql.gz: OK` and `/tmp/dump.sql.gz: OK` (`/tmp/dump.dump: OK` for a Postgres
 dump). Anything else: stop, try an older night.
 
 The manifest's SHA256 proves the file is the copy the manifest names, not who wrote it: the same
 identity writes the dump, its hash and the manifest, so a set written while the cluster was
 compromised can still check out here (DATA-04). This is why step 1 prefers a set from before the
 incident, MySQL replays with `--binary-mode`, and a Postgres dump is restored by a login that is not a
-superuser (a plain one from before INFRA-235 is scanned before replay).
+superuser.
 
 ## 4. Restore
 
@@ -154,11 +153,8 @@ kubectl -n "$NS" exec "$POD" -- sh -c 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
   gzip -dc /tmp/dump.sql.gz | mysql --binary-mode -uroot tbd && echo restored'
 ```
 
-**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). The dump's key (`jq -r .dump.key manifest.json`)
-picks the procedure.
-
-*Custom-format dump (`.dump`, INFRA-235).* `pg_restore` loads it into an existing, empty database, logged in as a
-Ziftbook role that is not a superuser: whatever the archive holds runs with the owner role's rights only, and
+**Postgres** (`ziftbook-postgres`, `ziftbook-prod-postgres`). `pg_restore` loads the dump into an existing, empty
+database, logged in as a Ziftbook role that is not a superuser: whatever the archive holds runs with the owner role's rights only, and
 `pg_restore` runs no client commands. `--no-owner --role=ziftbook_migrate` makes `ziftbook_migrate` own every object,
 as the migrations do; `--single-transaction --exit-on-error`: on any error nothing is restored. The roles, the
 database and its grants come from git (the bootstrap Jobs), never from the backup: the grants file is not replayed.
@@ -183,164 +179,6 @@ Restore:
 ```bash
 kubectl -n "$NS" exec "$POD" -- pg_restore -U "$ZLOGIN" --role=ziftbook_migrate --no-owner \
   --single-transaction --exit-on-error -d "$ZDB" /tmp/dump.dump && echo restored
-```
-
-Expect only `restored`.
-
-*Plain dump (`.sql.gz`, written before INFRA-235).* Restore these the old way until the last one expires (8 days
-after the first custom-format night), then delete this procedure and its scan. `psql` acts on a backslash
-meta-command anywhere in a line (`\!` runs a shell command), and as superuser can reach the server's files
-(`COPY ... FROM/TO PROGRAM` or a path, `lo_import`, `pg_read_file`) and load code (`CREATE EXTENSION`,
-untrusted languages). The scan below is a guard against statements a `pg_dump`/`pg_dumpall` backup
-should never contain, not a guarantee, so still choose a set from before the incident (step 1).
-Scan the grants and the dump, each in its own mode, and abort if either is refused. Load the scanner
-into the pod (its quotes do not survive a nested `sh -c`):
-
-```bash
-kubectl -n "$NS" exec -i "$POD" -- sh -c 'cat >/tmp/scan.awk' <<'AWK'
-# BEGIN pg-restore-scan — tests/test_restore_runbook.py extracts and exercises this program.
-# A guard, not a guarantee: it refuses a gunzipped Postgres backup that carries anything psql would
-# act on beyond what pg_dump/pg_dumpall 18 emit for these databases. Select the scan with -v scan=grants
-# (pg_dumpall --globals-only: a fixed allowlist of line shapes) or -v scan=dump (pg_dump --create: a
-# quote-aware lexer). Only for plain dumps written before INFRA-235: custom-format dumps restore with
-# pg_restore as a non-superuser instead. Exit non-zero on the first refusal.
-function refuse(why) { printf "SCAN REFUSED (%s): %s\n", why, $0 > "/dev/stderr"; bad = 1; exit 1 }
-function refusel(why, ln) { printf "SCAN REFUSED (%s): %s\n", why, ln > "/dev/stderr"; bad = 1; exit 1 }
-
-# ---- grants: an allowlist over pg_dumpall --globals-only (18) --------------------------------------
-# Role/identifier: an unquoted name or a double-quoted identifier.
-function roleok(s) { return (s ~ /^("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)$/) }
-function alter_with_ok(line,   name, attrs, n, i, a, tok) {
-  # ALTER ROLE <role> WITH <attrs>; — attrs are a fixed keyword vocabulary; SUPERUSER only for postgres.
-  if (!match(line, /^ALTER ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) WITH /)) return 0
-  name = substr(line, 1, RLENGTH); sub(/^ALTER ROLE /, "", name); sub(/ WITH $/, "", name)
-  attrs = substr(line, RLENGTH + 1)
-  if (attrs !~ /;[ \t]*$/) return 0
-  gsub(/'[^']*'/, "", attrs)                        # drop the SCRAM password / VALID UNTIL literal
-  gsub(/;[ \t]*$/, "", attrs)
-  n = split(attrs, a, /[ \t]+/)
-  for (i = 1; i <= n; i++) {
-    tok = a[i]
-    if (tok == "") continue
-    if (tok == "SUPERUSER") { if (name != "postgres") return 0; continue }
-    if (tok ~ /^(NOSUPERUSER|INHERIT|NOINHERIT|CREATEROLE|NOCREATEROLE|CREATEDB|NOCREATEDB|LOGIN|NOLOGIN|REPLICATION|NOREPLICATION|BYPASSRLS|NOBYPASSRLS|PASSWORD|NULL|CONNECTION|LIMIT|VALID|UNTIL)$/) continue
-    if (tok ~ /^[0-9]+$/) continue                  # CONNECTION LIMIT n
-    return 0
-  }
-  return 1
-}
-function grants_line_ok(line) {
-  if (line ~ /^[ \t]*$/) return 1
-  if (line ~ /^--/) return 1
-  if (line ~ /^\\(un)?restrict[ \t]+[^ \t]+[ \t]*$/) return 1
-  if (line ~ /^SET [A-Za-z_][A-Za-z0-9_]* = [^;]*;[ \t]*$/) return 1
-  if (line ~ /^CREATE ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*);[ \t]*$/) return 1
-  if (line ~ /^ALTER ROLE ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) SET [A-Za-z_]+ (TO|=) [^;]*;[ \t]*$/) return 1
-  if (line ~ /^GRANT ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) TO ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*) WITH INHERIT (TRUE|FALSE)( SET (TRUE|FALSE))?( ADMIN (TRUE|FALSE))?( GRANTED BY ("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*))?;[ \t]*$/) return 1
-  if (alter_with_ok(line)) return 1
-  return 0
-}
-
-# ---- dump: a quote-aware lexer over pg_dump --create ----------------------------------------------
-# State persists across lines: 0 code, sq '…', dq "…", dollar $tag$…$tag$, bc /*…*/ (nested), copy data.
-function dump_line(line,   i, n, c, c2, rest, t, trimmed) {
-  if (st == "copy") { if (line == "\\.") { st = 0 } ; return }   # data rows are opaque to psql
-  if (st == 0) {
-    trimmed = line; sub(/^[ \t]+/, "", trimmed)
-    if (trimmed ~ /^\\/) {                                       # a whole-line meta-command
-      if (trimmed ~ /^\\(connect|restrict|unrestrict)([ \t]|$)/) return
-      refusel("backslash meta-command in SQL", line)
-    }
-    if (trimmed ~ /^COPY[ \t]/) {                                # a COPY header at a statement boundary
-      if (trimmed ~ /^COPY[ \t]+.*[ \t]FROM[ \t]+stdin;[ \t]*$/ && trimmed !~ /PROGRAM/) { st = "copy"; return }
-      refusel("unexpected COPY form (only FROM stdin is written by pg_dump)", line)
-    }
-  }
-  n = length(line); i = 1
-  while (i <= n) {
-    c = substr(line, i, 1); c2 = substr(line, i, 2)
-    if (st == "bc") {
-      if (c2 == "*/") { bcd--; i += 2; if (bcd == 0) st = 0; continue }
-      if (c2 == "/*") { bcd++; i += 2; continue }
-      i++; continue
-    }
-    if (st == "sq") {
-      if (c == "'") { if (substr(line, i + 1, 1) == "'") { i += 2; continue } st = 0; i++; continue }
-      i++; continue
-    }
-    if (st == "dq") {
-      if (c == "\"") { if (substr(line, i + 1, 1) == "\"") { i += 2; continue } st = 0; i++; continue }
-      i++; continue
-    }
-    if (st == "dollar") {
-      if (substr(line, i, length(dtag) + 2) == "$" dtag "$") { i += length(dtag) + 2; st = 0; continue }
-      i++; continue
-    }
-    # st == 0 (code)
-    if (c2 == "--") { return }                                   # line comment to EOL
-    if (c2 == "/*") { st = "bc"; bcd = 1; i += 2; continue }
-    if (c == "'") { st = "sq"; i++; continue }
-    if (c == "\"") { st = "dq"; i++; continue }
-    if (c == "$") {
-      t = dollar_tag(line, i)
-      if (t != "\037") { dtag = t; st = "dollar"; i += length(t) + 2; continue }
-      code = code "$"; i++; continue
-    }
-    if (c == "\\") { refusel("backslash meta-command in SQL", line) }   # any other backslash in code
-    code = code c; i++
-  }
-  code = code "\n"
-}
-# Return the dollar-quote tag opening at position i ("" for $$), or "\037" if this $ is not a tag open.
-function dollar_tag(line, i,   j, ch, tag) {
-  j = i + 1; tag = ""
-  if (substr(line, j, 1) == "$") return ""
-  if (substr(line, j, 1) ~ /[A-Za-z_]/) {
-    while (substr(line, j, 1) ~ /[A-Za-z0-9_]/) { tag = tag substr(line, j, 1); j++ }
-    if (substr(line, j, 1) == "$") return tag
-  }
-  return "\037"
-}
-function dump_finish(   norm, t) {
-  norm = tolower(code); gsub(/[ \t\n]+/, " ", norm)
-  if (norm ~ /from program/ || norm ~ /to program/) refusel("COPY ... PROGRAM", "(dump)")
-  if (norm ~ /alter system/) refusel("ALTER SYSTEM", "(dump)")
-  if (norm ~ /lo_import|lo_export/) refusel("large-object file access", "(dump)")
-  if (norm ~ /pg_read_file|pg_read_binary_file|pg_ls_dir/) refusel("server-side file read", "(dump)")
-  if (norm ~ /create language/) refusel("CREATE LANGUAGE", "(dump)")
-  if (norm ~ /language plpython|language plperlu|plpython3u|plpythonu|untrusted/) refusel("untrusted procedural language", "(dump)")
-  if (norm ~ /dblink/) refusel("dblink", "(dump)")
-  # CREATE EXTENSION only for the extensions these databases legitimately use (btree_gist).
-  t = norm
-  gsub(/create extension if not exists btree_gist|create extension btree_gist/, "", t)
-  if (t ~ /create extension/) refusel("CREATE EXTENSION other than btree_gist", "(dump)")
-  # SUPERUSER / ALTER ROLE postgres: allowed only on the canonical postgres self line.
-  t = norm; gsub(/nosuperuser/, "", t); gsub(/alter role postgres with superuser/, "", t)
-  if (t ~ /superuser/) refusel("SUPERUSER grant", "(dump)")
-  t = norm; gsub(/alter role postgres with superuser/, "", t)
-  if (t ~ /alter role postgres/) refusel("ALTER ROLE postgres", "(dump)")
-}
-
-BEGIN { if (scan != "grants" && scan != "dump") { print "scan must be grants or dump" > "/dev/stderr"; exit 2 } }
-scan == "grants" { if (!grants_line_ok($0)) refuse("line not in the globals allowlist"); next }
-scan == "dump"   { dump_line($0) }
-END { if (scan == "dump" && !bad) dump_finish() }
-# END pg-restore-scan
-AWK
-kubectl -n "$NS" exec "$POD" -- sh -c '
-  gzip -dc /tmp/grants.sql.gz | awk -v scan=grants -f /tmp/scan.awk || { echo "!! refused grants; do not replay" >&2; exit 1; }
-  gzip -dc /tmp/dump.sql.gz   | awk -v scan=dump   -f /tmp/scan.awk || { echo "!! refused dump; do not replay"   >&2; exit 1; }
-' && echo "scan passed"
-```
-
-Replay only after `scan passed`. `postgres` already exists on the target, so its `CREATE ROLE` line is
-dropped before replay and every statement runs under `ON_ERROR_STOP`, which stops on the first real
-error. The dump carries its own `CREATE DATABASE`.
-
-```bash
-kubectl -n "$NS" exec "$POD" -- sh -c '
-  gzip -dc /tmp/grants.sql.gz | grep -v "^CREATE ROLE postgres;$" | psql -U postgres -Xq -v ON_ERROR_STOP=1 -d postgres &&
-  gzip -dc /tmp/dump.sql.gz | psql -U postgres -Xq -v ON_ERROR_STOP=1 -d postgres >/dev/null && echo restored'
 ```
 
 Expect only `restored`.
@@ -417,37 +255,24 @@ volume). A MySQL dump replaces every table it contains (`DROP TABLE IF EXISTS`).
 2. Steps 1 and 3 with `NS=data` and `POD=mysql-0` (or `postgres-0`, on the Hetzner cluster: `KUBECONFIG=~/.kube/hetzner`).
 3. Gate: step 5's table-count query (the first statement of the `my` or `pg -d "$ZDB"` block) must
    print `0`. Anything else: stop and decide; never drop a database on reflex.
-4. Postgres only.
-   - Custom-format dump: the restore goes into the empty `$ZDB` and needs the roles and grants first. Rerun both
-     bootstrap Jobs from a checkout of main (`REPO`: its root), staging's first (production's revokes CONNECT on
-     `ziftbook`). They are idempotent and set every password from the Secrets; production's creates `ziftbook_prod`.
-     Then the gate again for `$ZDB` (on a fresh volume `ziftbook_prod` exists only from here).
+4. Postgres only: the restore goes into the empty `$ZDB` and needs the roles and grants first. Rerun both
+   bootstrap Jobs from a checkout of main (`REPO`: its root), staging's first (production's revokes CONNECT on
+   `ziftbook`). They are idempotent and set every password from the Secrets; production's creates `ziftbook_prod`.
+   Then the gate again for `$ZDB` (on a fresh volume `ziftbook_prod` exists only from here).
 
-     ```bash
-     for f in postgres-bootstrap postgres-bootstrap-prod; do
-       j=$(awk '$1 == "name:" { print $2; exit }' "$REPO/clusters/hetzner/data/$f.yaml")
-       kubectl -n data delete job "$j" --ignore-not-found
-       kubectl apply -f "$REPO/clusters/hetzner/data/$f.yaml"
-       kubectl -n data wait --for=condition=complete --timeout=10m "job/$j" || break
-     done
-     ```
-   - Plain dump: the entrypoint (`ziftbook`) or the bootstrap Job (`ziftbook_prod`) created an empty `$ZDB` that the
-     dump's `CREATE DATABASE` would collide with. With the gate at `0`: `pg -d postgres -c "DROP DATABASE $ZDB"`.
+   ```bash
+   for f in postgres-bootstrap postgres-bootstrap-prod; do
+     j=$(awk '$1 == "name:" { print $2; exit }' "$REPO/clusters/hetzner/data/$f.yaml")
+     kubectl -n data delete job "$j" --ignore-not-found
+     kubectl apply -f "$REPO/clusters/hetzner/data/$f.yaml"
+     kubectl -n data wait --for=condition=complete --timeout=10m "job/$j" || break
+   done
+   ```
    The other Ziftbook database on the same server stays as it is.
 5. Step 4.
    - MySQL: the entrypoint and `10-backup-user.sh` created `tbd_app` and `tbd_backup` from the
      `mysql` secret, and `IF NOT EXISTS` leaves them as they are.
-   - Postgres, custom-format dump: the roles are the ones item 4's Jobs made, with the Secrets' passwords.
-   - Postgres, plain dump: the entrypoint creates only `postgres`, so the globals bring back every role **with
-     its password as of that night**, `postgres` included. Make the secrets authoritative again:
-     `kubectl -n data delete job "$ZJOB"` (Flux recreates it on resume and it resets the
-     app passwords). If `admin-password` changed after that night, set it from
-     the pod's env (the value never leaves the pod):
-
-     ```bash
-     kubectl -n data exec postgres-0 -- sh -c \
-       'echo "ALTER ROLE postgres PASSWORD :'\''pw'\''" | psql -U postgres -Xq -v pw="$POSTGRES_PASSWORD"'
-     ```
+   - Postgres: the roles are the ones item 4's Jobs made, with the Secrets' passwords.
 6. Step 5's checks, then remove the copies: `kubectl -n data exec "$POD" -- sh -c 'rm -f /tmp/dump.* /tmp/grants.sql.gz'`.
 7. Revoke what the dump brings back: sessions signed out after it, and links used or revoked after
    it. Everyone signs in again; owners resend open invites, and pending sign-ups and resets start over.
