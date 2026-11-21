@@ -40,7 +40,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scheduler
-          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.312.0@sha256:934f408a66845ecdd699d69170330195fcc13d4c497f2510cbdcb83c670bad65
+          image: ghcr.io/fjcloudaiconsulting/tbd/backend:v0.312.1@sha256:a464b30df58c3d4ec196c0f09d5173ae11160198cc5dd8fd7f22ffc1553b665f
           envFrom:
             - configMapRef:
                 name: otel # otel.yaml
