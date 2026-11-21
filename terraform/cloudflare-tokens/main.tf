@@ -46,6 +46,7 @@ locals {
     ziftbook = "d548b66e2e1b8793451fd7d9f5099430" # ziftbook.com
     fjdev    = "ff907e2dae27da386ae2f24dd51e76b2" # fjconsulting.dev
     fjio     = "f3fb27219825edb004ee62cba0de45aa" # fjconsulting.io
+    cnb      = "30e7b7fc1015f69abac24a0d51d823c9" # carolnailsbar.nl
   }
 
   # Permission group ids are global and survive renames (the dashboard's "Single Redirect" is the API's
@@ -96,6 +97,8 @@ locals {
     # Zone read by a data source; its mail and verification records are managed (INFRA-277). DNS Read adds no access
     # beyond DNS Write: it only keeps this group list different from fjdev's (see above).
     fjio = ["Zone Read", "DNS Read", "DNS Write"]
+    # Zone read by a data source; every record is managed, and at the launch the www redirect rule (like ziftbook's).
+    cnb = ["Zone Read", "DNS Write", "Dynamic URL Redirects Write"]
   }
 }
 
