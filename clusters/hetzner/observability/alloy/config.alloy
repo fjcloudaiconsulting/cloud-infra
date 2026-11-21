@@ -2,8 +2,9 @@
 // leaves through one OTLP/HTTP exporter, so the stack's write-only token (metrics:write, traces:write) is the only
 // credential.
 // Traces (INFRA-106) leave through the same exporter, so the token needs traces:write too. Logs (ZIF-89): Ziftbook's
-// JSON app lines only, from ziftbook-staging and ziftbook-prod, so the token needs logs:write. No other namespace's
-// logs are read: tbd-prod logs carry query strings until INFRA-110, and the data namespace never.
+// JSON app lines only, from ziftbook-staging and ziftbook-prod, so the token needs logs:write. From tbd-staging and
+// tbd-prod only an allowlist of named events leaves, cut down to a few fields (TBD logs hold personal data in field
+// values). The data namespace is never read.
 
 // ---- Export --------------------------------------------------------------------------------------------------------
 
@@ -438,6 +439,11 @@ discovery.relabel "ziftbook_pods" {
 		target_label  = "service_name"
 		replacement   = "ziftbook-migrations"
 	}
+
+	rule {
+		target_label = "service_namespace"
+		replacement  = "ziftbook"
+	}
 }
 
 loki.source.kubernetes "ziftbook_pods" {
@@ -472,6 +478,109 @@ loki.process "app_json" {
 	forward_to = [otelcol.receiver.loki.app_json.receiver]
 }
 
+// ---- TBD pod logs: named events only ---------------------------------------------------------------------------
+// RBAC (alloy.yaml) adds pods and pods/log in tbd-staging and tbd-prod. TBD's records can carry emails, IPs and paths
+// in field values, so nothing is shipped as is: a line leaves only when its msg is one of the events below, and then
+// only as ts, level, logger, msg, org_id and plan_ids (no traceback, no other field). A new event is a change here and
+// to tests/test_grafana_rules.py, which holds every TBD log rule to this list.
+
+discovery.kubernetes "tbd_pods" {
+	role = "pod"
+
+	namespaces {
+		names = ["tbd-staging", "tbd-prod"]
+	}
+
+	selectors {
+		role  = "pod"
+		field = "spec.nodeName=" + sys.env("NODE_NAME")
+	}
+}
+
+// The backend and the scheduler run the rollover; the migrate init container, the frontend and MCP are not read.
+discovery.relabel "tbd_pods" {
+	targets = discovery.kubernetes.tbd_pods.targets
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_container_name"]
+		regex         = "backend|scheduler"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_container_init"]
+		regex         = "true"
+		action        = "drop"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_namespace"]
+		target_label  = "namespace"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_container_name"]
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_name"]
+		target_label  = "pod"
+	}
+
+	rule {
+		source_labels = ["container"]
+		target_label  = "service_name"
+		replacement   = "tbd-$1"
+	}
+
+	rule {
+		source_labels = ["container"]
+		regex         = "backend"
+		target_label  = "service_name"
+		replacement   = "tbd-api"
+	}
+
+	rule {
+		target_label = "service_namespace"
+		replacement  = "tbd"
+	}
+}
+
+loki.source.kubernetes "tbd_pods" {
+	targets    = discovery.relabel.tbd_pods.output
+	forward_to = [loki.process.tbd_events.receiver]
+}
+
+loki.process "tbd_events" {
+	stage.drop {
+		older_than          = "1h"
+		drop_counter_reason = "replay"
+	}
+
+	// keep: an allowlisted msg, exact match, on a record with the four keys. line: the record rebuilt from the
+	// allowlisted fields only (a missing one is null), which then replaces the whole line.
+	stage.json {
+		drop_malformed = true
+		expressions    = {
+			keep = "contains(['plans.rollover.failed', 'plans.rollover.reload_failed', 'plans.rollover.skipped_busy'], msg) && ts != `null` && level != `null` && logger != `null`",
+			line = "{ts: ts, level: level, logger: logger, msg: msg, org_id: org_id, plan_ids: plan_ids}",
+		}
+	}
+
+	stage.drop {
+		source              = "keep"
+		value               = "false"
+		drop_counter_reason = "not_tbd_event"
+	}
+
+	stage.output {
+		source = "line"
+	}
+
+	forward_to = [otelcol.receiver.loki.app_json.receiver]
+}
+
 otelcol.receiver.loki "app_json" {
 	output {
 		logs = [otelcol.processor.transform.loki_labels.input]
@@ -488,7 +597,7 @@ otelcol.processor.transform "loki_labels" {
 		context    = "log"
 		statements = [
 			`set(resource.attributes["service.name"], attributes["service_name"])`,
-			`set(resource.attributes["service.namespace"], "ziftbook")`,
+			`set(resource.attributes["service.namespace"], attributes["service_namespace"])`,
 			`set(resource.attributes["k8s.namespace.name"], attributes["namespace"])`,
 			`set(resource.attributes["k8s.container.name"], attributes["container"])`,
 			`set(attributes["k8s.pod.name"], attributes["pod"])`,

@@ -223,6 +223,14 @@ the Mend installation settings of the org.
   and ticking it there raises it at once. Org images and actions never wait. Only Docker Hub gives Renovate release
   timestamps: images from other registries (`mirror.gcr.io` for cloudflared) go through unaged, with a
   `timestamp-optional` warning on the dashboard.
+- Weekly window: the shared preset (`.github`, `default.json`) holds third-party minor, patch, digest and pin updates
+  until `before 6am on monday` (Europe/Amsterdam) and groups them per ecosystem: `github-actions non-major`,
+  `docker non-major`, `terraform providers non-major`. cloud-infra adds `ansible ci tools`, and one PR per database
+  engine (`mysql`, `postgres`), so the docker group never restarts a database. Majors come when released, one PR
+  each; security fixes ignore the schedule (Renovate's `vulnerabilityAlerts` default). The org's own packages (app
+  image bumps, shared workflow refs) are never held, so release PRs still arrive within minutes. Held updates are
+  listed under "Awaiting Schedule" on the dashboard; ticking one raises it at once. The release age applies first,
+  so a third-party update can take up to 7 days plus a week to arrive.
 - Each repo has a Dependency Dashboard issue; ticking "run again" there forces a run.
 - App repos (tbd, ziftbook) add repo-level rules in their own `renovate.json` (tbd#833, ziftbook#180), not in the shared preset: there they would also bundle cloud-infra's platform image bumps into one docker group and put staging app-image majors behind dashboard approval, breaking the ziftbook-staging automerge. Rules: non-major updates grouped per ecosystem, FastAPI and uvicorn standalone, OpenTelemetry in its own group, npm updates wait 1 day (pnpm 12's default release age), majors and runtime upgrades only on Dependency Dashboard approval, datastore image majors off. tbd needs no `GHCR_READ_TOKEN`: it references no private `ghcr.io` image.
 - Local dry run (check a config without waiting for Mend): Node 24, then `renovate --platform=local --dry-run=full` with `GITHUB_COM_TOKEN`, `RENOVATE_TOKEN` and `RENOVATE_SECRETS='{"GHCR_READ_TOKEN":"..."}'` in the environment. The local platform reads only committed files, and `local>` presets do not resolve there. `LOG_LEVEL=debug LOG_FORMAT=json` prints a `packageFiles with updates` record with each update's branch; it does not render the dashboard, so approval gates show only on the first Mend run.

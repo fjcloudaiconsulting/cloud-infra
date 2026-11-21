@@ -871,7 +871,7 @@ sends metrics to the Grafana Cloud stack's OTLP gateway every 60 s (one screen f
   `exception.message`, `exception.stacktrace` and the old `http.url`, `http.target`, `http.client_ip`, `net.sock.peer.addr`
   from data point, span, span event, scope and resource attributes (by key only: span names and messages are the app's to keep clean).
 
-Traces (Ziftbook staging, INFRA-106; TBD staging, INFRA-105) are forwarded too. Logs: only Ziftbook's (staging and prod, ZIF-89), read through the kube API (RBAC: pods and pods/log in those two namespaces only) and kept only when a line is a JSON object with `ts`, `level`, `logger` and `msg`; see [Find a request's logs](#find-a-requests-logs). Config: [`clusters/hetzner/observability/alloy/config.alloy`](../clusters/hetzner/observability/alloy/config.alloy);
+Traces (Ziftbook staging, INFRA-106; TBD staging, INFRA-105) are forwarded too. Logs: Ziftbook's (staging and prod, ZIF-89), read through the kube API (RBAC: pods and pods/log in the Ziftbook and TBD app namespaces only) and kept only when a line is a JSON object with `ts`, `level`, `logger` and `msg`. From TBD (staging and prod) only allowlisted events leave, rebuilt from a few fields ([TBD app alerts](#tbd-app-alerts)); see [Find a request's logs](#find-a-requests-logs). Config: [`clusters/hetzner/observability/alloy/config.alloy`](../clusters/hetzner/observability/alloy/config.alloy);
 a change there rolls the pod (the ConfigMap name carries a hash).
 
 **Credentials** are Secret `observability/grafana-cloud` (keys `otlp-endpoint`, `instance-id`, `token`), file
@@ -1208,6 +1208,8 @@ fire alongside `NodeMetricsAbsent`.
 | `TbdProcessDown` | a production process reported nothing for 10 min: `tbd-api`, `tbd-scheduler` (`tbd_process_up`) or `tbd-frontend` (cAdvisor, namespace `tbd-prod`). The scheduler has no other alarm; a dead `tbd-api` also trips `ProdEndpointDown` | critical, every 4 h |
 | `TbdStagingProcessDown` | the same on staging: `tbd-api`, `tbd-mcp` and `tbd-frontend` (namespace `tbd-staging`). Staging has no scheduler pod | warning, daily |
 | `TbdNoSuperadmin` | the scheduler's superadmin probe counts 0 active platform superadmins in production (`tbd_platform_active_superadmins` < 1): a populated install where `/admin` refuses everyone. The count gauge, not the probe's ERROR line: tbd-prod logs are not shipped | critical, every 4 h |
+| `TbdPlanRolloverFailed` | `plans.rollover.failed` or `plans.rollover.reload_failed` logged in the last 15 min, tbd-prod or tbd-staging: a period closed (or was created) and an org's plan Budget was not rolled into it. Nothing retries it until someone opens that org's Budgets or Forecasts page (`ensure-future`). `reload_failed` usually means the database was gone | warning, every 4 h |
+| `TbdPlanRolloverSkippedBusy` | the same org's rollover skipped as busy (`plans.rollover.skipped_busy`, its plans locked by a concurrent change) 3 times or more in 24 h. Once now and then is expected | warning, daily |
 | `TbdSuperadminProbeStale` | `tbd_platform_active_superadmins_probed_at_seconds` (the probe's last successful read, scheduler, production) is more than 45 min old, three ticks, or missing, for 15 min: `TbdNoSuperadmin` cannot fire. The gauge re-exports its last value, so the age is what shows a stalled probe | warning, daily |
 
 When one fires: `kubectl -n tbd-prod logs -l app=backend -c backend --tail=-1 --since=2h` around the window. A burst
@@ -1218,6 +1220,29 @@ When `TbdNoSuperadmin` fires: recover a superadmin with tbd's `docs/operations/S
 `TbdSuperadminProbeStale` fires: `kubectl -n tbd-prod logs deploy/scheduler --since=2h | grep -E 'superadmin_floor|tick'`
 for `scheduler.superadmin_floor.failed` (the database read fails) or no `scheduler.tick.complete` (the loop is stuck).
 
+Rollover alerts (Loki, `service_namespace="tbd"`): Alloy reads the `backend` and `scheduler` containers in tbd-staging
+and tbd-prod and ships a line only when its `msg` is one of `plans.rollover.failed`, `plans.rollover.reload_failed`,
+`plans.rollover.skipped_busy`, and then only its `ts`, `level`, `logger`, `msg`, `org_id` and `plan_ids`: TBD's other
+records can hold emails, IPs and paths, and the traceback stays on the node. A new event is an edit to the allowlist in
+`config.alloy` (the tests hold every TBD log rule to it). Plans is gated off in production, so the rules are silent
+there until it ships. When one fires: the event's traceback is in
+`kubectl -n <ns> logs deploy/backend -c backend --since=2h | grep plans.rollover` (or `deploy/scheduler` in tbd-prod);
+the org is the alert's `org_id`. Opening that org's Budgets page retries the rollover.
+
+Fire test (staging, after Flux applied the Alloy change and the rules are in): write synthetic lines to the backend's
+stdout, then wait for the next evaluation (1 min, `for` 0s):
+
+```sh
+for m in failed skipped_busy skipped_busy skipped_busy; do
+  kubectl -n tbd-staging exec deploy/backend -c backend -- python -c 'import json,sys,datetime
+open("/proc/1/fd/1","w").write(json.dumps({"ts":datetime.datetime.now(datetime.UTC).isoformat(),"level":"ERROR","logger":"firetest","msg":"plans.rollover."+sys.argv[1],"org_id":0})+"\n")' "$m"
+done
+```
+
+Expect a `TbdPlanRolloverFailed` mail for tbd-staging and a `TbdPlanRolloverSkippedBusy` mail for org `0`. Both
+resolve by themselves (15 min and 24 h windows). In Explore,
+`{service_namespace="tbd"} | json` shows the four lines with only the six fields.
+
 When a process alert fires: `kubectl -n tbd-prod get pods` (or `tbd-staging`) for a pod that is not Running or keeps
 restarting, then its `kubectl logs --previous`. All pods Running: the process runs but its export fails, so check the
 `otel` ConfigMap and [Metrics to Grafana Cloud](#metrics-to-grafana-cloud-alloy).
@@ -1227,6 +1252,8 @@ Apply as under [Memory alerts](#memory-alerts):
 not yet confirmed: after that release runs and a first CSP report arrives, check in Explore that
 `count by (__name__, service_name, outcome) ({__name__=~"tbd_security_csp_reports.*", deployment_environment_name="production"})`
 returns `tbd_security_csp_reports_total` with `service_name` `tbd-api`; a different name or label leaves both rules silent.
+Before applying the rollover rules, the Alloy change must have rolled out:
+`kubectl auth can-i get pods/log -n tbd-staging --as=system:serviceaccount:observability:alloy` says yes.
 Before applying the process rules, check that
 `count by (service_name, deployment_environment_name) (tbd_process_up)` returns the four pairs `tbd-api` and
 `tbd-scheduler` in production, `tbd-api` and `tbd-mcp` in staging: a different name or label fires the rule for that
@@ -1265,12 +1292,12 @@ Nothing arrives? In order:
 ```sh
 export KUBECONFIG=~/.kube/hetzner
 kubectl -n observability logs -l app=alloy --prefix --tail=-1 --since=1h | grep -iE 'forbidden|/v1/logs|error' | tail   # 401/403 on /v1/logs: the token lacks logs:write
-kubectl auth can-i get pods/log -n ziftbook-prod --as=system:serviceaccount:observability:alloy   # yes; -n data must say no
+kubectl auth can-i get pods/log -n ziftbook-prod --as=system:serviceaccount:observability:alloy   # yes (tbd-* too); -n data must say no
 ```
 
 Then the drop counters (`kubectl -n observability port-forward ds/alloy 12345`, then
 `curl -s localhost:12345/metrics | grep loki_process_dropped_lines_total`): reason `not_app_json` is a JSON object
-missing one of the four keys, `replay` a line over an hour old. A line that is not a JSON object is dropped without a
+missing one of the four keys (`not_tbd_event`: a TBD line not on the allowlist, which is nearly all of them), `replay` a line over an hour old. A line that is not a JSON object is dropped without a
 count.
 
 ### Node disk
