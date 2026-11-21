@@ -1,7 +1,8 @@
 # carolnailsbar.nl: the zone was added by hand, without a record scan, and is read here, not managed. Every record
-# below is a 1:1 copy of the previous DNS host, so the nameserver switch changes nothing. The apex A records and www
-# serve the old site until the launch moves the apex to the Worker `carol-nails-bar` (attached by hand) and www to a
-# redirect; that change removes them here first. Every record is DNS-only, as at the previous host.
+# below is a 1:1 copy of the previous DNS host's zone export (its apex "website" alias as the A records it resolved to),
+# so the nameserver switch changes nothing. The apex A records and www serve the old site until the launch moves the
+# apex to the Worker `carol-nails-bar` (attached by hand) and www to a redirect; that change removes them here first.
+# Every record is DNS-only, as at the previous host.
 data "cloudflare_zone" "cnb" {
   filter = { name = "carolnailsbar.nl", account = { id = var.account_id } }
 }
@@ -21,6 +22,11 @@ locals {
     dmarc                    = { type = "TXT", name = "_dmarc.carolnailsbar.nl", content = "\"v=DMARC1; p=none; rua=mailto:dmarc_rua@onsecureserver.net\"" }
     mta_sts_apex             = { type = "TXT", name = "carolnailsbar.nl", content = "\"v=STSv1;id=1776432944477;\"" }
     google_site_verification = { type = "TXT", name = "carolnailsbar.nl", content = "\"google-site-verification=3yryvuHiZYQ67WtjG0XMrqgrxd0lyD5xcoZABVANypA\"" }
+    # The previous host's email-marketing service (it is also in the SPF include): its bounce and DKIM records.
+    em_bounces_cloud  = { type = "CNAME", name = "bounces.cloud.em.carolnailsbar.nl", content = "cbounces.cloud.em.secureserver.net" }
+    em_bounces_cloud2 = { type = "CNAME", name = "bounces.cloud2.em.carolnailsbar.nl", content = "cbounces.cloud2.em.secureserver.net" }
+    em_dkim_cloud     = { type = "CNAME", name = "sable.cloud._domainkey.carolnailsbar.nl", content = "dkim.cloud.em.secureserver.net" }
+    em_dkim_cloud2    = { type = "CNAME", name = "sable.cloud2._domainkey.carolnailsbar.nl", content = "dkim.cloud2.em.secureserver.net" }
     # A public key, split in two strings (TXT 255-char limit), as published before the move.
     google_dkim = { type = "TXT", name = "google._domainkey.carolnailsbar.nl", content = "\"v=DKIM1;k=rsa;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApqke7ypPIJdEMGvLx36wvUnWMxJ/T8evpU1CilRA0BScBCl+g6J4LJxPdC2q9SuX1TkqHbPzdUVXoo6y0fKcqHwcydN258ZDNjtYfZFUAMVjvcKLA4L/M8/nXGVV24LbUEEjTyAlKF9P1Ww40XUH4i34ixjl7g2O68c7xpP2SBZrx6R26WZiVbEjX4oCujYy4tY\" \"UAjQdvNdC7Dx6tu522HayanvbgE/E6jmAUMrnmm/lVOs3v6zBbUBRc9VkfYfk8inrt8OhSDP5xQ1hoSlx3emV2LaQoubkQ5wbQjtPB4ikjikE3IfZ9yFC1HymB4DU8xAbneLsxl/XQsGOzaU+ZwIDAQAB\"" }
   }
