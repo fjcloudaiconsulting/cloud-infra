@@ -18,7 +18,7 @@ terraform {
 
 # Auth: CLOUDFLARE_API_TOKEN, a sensitive env var on the TFC workspace, written by workspace cloudflare-tokens
 # (INFRA-133). Its scopes live in terraform/cloudflare-tokens/main.tf, one policy per zone this stack touches
-# (thebetterdecision.com, ziftbook.com, fjconsulting.dev, fjconsulting.io) plus Access, Tunnel (cloudflared) and R2 write on the account. A zone missing there
+# (thebetterdecision.com, ziftbook.com, fjconsulting.dev, fjconsulting.io, carolnailsbar.nl) plus Access, Tunnel (cloudflared) and R2 write on the account. A zone missing there
 # fails here only at apply; creating a new zone needs account-wide Zone Write, which the token does not have.
 provider "cloudflare" {}
 
