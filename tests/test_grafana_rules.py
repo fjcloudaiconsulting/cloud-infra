@@ -49,7 +49,7 @@ class TbdSuperadminAlerts(unittest.TestCase):
         self.rules = {r["uid"]: r for r in rules}
 
     def test_no_superadmin_alerts_on_a_zero_count_in_production(self):
-        # The probe's count gauge, not its log line: tbd-prod logs are not shipped (see the Loki fence below).
+        # The probe's count gauge, not its log line: only allowlisted TBD events are shipped (see the Loki fences below).
         rule = self.rules["tbd-no-superadmin"]
         self.assertEqual(rule["data"][0]["datasourceUid"], "grafanacloud-prom")
         self.assertIn('tbd_platform_active_superadmins{service_name="tbd-scheduler", '
@@ -67,20 +67,51 @@ class TbdSuperadminAlerts(unittest.TestCase):
         # A missing series (probe never succeeded since the scheduler started) must read as stale, not as no data.
         self.assertIn("or on() vector(1e9)", rule["data"][0]["model"]["expr"])
 
+ALLOY = (G.parent / "clusters/hetzner/observability/alloy/config.alloy").read_text()
+LOKI = [q["model"]["expr"] for p in sorted(G.glob("*.rules.json")) for r in json.loads(p.read_text())["rules"]
+        for q in r["data"] if q.get("datasourceUid") == "grafanacloud-logs"]
+
+
+def read_namespaces(block):
+    m = re.search(r'discovery\.kubernetes "%s" \{.*?names = \[([^\]]*)\]' % block, ALLOY, re.S)
+    return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
 class LokiRulesReadShippedLogs(unittest.TestCase):
     def test_every_log_rule_targets_a_namespace_alloy_reads(self):
         # fence: a log rule on a namespace Alloy does not read sees no data, and noDataState OK keeps it silent forever.
-        alloy = (G.parent / "clusters/hetzner/observability/alloy/config.alloy").read_text()
-        block = re.search(r'discovery\.kubernetes "ziftbook_pods" \{.*?names = \[([^\]]*)\]', alloy, re.S)
-        shipped = set(re.findall(r'"([^"]+)"', block.group(1)))
-        self.assertTrue(shipped)
-        rules = [r for p in sorted(G.glob("*.rules.json")) for r in json.loads(p.read_text())["rules"]]
-        loki = [q["model"]["expr"] for r in rules for q in r["data"] if q.get("datasourceUid") == "grafanacloud-logs"]
-        self.assertTrue(loki)
-        for expr in loki:
+        shipped = read_namespaces("ziftbook_pods") | read_namespaces("tbd_pods")
+        self.assertTrue(LOKI)
+        for expr in LOKI:
             namespaces = set(re.findall(r'k8s_namespace_name="([^"]+)"', expr))
+            for alternatives in re.findall(r'k8s_namespace_name=~"([^"]+)"', expr):
+                namespaces |= set(alternatives.split("|"))
             self.assertTrue(namespaces, expr)
             self.assertLessEqual(namespaces, shipped, expr)
+
+    def test_tbd_log_rules_match_only_allowlisted_events(self):
+        # fence: TBD lines leave the node only when their msg is on the allowlist in config.alloy; a rule on any other
+        # msg never sees data and stays silent.
+        allowed = set(re.findall(r"'([^']+)'", re.search(r"contains\(\[([^\]]*)\], msg\)", ALLOY).group(1)))
+        self.assertIn("plans.rollover.failed", allowed)
+        tbd = [e for e in LOKI if 'service_namespace="tbd"' in e]
+        self.assertTrue(tbd)
+        for expr in tbd:
+            events = {v for m in re.findall(r'\| msg=~?"([^"]+)"', expr) for v in m.split("|")}
+            self.assertTrue(events, expr)
+            self.assertLessEqual(events, allowed, expr)
+
+    def test_tbd_logs_leave_only_through_the_allowlist(self):
+        # fence: the TBD source feeds only the allowlist stage, which drops everything else and rewrites the line from
+        # the named fields. Pointing the source at the Ziftbook pipeline would ship TBD records as they are.
+        source = re.search(r'loki\.source\.kubernetes "tbd_pods" \{(.*?)\n\}', ALLOY, re.S).group(1)
+        self.assertRegex(source, r"forward_to = \[loki\.process\.tbd_events\.receiver\]")
+        stage = re.search(r'loki\.process "tbd_events" \{(.*?)\n\}', ALLOY, re.S).group(1)
+        self.assertIn("drop_malformed = true", stage)
+        self.assertRegex(stage, r'source\s*= "keep"\s*value\s*= "false"')
+        self.assertRegex(stage, r'stage\.output \{\s*source = "line"\s*\}')
+        self.assertNotIn("exc", re.search(r'line = "([^"]*)"', stage).group(1))
+        self.assertEqual(1, len(re.findall(r"loki\.process\.tbd_events\.receiver", ALLOY)))
 
 
 if __name__ == "__main__":

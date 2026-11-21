@@ -379,6 +379,130 @@
         "group_wait": "30s",
         "repeat_interval": "24h"
       }
+    },
+    {
+      "uid": "tbd-plan-rollover-failed",
+      "title": "TbdPlanRolloverFailed",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 900,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-logs",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (k8s_namespace_name, msg) (count_over_time({service_namespace=\"tbd\", k8s_namespace_name=~\"tbd-prod|tbd-staging\"} | json | msg=~\"plans.rollover.failed|plans.rollover.reload_failed\" [15m]))",
+            "queryType": "instant"
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    0.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "{{ $labels.k8s_namespace_name }} logged \"{{ $labels.msg }}\" {{ printf \"%.0f\" $values.A.Value }} time(s) in the last 15 min: an org's plan Budget was not rolled into the new period, and nothing retries it until someone opens Budgets or Forecasts. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "4h"
+      }
+    },
+    {
+      "uid": "tbd-plan-rollover-skipped-busy",
+      "title": "TbdPlanRolloverSkippedBusy",
+      "folderUID": "platform",
+      "ruleGroup": "tbd-app",
+      "orgID": 1,
+      "condition": "B",
+      "data": [
+        {
+          "refId": "A",
+          "relativeTimeRange": {
+            "from": 86400,
+            "to": 0
+          },
+          "datasourceUid": "grafanacloud-logs",
+          "model": {
+            "refId": "A",
+            "expr": "sum by (k8s_namespace_name, org_id) (count_over_time({service_namespace=\"tbd\", k8s_namespace_name=~\"tbd-prod|tbd-staging\"} | json | msg=\"plans.rollover.skipped_busy\" [24h]))",
+            "queryType": "instant"
+          }
+        },
+        {
+          "refId": "B",
+          "relativeTimeRange": {
+            "from": 0,
+            "to": 0
+          },
+          "datasourceUid": "__expr__",
+          "model": {
+            "refId": "B",
+            "type": "threshold",
+            "expression": "A",
+            "conditions": [
+              {
+                "evaluator": {
+                  "type": "gt",
+                  "params": [
+                    2.5
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "for": "0s",
+      "noDataState": "OK",
+      "execErrState": "KeepLast",
+      "labels": {
+        "severity": "warning",
+        "component": "tbd"
+      },
+      "annotations": {
+        "summary": "{{ $labels.k8s_namespace_name }}: the plan Budget rollover of org {{ $labels.org_id }} was skipped as busy {{ printf \"%.0f\" $values.A.Value }} times in 24 h: its plans stay locked, so its new period has no plan Budget. See the TBD app alerts runbook.",
+        "runbook_url": "https://github.com/fjcloudaiconsulting/cloud-infra/blob/main/docs/runbooks.md#tbd-app-alerts"
+      },
+      "notification_settings": {
+        "receiver": "owner-email",
+        "group_wait": "30s",
+        "repeat_interval": "24h"
+      }
     }
   ]
 }
