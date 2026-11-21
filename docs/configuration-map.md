@@ -265,6 +265,10 @@ provider argument is a change to those lists in the PR that needs it.
 - `ziftbook.com`: the zone itself is read, not created, by Terraform, but its settings (HSTS one year,
   minimum TLS 1.2, SSL Full strict) and the proxied records `dev.ziftbook.com` (staging) and `app.ziftbook.com` (production, INFRA-82; both CNAMEs to the Hetzner tunnel, INFRA-173 and INFRA-181) are managed there. Apex and www are the Worker `ziftbook-landing`, deployed by Ziftbook CI; the Terraform rule `ziftbook_redirects` 301s www to the apex before the Worker (INFRA-131).
 - `fjconsulting.io` (INFRA-275): the company's Google Workspace domain. The zone was added by hand and is read, not created, by Terraform. `terraform/cloudflare/fjconsulting_io.tf` manages its mail and verification records, all DNS-only (INFRA-277). The apex and `www` are A records made by hand, proxied to the Leaseweb server that redirects to `fjconsulting.dev`, until the website takes them over (INFRA-279).
+- `carolnailsbar.nl`: added by hand without a record scan, and read, not created, by Terraform.
+  `terraform/cloudflare/carolnailsbar_nl.tf` holds every record, all DNS-only and copied 1:1 from the previous DNS host
+  (Google Workspace mail, verification, SPF, DMARC, and the apex and `www` of the old site until the launch moves them
+  to the Worker `carol-nails-bar`). The registration stays at the previous registrar, whose nameserver setting the owner switches to Cloudflare once these records match.
 - `fjconsulting.dev` apex: its Google mail records are outside Terraform, including the SPF record `v=spf1 include:_spf.google.com ~all` (edited by hand 2026-11-18). Keep one SPF record per name.
 - DNSSEC and CAA on both app zones (INFRA-231, `terraform/cloudflare/dns_security.tf`): signing on, the DS at .com published by Cloudflare Registrar on its own (no hand step); CAA `issue` for the CAs Cloudflare issues from (Let's Encrypt, Google Trust Services, SSL.com, Sectigo). A service that brings its own certificate on these zones needs its CA there first.
 - Hostnames (owner ruling 2026-10-03): staging `dev.<domain>`, production `app.<domain>`, other services
