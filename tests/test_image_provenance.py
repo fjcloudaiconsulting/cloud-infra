@@ -36,8 +36,13 @@ def ref(tag="v1.0.0", digest=D1, img="backend", repo="tbd"):
     return f"ghcr.io/fjcloudaiconsulting/{repo}/{img}:{tag}" + (f"@sha256:{digest}" if digest else "")
 
 
+# The developer's own git config (signing, hooks, default branch) stays out of the temporary repos and the script.
+GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 def git(d, *a):
-    subprocess.run(["git", "-C", str(d), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(d), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True,
+                   env=GIT_ENV)
 
 
 def run(base_files, head_files, *, att_ref="refs/heads/main", att_commit=TAG_COMMIT,
@@ -62,7 +67,7 @@ def run(base_files, head_files, *, att_ref="refs/heads/main", att_commit=TAG_COM
         (bin_ / "gh").chmod(0o755)
         r = subprocess.run(
             ["bash", str(SCRIPT)], capture_output=True, text=True, cwd=d,
-            env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "GH_LOG": str(d.parent / "log"), "BASE": "base",
+            env={**GIT_ENV, "PATH": f"{bin_}:{os.environ['PATH']}", "GH_LOG": str(d.parent / "log"), "BASE": "base",
                  "TAG_COMMIT": TAG_COMMIT, "ATT_REF": att_ref, "ATT_COMMIT": att_commit,
                  "API_PATHS": "\n".join(f"repos/fjcloudaiconsulting/{r}/commits/refs/tags/{t}" for r, t in tags),
                  "API_FAIL": "1" if api_fail else ""},
