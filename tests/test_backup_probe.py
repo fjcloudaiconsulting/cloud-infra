@@ -19,7 +19,8 @@ NOW = 1000000000
 
 
 def night(age_hours, *, prefix=PREFIX, manifest=True, grants=True, dump=True, dump_size=620000, db="tbd", stamp="x",
-          ext="sql.gz"):
+          ext=None):
+    ext = ext or ("dump" if "-postgres/" in prefix else "sql.gz")
     ts = datetime.datetime.fromtimestamp(
         NOW - age_hours * 3600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -62,11 +63,20 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("manifest", r.stdout)
 
-    def test_custom_format_dump_counts_as_the_dump(self):
-        # INFRA-235: Postgres dumps are <db>_<stamp>.dump; the probe must see them, and still apply the floor.
-        self.assertEqual(probe(listing(2, ext="dump")).returncode, 0)
-        self.assertEqual(probe(listing(2, ext="dump", dump_size=12)).returncode, 1)
-        self.assertEqual(probe(listing(2, ext="dump.tmp")).returncode, 1)
+    def test_custom_format_dump_counts_as_the_postgres_dump(self):
+        # Postgres dumps are <db>_<stamp>.dump; the probe must see them, and still apply the floor.
+        pg = dict(prefix="ziftbook-postgres/2026/08/27", db="ziftbook")
+        self.assertEqual(probe(listing(2, **pg), "ziftbook-postgres=300").returncode, 0)
+        self.assertEqual(probe(listing(2, dump_size=12, **pg), "ziftbook-postgres=300").returncode, 1)
+        self.assertEqual(probe(listing(2, ext="dump.tmp", **pg), "ziftbook-postgres=300").returncode, 1)
+
+    def test_each_engine_has_one_dump_format(self):
+        # Kills: a plain-SQL Postgres dump (restorable only by the removed superuser psql replay) passing as
+        # fresh, and a stray .dump vouching for a MySQL night.
+        pg = dict(prefix="ziftbook-postgres/2026/08/27", db="ziftbook")
+        self.assertEqual(probe(listing(2, ext="sql.gz", **pg), "ziftbook-postgres=300").returncode, 1)
+        self.assertEqual(probe(listing(2, ext="sql.gz.gpg", **pg), "ziftbook-postgres=300").returncode, 1)
+        self.assertEqual(probe(listing(2, ext="dump")).returncode, 1)
 
     def test_encrypted_dump_and_grants_count(self):
         # The dump and grants are uploaded gpg-encrypted (<name>.gpg); names and floors are judged as before.
@@ -75,7 +85,8 @@ class Verdicts(unittest.TestCase):
             if o["Key"].endswith("grants_x.sql.gz"):
                 o["Key"] += ".gpg"
         self.assertEqual(probe(json.dumps({"Contents": objs})).returncode, 0)
-        self.assertEqual(probe(listing(2, ext="dump.gpg")).returncode, 0)
+        pg = listing(2, prefix="ziftbook-postgres/2026/08/27", db="ziftbook", ext="dump.gpg")
+        self.assertEqual(probe(pg, "ziftbook-postgres=300").returncode, 0)
         self.assertEqual(probe(listing(2, ext="sql.gz.gpg", dump_size=12)).returncode, 1)
         self.assertEqual(probe(listing(2, ext="sql.gz.gpg.tmp")).returncode, 1)
 
@@ -230,7 +241,7 @@ class PerPrefix(unittest.TestCase):
         self.assertEqual(probe(tiny_mysql, *FLOORS).returncode, 1)
 
     def test_postgres_naming_is_understood(self):
-        # ziftbook_<ts>.sql.gz plus pg_dumpall globals as grants_<ts>.sql.gz.
+        # ziftbook_<ts>.dump plus pg_dumpall globals as grants_<ts>.sql.gz.
         r = probe(json.dumps({"Contents": night(2, prefix=PG, dump_size=600, db="ziftbook")}), "ziftbook-postgres=300")
         self.assertEqual(r.returncode, 0, r.stdout)
 

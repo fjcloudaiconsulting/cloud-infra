@@ -9,8 +9,7 @@ Database restores are
 [`clusters/hetzner/data/RESTORE.md`](../clusters/hetzner/data/RESTORE.md). After an incident, pick a
 set from before it began, not the newest: the manifest checksum proves the copy, not who wrote it. The
 runbook replays MySQL with `--binary-mode` and restores the custom-format Postgres dumps with
-`pg_restore`, logged in as the owner role, never a superuser (INFRA-235); the plain Postgres dumps
-written before that are scanned before `psql` until they expire.
+`pg_restore`, logged in as the owner role, never a superuser.
 
 ## Restore drill
 
