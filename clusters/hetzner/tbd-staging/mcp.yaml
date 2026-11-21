@@ -54,7 +54,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.312.1@sha256:291f6bb7de5ef676690cf992cf5d48d73a5f084d3f13837340794711ba7fd7e4
+          image: ghcr.io/fjcloudaiconsulting/tbd/mcp:v0.313.0@sha256:b4c1b66e6747e457dc5f7433b1a662db11f9126238e161d0075d8588cf324b73
           # The image CMD (tbd backend/Dockerfile.mcp) with a narrower --forwarded-allow-ips, as in tbd-prod/backend.yaml (INF-01).
           args: [uvicorn, "app.mcp_main:app", --host, 0.0.0.0, --port, "8001", --ws, none, --proxy-headers, --forwarded-allow-ips, 10.42.0.0/16]
           ports:
