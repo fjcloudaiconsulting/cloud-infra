@@ -9,3 +9,10 @@
 - name: Bring up the private NIC
   ansible.builtin.shell: netplan generate && networkctl reload && networkctl reconfigure {{ private_nic }}
   changed_when: true
+
+# reloaded, not restarted: ExecReload swaps the table in one transaction, while a restart deletes it first.
+- name: Reload the host firewall
+  ansible.builtin.systemd_service:
+    name: host-firewall
+    state: reloaded
+    daemon_reload: true

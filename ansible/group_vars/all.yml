@@ -20,6 +20,8 @@ k3s_binary_sha256:
 private_nic: enp7s0
 # The private subnet (hcloud_network_subnet.main in terraform/hetzner/main.tf); every private_ip is in it.
 private_cidr: 10.0.1.0/24
+# The public NIC: the only one node_base's host firewall filters. node_base asserts it carries the default route.
+public_nic: eth0
 
 # Public keys root accepts besides the one next to ansible_ssh_private_key_file (node_base writes exactly these):
 # the next deploy key during a rotation, or a second operator key. ed25519 or sk-ssh-ed25519@openssh.com only.

@@ -1,0 +1,26 @@
+#!/usr/sbin/nft -f
+# Host firewall (Ansible node_base, README.md "Host firewall"): defence in depth behind the Hetzner cloud firewall,
+# with the same rule. On the public NIC only what this host started, SSH and DHCP replies get in; the private NIC,
+# loopback and the pod interfaces are left to k3s. Only this table is touched: never `flush ruleset`, which would wipe
+# the k3s and kube-router rules. The first two lines make the load idempotent and atomic.
+table inet host_fw
+delete table inet host_fw
+
+table inet host_fw {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iifname != "{{ public_nic }}" accept
+		ct state established,related accept
+		tcp dport 22 accept
+		udp sport 67 udp dport 68 accept
+		counter drop
+	}
+
+	# Nothing on the public NIC is meant to reach a pod unasked (NodePorts are on the private network only).
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname != "{{ public_nic }}" accept
+		ct state established,related accept
+		counter drop
+	}
+}

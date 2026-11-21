@@ -217,6 +217,26 @@ To back out, remove the `admission-control-config-file` line in `group_vars/all.
 guard refuses the next run: on that server delete the line from `/etc/rancher/k3s/config.yaml` and
 `systemctl restart k3s` (`journalctl -u k3s` shows why it failed), then fix git.
 
+## Host firewall
+
+node_base loads an nftables table, `inet host_fw`, through its own unit `host-firewall.service`
+(`roles/node_base/templates/host-firewall.nft.j2`). It applies the cloud firewall's rule a second time, on the host:
+on the public NIC (`public_nic`), only replies to connections the host opened, SSH and DHCP replies get in, and
+nothing is forwarded to a pod unasked. The private NIC, loopback and the pod interfaces are not filtered, so etcd,
+the kubelet and the pod network are untouched. It never runs `flush ruleset` and is not `nftables.service`, so the
+k3s and kube-router tables survive a load. A run asserts that `public_nic` carries the default route first.
+
+First rollout, one node at a time, with the Hetzner web console of that node open in case of a lockout:
+
+1. `ansible-playbook site.yml --check --diff --limit node-2`, read it (steady state: k3s is skipped).
+2. `ansible-playbook site.yml --limit node-2`. Then, from this machine, `ssh root@<node-2 public ip>
+   'nft list table inet host_fw && systemctl is-active host-firewall'` and `kubectl get nodes` (all Ready).
+3. Repeat for node-1, then db-1.
+
+On a node, `nft list table inet host_fw` shows the `counter drop` hits. To turn it off (console or SSH):
+`systemctl stop host-firewall`, which deletes the table; `systemctl start host-firewall` loads it again. A reboot
+loads it again too, unless the unit is disabled.
+
 ## Rolling reboot
 
 unattended-upgrades installs kernel updates but never reboots (`node_base`), so a node runs the old kernel until it is

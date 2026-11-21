@@ -369,6 +369,40 @@ class PublicNicExposure(unittest.TestCase):
         for name, ip in server_private_ips().items():
             self.assertIn(ipaddress.ip_address(ip), ipaddress.ip_network(cidr), name)
 
+    def test_host_firewall_lets_in_only_ssh_on_the_public_nic(self):
+        v = all_vars()
+        self.assertNotEqual(v["public_nic"], v["private_nic"])
+        rules = (ANSIBLE / "roles/node_base/templates/host-firewall.nft.j2").read_text()
+        code = [line.strip() for line in rules.splitlines() if line.strip() and not line.strip().startswith("#")]
+        self.assertNotIn("flush ruleset", "\n".join(code), "would wipe the k3s and kube-router tables")
+        self.assertEqual([c for c in code if c.startswith(("table ", "delete "))],
+                         ["table inet host_fw", "delete table inet host_fw", "table inet host_fw {"])
+        # Each chain: everything off the public NIC passes, then replies, then the allowed new traffic, then drop.
+        bodies = re.findall(r"chain (\w+) \{\n(.*?)\n\s*\}", rules, re.S)
+        self.assertEqual([name for name, _ in bodies], ["input", "forward"])
+        allowed = {"input": ["tcp dport 22 accept", "udp sport 67 udp dport 68 accept"], "forward": []}
+        for name, body in bodies:
+            lines = [line.strip() for line in body.splitlines() if line.strip() and not line.strip().startswith("#")]
+            self.assertEqual(lines, [f"type filter hook {name} priority filter; policy accept;",
+                                     'iifname != "{{ public_nic }}" accept',
+                                     "ct state established,related accept", *allowed[name], "counter drop"], name)
+
+    def test_host_firewall_loads_through_its_own_unit(self):
+        tasks = load_all(ANSIBLE / "roles/node_base/tasks/main.yml")[0]
+        template = [module_args(t, "ansible.builtin.template") for t in tasks
+                    if module_args(t, "ansible.builtin.template")]
+        self.assertEqual(template, [{"src": "host-firewall.nft.j2", "dest": "/etc/host-firewall.nft", "owner": "root",
+                                     "group": "root", "mode": "0644", "validate": "/usr/sbin/nft -c -f %s"}])
+        unit = [module_args(t, "ansible.builtin.copy")["content"] for t in tasks
+                if (module_args(t, "ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/host-firewall.service"]
+        self.assertEqual(len(unit), 1)
+        self.assertIn("ExecStart=/usr/sbin/nft -f /etc/host-firewall.nft", unit[0])
+        self.assertIn("ExecStop=/usr/sbin/nft delete table inet host_fw", unit[0])
+        self.assertNotIn("nftables.service", str(tasks), "nftables.service loads /etc/nftables.conf, which flushes all")
+        checks = " ".join(str(module_args(t, "ansible.builtin.assert")["that"]) for t in tasks
+                          if module_args(t, "ansible.builtin.assert"))
+        self.assertIn("ansible_facts.default_ipv4.interface | default('') == public_nic", checks)
+
 
 class ApiAuditLog(unittest.TestCase):
     """ANS-02: the API servers write an audit log under a policy Ansible installs before k3s is configured."""

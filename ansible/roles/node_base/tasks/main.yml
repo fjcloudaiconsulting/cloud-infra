@@ -123,3 +123,64 @@
   retries: 12
   delay: 5
   changed_when: false
+
+# Host firewall: the same rule as the Hetzner cloud firewall, on the host itself, in case that one is ever changed or
+# detached. Its own table and unit, not nftables.service: that loads /etc/nftables.conf, which flushes every table.
+# A wrong public_nic fails open (the rules match no interface), so the asserts guard the other way round: filtering
+# the private NIC would cut etcd and the pod network.
+- name: The public NIC is the default route's, not the private one
+  ansible.builtin.assert:
+    that:
+      - public_nic != private_nic
+      - ansible_facts.default_ipv4.interface | default('') == public_nic
+    fail_msg: >-
+      Not writing the host firewall on {{ inventory_hostname }}: public_nic ({{ public_nic }}) must be the
+      default route's NIC ({{ ansible_facts.default_ipv4.interface | default('none') }}) and not {{ private_nic }}.
+    quiet: true
+
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Write the host firewall rules
+  ansible.builtin.template:
+    src: host-firewall.nft.j2
+    dest: /etc/host-firewall.nft
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Reload the host firewall
+
+- name: Install the host firewall unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/host-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Host firewall on the public NIC (Ansible node_base)
+      Wants=network-pre.target
+      Before=network-pre.target shutdown.target
+      Conflicts=shutdown.target
+      DefaultDependencies=no
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/nft -f /etc/host-firewall.nft
+      ExecReload=/usr/sbin/nft -f /etc/host-firewall.nft
+      ExecStop=/usr/sbin/nft delete table inet host_fw
+
+      [Install]
+      WantedBy=sysinit.target
+  notify: Reload the host firewall
+
+- name: Load the host firewall now and at boot
+  ansible.builtin.systemd_service:
+    name: host-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
