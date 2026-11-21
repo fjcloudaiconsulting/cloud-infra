@@ -110,7 +110,7 @@ def base(o):
     # The dump and grants arrive gpg-encrypted as <name>.gpg (db-backup.yaml): judged by the name inside.
     return str(o.get("Key", "")).rpartition("/")[2].removesuffix(".gpg")
 
-def judge(contents, min_dump_bytes):
+def judge(contents, min_dump_bytes, name):
     manifests = [o for o in contents
                  if base(o).startswith("manifest_") and base(o).endswith(".json")]
     if not manifests:
@@ -143,15 +143,16 @@ def judge(contents, min_dump_bytes):
     # ⚠ MATCH THE STAMP, NOT JUST THE DAY DIRECTORY. A retry or a manual Job
     # writes a second set into the same day; matching by directory let the
     # earlier set's big dump vouch for a broken newer one (INFRA-72).
-    # Layout: <prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>. The dump is .sql.gz, or .dump for a
-    # custom-format Postgres archive (INFRA-235); the grants are always .sql.gz.
+    # Layout: <prefix>/YYYY/MM/DD/{<db>,grants,manifest}_<stamp>. A Postgres dump is a custom-format .dump
+    # archive, a MySQL dump .sql.gz; the grants are always .sql.gz. A plain-SQL Postgres dump is not a dump
+    # here: it would need the superuser psql replay that RESTORE.md no longer has.
+    ext = ".dump" if name.endswith("-postgres") else ".sql.gz"
     prefix = str(newest.get("Key", "")).rpartition("/")[0]
     stamp = base(newest).removeprefix("manifest_").removesuffix(".json")
     siblings = [o for o in contents if str(o.get("Key", "")).rpartition("/")[0] == prefix]
 
     grants = [o for o in siblings if base(o) == f"grants_{stamp}.sql.gz"]
-    dumps = [o for o in siblings if base(o).endswith((f"_{stamp}.sql.gz", f"_{stamp}.dump"))
-             and base(o) != f"grants_{stamp}.sql.gz"]
+    dumps = [o for o in siblings if base(o).endswith(f"_{stamp}{ext}") and base(o) != f"grants_{stamp}.sql.gz"]
 
     if not dumps:
         return 1, (f"STALE: manifest {newest.get('Key')} is fresh but no dump object "
@@ -173,7 +174,7 @@ def judge(contents, min_dump_bytes):
 # Each prefix is judged alone, on its own floor, and the run reports the worst
 # verdict (could not run > STALE > fresh) naming every prefix that is not fresh.
 # Kills: one stale database hiding behind a fresh one in the same bucket.
-results = [(p, *judge([o for o in contents if str(o.get("Key", "")).startswith(p + "/")], f))
+results = [(p, *judge([o for o in contents if str(o.get("Key", "")).startswith(p + "/")], f, p))
            for p, f in floors]
 worst = max(rc for _, rc, _ in results)
 bad = [p for p, rc, _ in results if rc]
