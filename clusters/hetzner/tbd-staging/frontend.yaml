@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: ghcr.io/fjcloudaiconsulting/tbd/frontend:v0.313.0@sha256:9b80ac1ef7567f270cffd04b3ab26ba5ac0689b940a1ff654e92efa5872b5ec9
+          image: ghcr.io/fjcloudaiconsulting/tbd/frontend:v0.314.0@sha256:68c481508240c84ff56d38ac3335e10a7517b891caa35e7ea1c308a575650916
           ports:
             - containerPort: 3000
           env:
