@@ -1,17 +1,14 @@
-# carolnailsbar.nl: the zone was added by hand, without a record scan, and is read here, not managed. Every record
-# below is a 1:1 copy of the previous DNS host's zone export (its apex "website" alias as the A records it resolved to),
-# so the nameserver switch changes nothing. The apex A records and www serve the old site until the launch moves the
-# apex to the Worker `carol-nails-bar` (attached by hand) and www to a redirect; that change removes them here first.
-# Every record is DNS-only, as at the previous host.
+# carolnailsbar.nl: the zone was added by hand and is read here. At launch, the owner attaches the apex as a
+# custom domain on the Worker `carol-nails-bar`. The www hostname redirects to the apex at the zone edge.
+# Mail and verification records remain DNS-only.
 data "cloudflare_zone" "cnb" {
   filter = { name = "carolnailsbar.nl", account = { id = var.account_id } }
 }
 
 locals {
   cnb_records = {
-    apex_a_1                 = { type = "A", name = "carolnailsbar.nl", content = "76.223.105.230" }
-    apex_a_2                 = { type = "A", name = "carolnailsbar.nl", content = "13.248.243.5" }
-    www                      = { type = "CNAME", name = "www.carolnailsbar.nl", content = "carolnailsbar.nl" }
+    # The redirect rule only answers proxied traffic.
+    www                      = { type = "CNAME", name = "www.carolnailsbar.nl", content = "carolnailsbar.nl", proxied = true }
     mx_aspmx                 = { type = "MX", name = "carolnailsbar.nl", content = "aspmx.l.google.com", priority = 1 }
     mx_alt1                  = { type = "MX", name = "carolnailsbar.nl", content = "alt1.aspmx.l.google.com", priority = 5 }
     mx_alt2                  = { type = "MX", name = "carolnailsbar.nl", content = "alt2.aspmx.l.google.com", priority = 5 }
@@ -41,5 +38,60 @@ resource "cloudflare_dns_record" "cnb" {
   content  = each.value.content
   priority = try(each.value.priority, null)
   ttl      = 1
-  proxied  = false
+  proxied  = try(each.value.proxied, false)
+}
+
+resource "cloudflare_ruleset" "cnb_redirects" {
+  zone_id = data.cloudflare_zone.cnb.id
+  name    = "default"
+  kind    = "zone"
+  phase   = "http_request_dynamic_redirect"
+
+  # The legacy inventory lists lowercase paths. Match them exactly since lower() support in Free Single Redirects is unverified.
+  rules = [{
+    ref         = "about_to_studio"
+    description = "Legacy About paths to the English studio section (INFRA-286)"
+    expression  = "(http.host in {\"carolnailsbar.nl\" \"www.carolnailsbar.nl\"} and http.request.uri.path in {\"/about\" \"/about/\"} and http.request.uri.query eq \"\")"
+    action      = "redirect"
+    enabled     = true
+    action_parameters = {
+      from_value = {
+        status_code           = 301
+        preserve_query_string = false
+        target_url = {
+          value = "https://carolnailsbar.nl/en/#studio"
+        }
+      }
+    }
+    }, {
+    ref         = "about_to_studio_query"
+    description = "Legacy About paths with the query before the studio fragment (INFRA-286)"
+    expression  = "(http.host in {\"carolnailsbar.nl\" \"www.carolnailsbar.nl\"} and http.request.uri.path in {\"/about\" \"/about/\"} and http.request.uri.query ne \"\")"
+    action      = "redirect"
+    enabled     = true
+    action_parameters = {
+      from_value = {
+        status_code           = 301
+        preserve_query_string = false
+        target_url = {
+          expression = "concat(\"https://carolnailsbar.nl/en/?\", http.request.uri.query, \"#studio\")"
+        }
+      }
+    }
+    }, {
+    ref         = "www_to_apex"
+    description = "www to the apex, 301, keeps path and query (INFRA-286)"
+    expression  = "(http.host eq \"www.carolnailsbar.nl\")"
+    action      = "redirect"
+    enabled     = true
+    action_parameters = {
+      from_value = {
+        status_code           = 301
+        preserve_query_string = true
+        target_url = {
+          expression = "concat(\"https://carolnailsbar.nl\", http.request.uri.path)"
+        }
+      }
+    }
+  }]
 }
