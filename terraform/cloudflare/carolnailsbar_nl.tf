@@ -1,6 +1,6 @@
 # carolnailsbar.nl: the zone was added by hand and is read here. At launch, the owner attaches the apex as a
 # custom domain on the Worker `carol-nails-bar`. The www hostname redirects to the apex at the zone edge.
-# Mail and verification records remain DNS-only.
+# Mail, verification and email-marketing records are a 1:1 copy of the previous DNS host's export and remain DNS-only.
 data "cloudflare_zone" "cnb" {
   filter = { name = "carolnailsbar.nl", account = { id = var.account_id } }
 }
