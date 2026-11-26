@@ -97,8 +97,8 @@ locals {
     # Zone read by a data source; its mail and verification records are managed (INFRA-277). DNS Read adds no access
     # beyond DNS Write: it only keeps this group list different from fjdev's (see above).
     fjio = ["Zone Read", "DNS Read", "DNS Write"]
-    # Zone read by a data source; every record is managed, and at the launch the www redirect rule (like ziftbook's).
-    cnb = ["Zone Read", "DNS Write", "Dynamic URL Redirects Write"]
+    # Zone read by a data source; its settings (HSTS, minimum TLS, Always Use HTTPS), records and www redirect are managed as for ziftbook.
+    cnb = ["Zone Read", "Zone Settings Write", "DNS Write", "Dynamic URL Redirects Write"]
   }
 }
 
