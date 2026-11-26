@@ -265,10 +265,11 @@ provider argument is a change to those lists in the PR that needs it.
 - `ziftbook.com`: the zone itself is read, not created, by Terraform, but its settings (HSTS one year,
   minimum TLS 1.2, SSL Full strict) and the proxied records `dev.ziftbook.com` (staging) and `app.ziftbook.com` (production, INFRA-82; both CNAMEs to the Hetzner tunnel, INFRA-173 and INFRA-181) are managed there. Apex and www are the Worker `ziftbook-landing`, deployed by Ziftbook CI; the Terraform rule `ziftbook_redirects` 301s www to the apex before the Worker (INFRA-131).
 - `fjconsulting.io` (INFRA-275): the company's Google Workspace domain. The zone was added by hand and is read, not created, by Terraform. `terraform/cloudflare/fjconsulting_io.tf` manages its mail and verification records, all DNS-only (INFRA-277). The apex and `www` are A records made by hand, proxied to the Leaseweb server that redirects to `fjconsulting.dev`, until the website takes them over (INFRA-279).
-- `carolnailsbar.nl`: added by hand without a record scan, and read, not created, by Terraform.
-  `terraform/cloudflare/carolnailsbar_nl.tf` holds every record, all DNS-only and copied 1:1 from the previous DNS host
-  (Google Workspace mail, verification, SPF, DMARC, and the apex and `www` of the old site until the launch moves them
-  to the Worker `carol-nails-bar`). The registration stays at the previous registrar, whose nameserver setting the owner switches to Cloudflare once these records match.
+- `carolnailsbar.nl`: the zone was added by hand and Terraform reads it. The owner attaches the apex to the Worker
+  `carol-nails-bar` as a custom domain at launch. `terraform/cloudflare/carolnailsbar_nl.tf` manages the DNS-only mail
+  and verification records, the proxied `www` CNAME and the `cnb_redirects` rule, which sends `www` to the HTTPS apex
+  with a 301 that preserves the path and query. Legacy `/about` and `/about/` links on either host go directly to the
+  English studio section. The registration stays at the previous registrar.
 - `fjconsulting.dev` apex: its Google mail records are outside Terraform, including the SPF record `v=spf1 include:_spf.google.com ~all` (edited by hand 2026-11-18). Keep one SPF record per name.
 - DNSSEC and CAA on both app zones (INFRA-231, `terraform/cloudflare/dns_security.tf`): signing on, the DS at .com published by Cloudflare Registrar on its own (no hand step); CAA `issue` for the CAs Cloudflare issues from (Let's Encrypt, Google Trust Services, SSL.com, Sectigo). A service that brings its own certificate on these zones needs its CA there first.
 - Hostnames (owner ruling 2026-10-03): staging `dev.<domain>`, production `app.<domain>`, other services
@@ -311,7 +312,7 @@ the attach. Recreate one with the Cloudflare API (`PUT /accounts/<account>/worke
 |---|---|---|
 | `ziftbook.com`, `www.ziftbook.com` | `ziftbook-landing` (www 301ed by the `ziftbook_redirects` zone rule before the Worker, INFRA-131; http by Always Use HTTPS and the Worker) | before 2026-10-04 |
 | `thebetterdecision.com` | `tbd-landing` | INFRA-61. Not `www`: the `tbd_redirects` rule in `terraform/cloudflare` 301s it to the apex |
-| none yet (`carol-nails-bar.flamarion-fb5.workers.dev` only) | `carol-nails-bar` | INFRA-285. Created by the owner through the API as a placeholder so its token could be scoped; workers.dev on as the review URL. `carolnailsbar.nl` attaches at the move (INFRA-286) |
+| `carolnailsbar.nl` (attach at launch) | `carol-nails-bar` | INFRA-286. The owner attaches the apex by hand after the old website records are removed. The `cnb_redirects` zone rule handles `www`. |
 
 Who can put code on a zone and the token scopes: see the owner's private ops notes. Token scopes change only in `terraform/cloudflare-tokens`.
 
